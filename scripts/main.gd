@@ -78,8 +78,8 @@ func _refresh_tiles(force: bool) -> void:
 
 	var radius: int = clampi(ceili(distance * 0.9 / tile_size) + 2, 2, 28)
 	var wanted: Dictionary = {}
-	for ty: int in range(center.y - radius, center.y + radius + 1):
-		for tx: int in range(center.x - radius, center.x + radius + 1):
+	for ty in range(center.y - radius, center.y + radius + 1):
+		for tx in range(center.x - radius, center.x + radius + 1):
 			var key: String = "%d:%d:%d" % [lod, tx, ty]
 			var path: String = "%s/lod%d/%d_%d.brtile" % [WORLD_DIR, lod, tx, ty]
 			if FileAccess.file_exists(path):
@@ -90,7 +90,7 @@ func _refresh_tiles(force: bool) -> void:
 						world.add_child(node)
 						loaded[key] = node
 
-	for key: Variant in loaded.keys():
+	for key in loaded.keys():
 		if not wanted.has(key):
 			var old_node: Node = loaded[key] as Node
 			old_node.queue_free()
@@ -110,7 +110,7 @@ func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var base_widths: Array[float] = [1400.0, 300.0, 20.0]
-	for _i: int in range(count):
+	for _i in range(count):
 		var road_class: int = file.get_8()
 		var x1: float = file.get_float()
 		var y1: float = file.get_float()
@@ -160,18 +160,18 @@ func _load_background() -> void:
 
 	var polygon_count: int = file.get_32()
 	var tools: Array[SurfaceTool] = []
-	for _kind: int in range(5):
+	for _kind in range(5):
 		var tool: SurfaceTool = SurfaceTool.new()
 		tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 		tools.append(tool)
 
 	var accepted: int = 0
-	for _polygon_index: int in range(polygon_count):
+	for _polygon_index in range(polygon_count):
 		var kind: int = file.get_8()
 		var point_count: int = file.get_32()
 		var polygon: PackedVector2Array = PackedVector2Array()
 		polygon.resize(point_count)
-		for i: int in range(point_count):
+		for i in range(point_count):
 			var x: float = file.get_float() - origin_x
 			var y: float = file.get_float() - origin_y
 			polygon[i] = Vector2(x, y)
@@ -183,12 +183,12 @@ func _load_background() -> void:
 			continue
 		var st: SurfaceTool = tools[kind]
 		var height: float = 1.0 + float(kind)
-		for index: int in indices:
+		for index in indices:
 			var p: Vector2 = polygon[index]
 			st.add_vertex(Vector3(p.x, height, -p.y))
 		accepted += 1
 
-	for kind: int in range(tools.size()):
+	for kind in range(tools.size()):
 		var mesh: ArrayMesh = tools[kind].commit()
 		if mesh == null or mesh.get_surface_count() == 0:
 			continue
