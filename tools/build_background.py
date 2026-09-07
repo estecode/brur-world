@@ -24,22 +24,24 @@ FOREST = 2
 URBAN = 3
 WATER = 4
 
+# Only tags that actually describe a water surface. In particular, do not use
+# the mere presence of water=* as a water test: OSM objects can carry auxiliary
+# water tags without natural=water, and bad/incomplete relations can otherwise
+# paint enormous areas blue.
+WATER_NATURAL = {"water", "bay", "strait"}
+WATER_LANDUSE = {"reservoir"}
+
 
 def background_class(tags: osmium.osm.TagList) -> int | None:
     # The runtime uses a water base plane. Country boundaries paint land back on
-    # top, so the explicit WATER class is only for inland water surfaces.
+    # top, so explicit WATER polygons are only inland/explicit water surfaces.
     if tags.get("boundary") == "administrative" and tags.get("admin_level") == "2":
         return LAND
 
     natural = tags.get("natural")
     landuse = tags.get("landuse")
-    water = tags.get("water")
 
-    # Keep this intentionally strict. riverbank/basin polygons from a country
-    # extract can be incomplete or malformed and previously produced enormous
-    # blue wedges over cities/fields. Lakes/reservoirs are enough for the POC;
-    # the ocean is already supplied by the base plane.
-    if natural == "water" or water is not None or landuse == "reservoir":
+    if natural in WATER_NATURAL or landuse in WATER_LANDUSE:
         return WATER
     if natural == "wood" or landuse == "forest":
         return FOREST
@@ -98,7 +100,8 @@ class BackgroundHandler(osmium.SimpleHandler):
         self.payload = bytearray()
         self.triangles = 0
         self.counts = [0, 0, 0, 0, 0]
-        self.rejected_water = 0
+        self.rejected_water_like = 0
+        self.rejected_invalid_water = 0
         self.min_x = math.inf
         self.min_y = math.inf
         self.max_x = -math.inf
@@ -107,10 +110,12 @@ class BackgroundHandler(osmium.SimpleHandler):
     def area(self, area: osmium.osm.Area) -> None:
         kind = background_class(area.tags)
         if kind is None:
-            # Track the two water-like classes we deliberately no longer export,
-            # so the build output makes the policy visible while debugging.
-            if area.tags.get("waterway") == "riverbank" or area.tags.get("landuse") == "basin":
-                self.rejected_water += 1
+            if (
+                area.tags.get("waterway") == "riverbank"
+                or area.tags.get("landuse") == "basin"
+                or (area.tags.get("water") is not None and area.tags.get("natural") != "water")
+            ):
+                self.rejected_water_like += 1
             return
 
         for outer in area.outer_rings():
@@ -130,7 +135,15 @@ class BackgroundHandler(osmium.SimpleHandler):
             if (max_x - min_x) * (max_y - min_y) < background_min_bbox_area(kind):
                 continue
 
-            geometry = make_valid(polygon).simplify(background_spacing(kind), preserve_topology=True)
+            # Invalid water polygons are dangerous for a map mask: make_valid()
+            # can turn a broken relation into large disconnected pieces. Reject
+            # them instead. Other background classes keep the repair behavior.
+            if kind == WATER and not polygon.is_valid:
+                self.rejected_invalid_water += 1
+                continue
+
+            geometry = polygon if polygon.is_valid else make_valid(polygon)
+            geometry = geometry.simplify(background_spacing(kind), preserve_topology=True)
             if geometry.is_empty:
                 continue
 
@@ -162,7 +175,7 @@ class BackgroundHandler(osmium.SimpleHandler):
 def build_background(pbf: Path, output: Path) -> dict:
     ensure_pbf(pbf)
     handler = BackgroundHandler()
-    print(f"[background] Reading {pbf} ...")
+    print(f"[background] Reading {pbf} ...", flush=True)
     handler.apply_file(str(pbf), locations=True)
 
     output.mkdir(parents=True, exist_ok=True)
@@ -191,7 +204,8 @@ def build_background(pbf: Path, output: Path) -> dict:
             "urban": handler.counts[URBAN],
             "water": handler.counts[WATER],
         },
-        "rejected_riverbank_or_basin": handler.rejected_water,
+        "rejected_water_like": handler.rejected_water_like,
+        "rejected_invalid_water": handler.rejected_invalid_water,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
@@ -203,7 +217,8 @@ def build_background(pbf: Path, output: Path) -> dict:
         f"urban={handler.counts[URBAN]:,}, "
         f"water={handler.counts[WATER]:,}"
     )
-    print(f"[background] Rejected riverbank/basin water-like areas: {handler.rejected_water:,}")
+    print(f"[background] Rejected ambiguous water-like areas: {handler.rejected_water_like:,}")
+    print(f"[background] Rejected invalid water polygons: {handler.rejected_invalid_water:,}")
     print(f"[background] Triangles: {handler.triangles:,}")
     return manifest
 
