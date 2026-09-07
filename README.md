@@ -17,6 +17,45 @@ Keep every implementation as small as possible while preserving a clean architec
 - Prefer real units for simulation data (metres, seconds, m/s, litres, kWh, etc.). Rendering coordinates are not automatically simulation truth.
 - Use credible web sources, open-source projects, technical references or scientific papers when research materially improves realism. Keep the resulting implementation minimal.
 
+## Development workflow
+
+Develop the game as a sequence of small **vertical slices** rather than building large technical subsystems in isolation. Each slice should end in a working, demonstrable piece of gameplay.
+
+Example progression:
+
+`routing graph -> routing benchmark -> click-to-road GPS -> route following -> normal driving -> aggressive/maniac driving -> lightweight traffic -> police patrol -> offence detection -> pursuit`
+
+Use GitHub issues as small work orders. An issue should have a clear goal, scope, dependencies where relevant, explicit out-of-scope boundaries and acceptance criteria. Keep the backlog prioritized by what is needed for the next playable step.
+
+For each slice:
+
+1. Define the smallest behavior that proves the feature.
+2. Implement the minimum clean solution.
+3. Add automatic tests while implementing the feature, not afterward.
+4. Add benchmarks/performance counters early for systems where latency or scale matters, especially routing, streaming and traffic.
+5. Verify functional correctness through tests before relying on visual inspection.
+6. Use manual play-testing primarily for feel, presentation and visual quality.
+7. Keep the project in a working state when the slice is complete.
+
+Avoid speculative frameworks and premature generalization. Do not spend weeks building a complete subsystem before it produces gameplay. Extend or replace simple implementations only when a real requirement or measurement justifies it.
+
+Prefer a lightweight project process: prioritized backlog, well-defined issues, short implementation cycles, automated tests and regular playable milestones. Heavy project-management ceremony is not a goal.
+
+Use feature branches for substantial work and keep the stable branch usable. Preserve known-good snapshots/checkpoints before risky architectural changes when useful.
+
+### Definition of done
+
+A gameplay issue is complete when:
+
+- its acceptance criteria pass;
+- core functional behavior is covered by automatic reproducible tests;
+- the implementation remains small, understandable and correctly separated by responsibility;
+- relevant performance is measured and acceptable for the current gameplay scale;
+- functional bugs discovered during development have regression tests where practical;
+- the feature can be demonstrated in the game when it has a visible/gameplay component.
+
+A feature is not considered complete merely because it appears to work during one manual play session.
+
 ## Automated testing rule
 
 **A new gameplay feature is not complete until its core logic has automatic, reproducible tests.**
