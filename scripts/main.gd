@@ -113,10 +113,11 @@ func _layer_spacing() -> float:
 	return clampf(camera_rig.get_distance() / 6000.0, 2.0, 240.0)
 
 func _background_height(kind: int) -> float:
-	return current_layer_spacing * float(kind + 1)
+	# LAND is the stable base plane at y=0 and is not rendered as an overlay.
+	return current_layer_spacing * float(maxi(1, kind))
 
 func _road_height() -> float:
-	return current_layer_spacing * 7.0
+	return current_layer_spacing * 6.0
 
 func _update_depth_layout(force: bool) -> void:
 	var spacing: float = _layer_spacing()
@@ -296,6 +297,7 @@ func _load_background() -> void:
 		tools.append(tool)
 
 	var accepted: int = 0
+	var skipped_land: int = 0
 	for _triangle_index in range(triangle_count):
 		var kind: int = file.get_8()
 		var x1: float = file.get_float() - origin_x
@@ -306,6 +308,9 @@ func _load_background() -> void:
 		var y3: float = file.get_float() - origin_y
 		if kind < 0 or kind >= tools.size():
 			continue
+		if kind == MAP_LAND:
+			skipped_land += 1
+			continue
 		var st: SurfaceTool = tools[kind]
 		st.set_normal(Vector3.UP)
 		st.add_vertex(Vector3(x1, 0.0, -y1))
@@ -315,7 +320,7 @@ func _load_background() -> void:
 		st.add_vertex(Vector3(x3, 0.0, -y3))
 		accepted += 1
 
-	for kind in range(tools.size()):
+	for kind in range(1, tools.size()):
 		var mesh: ArrayMesh = tools[kind].commit()
 		if mesh == null or mesh.get_surface_count() == 0:
 			continue
@@ -329,7 +334,7 @@ func _load_background() -> void:
 		world.add_child(instance)
 		background_instances[kind] = instance
 
-	print("Background map triangles rendered: ", accepted, " / ", triangle_count)
+	print("Background overlays rendered: ", accepted, " | land triangles replaced by base plane: ", skipped_land)
 
 func _map_color(kind: int) -> Color:
 	match kind:
@@ -378,7 +383,7 @@ func _create_ground() -> void:
 	ground.position = Vector3(center_x, 0.0, -center_y)
 
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.055, 0.16, 0.24)
+	mat.albedo_color = _map_color(MAP_LAND)
 	mat.roughness = 1.0
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	ground.material_override = mat
