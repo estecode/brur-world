@@ -49,7 +49,7 @@ SPECIAL_HIGHWAY_POIS = {
 class TileJsonlWriter:
     """Write lightweight POI records to staging, then publish the directory atomically."""
 
-    def __init__(self, directory: Path, max_open: int = 256) -> None:
+    def __init__(self, directory: Path, max_open: int = 32) -> None:
         self.directory = directory
         self.max_open = max_open
         self.files: OrderedDict[tuple[int, int], TextIO] = OrderedDict()
@@ -98,13 +98,10 @@ class TileJsonlWriter:
             self.staging_directory.rename(self.directory)
             self.published = True
         except Exception:
-            # Restore the previous good directory if publishing itself fails.
             if stale is not None and stale.exists() and not self.directory.exists():
                 stale.rename(self.directory)
             raise
 
-        # Cleanup is deliberately best-effort. A stale exporter may still hold or
-        # create files in the renamed old directory; that must not fail this build.
         if stale is not None and stale.exists():
             try:
                 shutil.rmtree(stale)
@@ -122,7 +119,6 @@ class TileJsonlWriter:
 
 
 def tags_dict(tags: osmium.osm.TagList) -> dict[str, str]:
-    """Keep the original OSM tags intact so we can analyse them later."""
     return {tag.k: tag.v for tag in tags}
 
 
@@ -170,7 +166,6 @@ def write_jsonl(file: TextIO, record: dict) -> None:
 
 
 def runtime_poi_record(record: dict) -> dict:
-    """Runtime markers only need position, identity and tags; geometry stays in pois.jsonl."""
     return {
         "osm_type": record["osm_type"],
         "osm_id": record["osm_id"],
@@ -181,12 +176,7 @@ def runtime_poi_record(record: dict) -> dict:
 
 
 class FeatureHandler(osmium.SimpleHandler):
-    def __init__(
-        self,
-        buildings_file: TextIO,
-        pois_file: TextIO,
-        poi_tiles: TileJsonlWriter,
-    ) -> None:
+    def __init__(self, buildings_file: TextIO, pois_file: TextIO, poi_tiles: TileJsonlWriter) -> None:
         super().__init__()
         self.buildings_file = buildings_file
         self.pois_file = pois_file
@@ -197,9 +187,6 @@ class FeatureHandler(osmium.SimpleHandler):
         self.poi_areas = 0
 
     def _write_poi(self, record: dict) -> None:
-        # Keep the complete geometry in the analysis file, but do not duplicate it
-        # into runtime tiles. Large way/area geometries made feature export and POI
-        # streaming needlessly expensive.
         write_jsonl(self.pois_file, record)
         self.poi_tiles.write(runtime_poi_record(record))
 
@@ -207,15 +194,7 @@ class FeatureHandler(osmium.SimpleHandler):
         if not is_poi(node.tags) or not node.location.valid():
             return
         x, y = project(node.lon, node.lat)
-        self._write_poi(
-            {
-                "osm_type": "node",
-                "osm_id": int(node.id),
-                "x": x,
-                "y": y,
-                "tags": tags_dict(node.tags),
-            }
-        )
+        self._write_poi({"osm_type": "node", "osm_id": int(node.id), "x": x, "y": y, "tags": tags_dict(node.tags)})
         self.poi_nodes += 1
 
     def way(self, way: osmium.osm.Way) -> None:
@@ -228,25 +207,12 @@ class FeatureHandler(osmium.SimpleHandler):
         if not points:
             return
         x, y = point_average(points)
-        self._write_poi(
-            {
-                "osm_type": "way",
-                "osm_id": int(way.id),
-                "x": x,
-                "y": y,
-                "geometry": points,
-                "tags": tags_dict(way.tags),
-            }
-        )
+        self._write_poi({"osm_type": "way", "osm_id": int(way.id), "x": x, "y": y, "geometry": points, "tags": tags_dict(way.tags)})
         self.poi_ways += 1
 
     def area(self, area: osmium.osm.Area) -> None:
         tags = area.tags
         building = tags.get("building") is not None or tags.get("building:part") is not None
-
-        # A POI-tagged closed way has already been exported by way(). Only relation
-        # areas need an additional POI record here. This removes a large amount of
-        # duplicate geometry/JSON work on the full Sweden extract.
         poi = is_poi(tags) and not area.from_way()
         if not building and not poi:
             return
@@ -261,26 +227,14 @@ class FeatureHandler(osmium.SimpleHandler):
                 continue
             if len(shell) < 3:
                 continue
-            polygons.append(
-                {
-                    "outer": shell,
-                    "holes": [hole for hole in holes if len(hole) >= 3],
-                }
-            )
+            polygons.append({"outer": shell, "holes": [hole for hole in holes if len(hole) >= 3]})
             representative_points.extend(shell)
 
         if not polygons:
             return
 
         x, y = point_average(representative_points)
-        record = {
-            "osm_type": "area",
-            "osm_id": int(area.id),
-            "x": x,
-            "y": y,
-            "geometry": polygons,
-            "tags": tags_dict(tags),
-        }
+        record = {"osm_type": "area", "osm_id": int(area.id), "x": x, "y": y, "geometry": polygons, "tags": tags_dict(tags)}
 
         if building:
             write_jsonl(self.buildings_file, record)
@@ -301,12 +255,10 @@ def build_features(pbf: Path, output: Path) -> dict:
 
     started = time.monotonic()
     print(f"[features] Reading {pbf} ...")
-    print("[features] Runtime POI tiles are lightweight; full geometry is kept only in analysis JSONL.")
+    print(f"[features] Runtime POI tiles are lightweight; max open tile files: {poi_tiles.max_open}")
     success = False
     try:
-        with buildings_path.open("w", encoding="utf-8") as buildings_file, pois_path.open(
-            "w", encoding="utf-8"
-        ) as pois_file:
+        with buildings_path.open("w", encoding="utf-8") as buildings_file, pois_path.open("w", encoding="utf-8") as pois_file:
             handler = FeatureHandler(buildings_file, pois_file, poi_tiles)
             handler.apply_file(str(pbf), locations=True)
         poi_tiles.publish()
@@ -339,11 +291,7 @@ def build_features(pbf: Path, output: Path) -> dict:
 
     elapsed = time.monotonic() - started
     print(f"[features] Buildings: {handler.buildings:,}")
-    print(
-        "[features] POIs: "
-        f"{counts['pois_total']:,} "
-        f"(nodes={handler.poi_nodes:,}, ways={handler.poi_ways:,}, relation areas={handler.poi_areas:,})"
-    )
+    print(f"[features] POIs: {counts['pois_total']:,} (nodes={handler.poi_nodes:,}, ways={handler.poi_ways:,}, relation areas={handler.poi_areas:,})")
     print(f"[features] Runtime POI records: {poi_tiles.records:,}")
     print(f"[features] Runtime POI tiles: {poi_tiles_path}")
     print(f"[features] Wrote {buildings_path} and {pois_path}")
