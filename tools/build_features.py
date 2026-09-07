@@ -18,7 +18,8 @@ import osmium
 
 from world_common import TILE_SIZE, ensure_pbf, project
 
-EXPORTER_VERSION = "poi-v3-node-fastpass"
+EXPORTER_VERSION = "poi-v4-node-progress"
+POI_PROGRESS_INTERVAL = 5_000_000
 
 POI_KEYS = {
     "amenity", "shop", "tourism", "leisure", "office", "healthcare", "emergency",
@@ -83,7 +84,7 @@ class TileJsonlWriter:
             try:
                 shutil.rmtree(stale)
             except OSError as exc:
-                print(f"[features] Warning: could not remove stale POI tiles {stale}: {exc}")
+                print(f"[features] Warning: could not remove stale POI tiles {stale}: {exc}", flush=True)
 
     def cleanup(self) -> None:
         self.close()
@@ -92,7 +93,7 @@ class TileJsonlWriter:
         try:
             shutil.rmtree(self.write_directory)
         except OSError as exc:
-            print(f"[features] Warning: could not remove staging directory {self.write_directory}: {exc}")
+            print(f"[features] Warning: could not remove staging directory {self.write_directory}: {exc}", flush=True)
 
 
 def git_revision() -> str:
@@ -107,7 +108,7 @@ def git_revision() -> str:
 
 
 def print_version() -> None:
-    print(f"build_features {EXPORTER_VERSION} | git {git_revision()}")
+    print(f"build_features {EXPORTER_VERSION} | git {git_revision()}", flush=True)
 
 
 def tags_dict(tags: osmium.osm.TagList) -> dict[str, str]:
@@ -192,8 +193,22 @@ class NodePoiHandler(osmium.SimpleHandler):
         self.pois_file = pois_file
         self.poi_tiles = poi_tiles
         self.poi_nodes = 0
+        self.scanned_nodes = 0
+        self.started = time.monotonic()
+        self.next_progress = POI_PROGRESS_INTERVAL
 
     def node(self, node: osmium.osm.Node) -> None:
+        self.scanned_nodes += 1
+        if self.scanned_nodes >= self.next_progress:
+            elapsed = max(0.001, time.monotonic() - self.started)
+            rate = self.scanned_nodes / elapsed
+            print(
+                f"[pois] scanned {self.scanned_nodes:,} nodes | found {self.poi_nodes:,} POIs | "
+                f"{elapsed:.1f}s | {rate:,.0f} nodes/s",
+                flush=True,
+            )
+            self.next_progress += POI_PROGRESS_INTERVAL
+
         if not is_poi(node.tags) or not node.location.valid():
             return
         x, y = project(node.lon, node.lat)
@@ -291,8 +306,9 @@ def build_pois(pbf: Path, output: Path) -> dict:
     poi_tiles = TileJsonlWriter(output / "poi_tiles", staged=True)
     started = time.monotonic()
     print_version()
-    print(f"[pois] Reading {pbf} ...")
-    print(f"[pois] Fast node-only pass, max open tile files: {poi_tiles.max_open}")
+    print(f"[pois] Reading {pbf} ...", flush=True)
+    print(f"[pois] Fast node-only pass, max open tile files: {poi_tiles.max_open}", flush=True)
+    print(f"[pois] Progress every {POI_PROGRESS_INTERVAL:,} scanned nodes", flush=True)
 
     success = False
     try:
@@ -314,10 +330,11 @@ def build_pois(pbf: Path, output: Path) -> dict:
         "way_pois_complete": False,
         "relation_pois_complete": False,
     })
-    print(f"[pois] Node POIs ready: {handler.poi_nodes:,}")
-    print(f"[pois] Runtime POI records: {poi_tiles.records:,}")
-    print(f"[pois] Completed in {time.monotonic() - started:.1f}s")
-    print("[pois] Way/relation POIs are intentionally deferred to the heavy buildings pass.")
+    print(f"[pois] Scanned nodes: {handler.scanned_nodes:,}", flush=True)
+    print(f"[pois] Node POIs ready: {handler.poi_nodes:,}", flush=True)
+    print(f"[pois] Runtime POI records: {poi_tiles.records:,}", flush=True)
+    print(f"[pois] Completed in {time.monotonic() - started:.1f}s", flush=True)
+    print("[pois] Way/relation POIs are intentionally deferred to the heavy buildings pass.", flush=True)
     return manifest
 
 
@@ -330,8 +347,8 @@ def build_buildings(pbf: Path, output: Path) -> dict:
     poi_tiles = TileJsonlWriter(output / "poi_tiles", staged=False)
     started = time.monotonic()
     print_version()
-    print(f"[buildings] Reading {pbf} ...")
-    print("[buildings] Heavy pass: buildings + POI ways + relation-only POIs")
+    print(f"[buildings] Reading {pbf} ...", flush=True)
+    print("[buildings] Heavy pass: buildings + POI ways + relation-only POIs", flush=True)
 
     with buildings_path.open("w", encoding="utf-8") as buildings_file, pois_path.open("a", encoding="utf-8") as pois_file:
         handler = HeavyFeatureHandler(buildings_file, pois_file, poi_tiles)
@@ -349,18 +366,18 @@ def build_buildings(pbf: Path, output: Path) -> dict:
         "way_pois_complete": True,
         "relation_pois_complete": True,
     })
-    print(f"[buildings] Buildings: {handler.buildings:,}")
-    print(f"[buildings] POI ways appended: {handler.poi_ways:,}")
-    print(f"[buildings] Relation POIs appended: {handler.poi_areas:,}")
-    print(f"[buildings] Completed in {time.monotonic() - started:.1f}s")
+    print(f"[buildings] Buildings: {handler.buildings:,}", flush=True)
+    print(f"[buildings] POI ways appended: {handler.poi_ways:,}", flush=True)
+    print(f"[buildings] Relation POIs appended: {handler.poi_areas:,}", flush=True)
+    print(f"[buildings] Completed in {time.monotonic() - started:.1f}s", flush=True)
     return manifest
 
 
 def build_features(pbf: Path, output: Path) -> dict:
-    print("=== BUILD POIS (FAST NODE PASS) ===")
+    print("=== BUILD POIS (FAST NODE PASS) ===", flush=True)
     build_pois(pbf, output)
-    print()
-    print("=== BUILD BUILDINGS / WAY + RELATION POIS (HEAVY) ===")
+    print(flush=True)
+    print("=== BUILD BUILDINGS / WAY + RELATION POIS (HEAVY) ===", flush=True)
     return build_buildings(pbf, output)
 
 
