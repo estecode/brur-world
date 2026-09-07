@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import shutil
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import TextIO
@@ -45,12 +46,13 @@ SPECIAL_HIGHWAY_POIS = {
 
 
 class TileJsonlWriter:
-    """Write POIs into 32 km runtime tiles without keeping thousands of files open."""
+    """Write lightweight POI records into 32 km runtime tiles."""
 
-    def __init__(self, directory: Path, max_open: int = 64) -> None:
+    def __init__(self, directory: Path, max_open: int = 256) -> None:
         self.directory = directory
         self.max_open = max_open
         self.files: OrderedDict[tuple[int, int], TextIO] = OrderedDict()
+        self.records = 0
         if directory.exists():
             shutil.rmtree(directory)
         directory.mkdir(parents=True, exist_ok=True)
@@ -65,6 +67,7 @@ class TileJsonlWriter:
             file = path.open("a", encoding="utf-8")
         self.files[key] = file
         write_jsonl(file, record)
+        self.records += 1
 
         if len(self.files) > self.max_open:
             _, oldest = self.files.popitem(last=False)
@@ -124,6 +127,17 @@ def write_jsonl(file: TextIO, record: dict) -> None:
     file.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+def runtime_poi_record(record: dict) -> dict:
+    """Runtime markers only need position, identity and tags; geometry stays in pois.jsonl."""
+    return {
+        "osm_type": record["osm_type"],
+        "osm_id": record["osm_id"],
+        "x": record["x"],
+        "y": record["y"],
+        "tags": record["tags"],
+    }
+
+
 class FeatureHandler(osmium.SimpleHandler):
     def __init__(
         self,
@@ -141,8 +155,11 @@ class FeatureHandler(osmium.SimpleHandler):
         self.poi_areas = 0
 
     def _write_poi(self, record: dict) -> None:
+        # Keep the complete geometry in the analysis file, but do not duplicate it
+        # into runtime tiles. Large way/area geometries made feature export and POI
+        # streaming needlessly expensive.
         write_jsonl(self.pois_file, record)
-        self.poi_tiles.write(record)
+        self.poi_tiles.write(runtime_poi_record(record))
 
     def node(self, node: osmium.osm.Node) -> None:
         if not is_poi(node.tags) or not node.location.valid():
@@ -184,7 +201,11 @@ class FeatureHandler(osmium.SimpleHandler):
     def area(self, area: osmium.osm.Area) -> None:
         tags = area.tags
         building = tags.get("building") is not None or tags.get("building:part") is not None
-        poi = is_poi(tags)
+
+        # A POI-tagged closed way has already been exported by way(). Only relation
+        # areas need an additional POI record here. This removes a large amount of
+        # duplicate geometry/JSON work on the full Sweden extract.
+        poi = is_poi(tags) and not area.from_way()
         if not building and not poi:
             return
 
@@ -236,7 +257,9 @@ def build_features(pbf: Path, output: Path) -> dict:
     poi_tiles_path = output / "poi_tiles"
     poi_tiles = TileJsonlWriter(poi_tiles_path)
 
+    started = time.monotonic()
     print(f"[features] Reading {pbf} ...")
+    print("[features] Runtime POI tiles are lightweight; full geometry is kept only in analysis JSONL.")
     try:
         with buildings_path.open("w", encoding="utf-8") as buildings_file, pois_path.open(
             "w", encoding="utf-8"
@@ -268,14 +291,17 @@ def build_features(pbf: Path, output: Path) -> dict:
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
+    elapsed = time.monotonic() - started
     print(f"[features] Buildings: {handler.buildings:,}")
     print(
         "[features] POIs: "
         f"{counts['pois_total']:,} "
-        f"(nodes={handler.poi_nodes:,}, ways={handler.poi_ways:,}, areas={handler.poi_areas:,})"
+        f"(nodes={handler.poi_nodes:,}, ways={handler.poi_ways:,}, relation areas={handler.poi_areas:,})"
     )
+    print(f"[features] Runtime POI records: {poi_tiles.records:,}")
     print(f"[features] Runtime POI tiles: {poi_tiles_path}")
     print(f"[features] Wrote {buildings_path} and {pois_path}")
+    print(f"[features] Completed in {elapsed:.1f}s")
     return manifest
 
 
