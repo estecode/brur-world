@@ -108,13 +108,25 @@ func _choose_lod(distance: float) -> int:
 	return 2
 
 func _layer_spacing() -> float:
-	# At country scale a few metres is below depth-buffer precision. Increase the
-	# layer separation with camera distance, while keeping it tiny in gameplay view.
-	return clampf(camera_rig.get_distance() / 6000.0, 2.0, 240.0)
+	# Keep a minimum separation large enough to avoid z-fighting in the low-angle
+	# gameplay camera while still scaling the gap at country overview distances.
+	return clampf(camera_rig.get_distance() / 6000.0, 4.0, 240.0)
 
 func _background_height(kind: int) -> float:
-	# LAND is the stable base plane at y=0 and is not rendered as an overlay.
-	return current_layer_spacing * float(maxi(1, kind))
+	# Base plane is ocean at y=0. Every rendered map class gets its own height so
+	# no two different classes share a coplanar surface and flicker while zooming.
+	match kind:
+		MAP_LAND:
+			return current_layer_spacing * 1.0
+		MAP_FARMLAND:
+			return current_layer_spacing * 2.0
+		MAP_FOREST:
+			return current_layer_spacing * 3.0
+		MAP_URBAN:
+			return current_layer_spacing * 4.0
+		MAP_WATER:
+			return current_layer_spacing * 5.0
+	return current_layer_spacing
 
 func _road_height() -> float:
 	return current_layer_spacing * 6.0
@@ -144,7 +156,6 @@ func _visible_tile_bounds() -> Array[Vector2i]:
 	var max_ty: int = -999999
 	var points: PackedVector3Array = camera_rig.get_ground_view_corners()
 
-	# Always include the logical focus so edge cases near the horizon remain safe.
 	var focus: Vector3 = camera_rig.get_focus_world()
 	points.append(focus)
 
@@ -158,7 +169,6 @@ func _visible_tile_bounds() -> Array[Vector2i]:
 		max_tx = maxi(max_tx, tx)
 		max_ty = maxi(max_ty, ty)
 
-	# Prefetch two tiles beyond the visible footprint to avoid exposing edges while panning.
 	var margin: int = 2
 	return [
 		Vector2i(min_tx - margin, min_ty - margin),
@@ -183,8 +193,6 @@ func _refresh_tiles(force: bool) -> void:
 	var wanted: Dictionary = {}
 	var new_nodes: Array[MeshInstance3D] = []
 
-	# Build the complete replacement set before removing the previous one. This
-	# avoids a visible blank frame during LOD swaps.
 	for ty in range(min_tile.y, max_tile.y + 1):
 		for tx in range(min_tile.x, max_tile.x + 1):
 			var key: String = "%d:%d:%d" % [lod, tx, ty]
@@ -297,7 +305,6 @@ func _load_background() -> void:
 		tools.append(tool)
 
 	var accepted: int = 0
-	var skipped_land: int = 0
 	for _triangle_index in range(triangle_count):
 		var kind: int = file.get_8()
 		var x1: float = file.get_float() - origin_x
@@ -308,9 +315,6 @@ func _load_background() -> void:
 		var y3: float = file.get_float() - origin_y
 		if kind < 0 or kind >= tools.size():
 			continue
-		if kind == MAP_LAND:
-			skipped_land += 1
-			continue
 		var st: SurfaceTool = tools[kind]
 		st.set_normal(Vector3.UP)
 		st.add_vertex(Vector3(x1, 0.0, -y1))
@@ -320,7 +324,7 @@ func _load_background() -> void:
 		st.add_vertex(Vector3(x3, 0.0, -y3))
 		accepted += 1
 
-	for kind in range(1, tools.size()):
+	for kind in range(tools.size()):
 		var mesh: ArrayMesh = tools[kind].commit()
 		if mesh == null or mesh.get_surface_count() == 0:
 			continue
@@ -334,7 +338,7 @@ func _load_background() -> void:
 		world.add_child(instance)
 		background_instances[kind] = instance
 
-	print("Background overlays rendered: ", accepted, " | land triangles replaced by base plane: ", skipped_land)
+	print("Background triangles rendered: ", accepted, " | ocean base enabled")
 
 func _map_color(kind: int) -> Color:
 	match kind:
@@ -383,7 +387,7 @@ func _create_ground() -> void:
 	ground.position = Vector3(center_x, 0.0, -center_y)
 
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
-	mat.albedo_color = _map_color(MAP_LAND)
+	mat.albedo_color = _map_color(MAP_WATER)
 	mat.roughness = 1.0
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	ground.material_override = mat
