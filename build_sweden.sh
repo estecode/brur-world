@@ -13,4 +13,7 @@ python -m pip install -q -r requirements.txt
 python tools/build_sweden.py "$PBF" --output world_data
 
 echo
+echo "========================================"
+echo "           BUILD COMPLETE"
+echo "========================================"
 echo "World built. Open this folder in Godot 4 and press Run."
