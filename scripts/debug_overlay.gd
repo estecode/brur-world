@@ -18,6 +18,13 @@ var worst_frame_ms: float = 0.0
 var shown_avg_ms: float = 0.0
 var shown_worst_ms: float = 0.0
 var perf_log: FileAccess = null
+var shown_road_build_ms: float = 0.0
+var shown_road_build_max_ms: float = 0.0
+var shown_road_tiles_built: int = 0
+var shown_road_pending: int = 0
+var shown_road_refresh_ms: float = 0.0
+var shown_cache_hits: int = 0
+var shown_cache_misses: int = 0
 
 func _ready() -> void:
 	_open_perf_log()
@@ -48,7 +55,7 @@ func _open_perf_log() -> void:
 		return
 	perf_log.store_line("")
 	perf_log.store_line("=== BRUR PERFORMANCE SESSION %s ===" % Time.get_datetime_string_from_system())
-	perf_log.store_line("time,fps,avg_frame_ms,worst_1s_ms,distance_m,lod,road_tiles,road_cache,pois,poi_tile_cache,draw_calls,objects,nodes,camera_near,camera_far,fov")
+	perf_log.store_line("time,fps,avg_frame_ms,worst_1s_ms,distance_m,lod,road_tiles,road_cache,pois,poi_tile_cache,draw_calls,objects,nodes,camera_near,camera_far,fov,road_build_ms,road_build_max_ms,road_tiles_built,road_pending,road_refresh_ms,cache_hits,cache_misses")
 	perf_log.flush()
 	print("Performance log: ", ProjectSettings.globalize_path(PERF_LOG_PATH))
 
@@ -67,6 +74,15 @@ func _process(delta: float) -> void:
 		frame_sum_ms = 0.0
 		worst_frame_ms = 0.0
 		write_sample = true
+		if main.has_method("consume_perf_metrics"):
+			var road_metrics: Dictionary = main.call("consume_perf_metrics") as Dictionary
+			shown_road_build_ms = float(road_metrics.get("road_build_ms", 0.0))
+			shown_road_build_max_ms = float(road_metrics.get("road_build_max_ms", 0.0))
+			shown_road_tiles_built = int(road_metrics.get("road_tiles_built", 0))
+			shown_road_pending = int(road_metrics.get("road_pending", 0))
+			shown_road_refresh_ms = float(road_metrics.get("road_refresh_ms", 0.0))
+			shown_cache_hits = int(road_metrics.get("road_cache_hits", 0))
+			shown_cache_misses = int(road_metrics.get("road_cache_misses", 0))
 
 	var distance: float = float(camera_rig.call("get_distance"))
 	var focus: Vector3 = camera_rig.call("get_focus_world") as Vector3
@@ -86,7 +102,7 @@ func _process(delta: float) -> void:
 
 	var poi_count: int = 0
 	var poi_cache_count: int = 0
-	var poi_layer: Node = main.get_node_or_null("POILayer")
+	var poi_layer: Node = main.get_node_or_null("PoiLayer")
 	if poi_layer != null:
 		var pois_value: Variant = poi_layer.get("active_pois")
 		if typeof(pois_value) == TYPE_ARRAY:
@@ -108,6 +124,8 @@ func _process(delta: float) -> void:
 		+ "FPS: %.0f   frame avg: %.2f ms   worst 1s: %.2f ms\n" % [fps, shown_avg_ms, shown_worst_ms]
 		+ "draw calls: %d   objects: %d   nodes: %d\n" % [draw_calls, objects, nodes]
 		+ "distance: %.0f m   lod: %d   road tiles: %d   road cache: %d\n" % [distance, lod, loaded_count, mesh_cache_count]
+		+ "road build: %.1f ms total / %.1f ms max   built: %d   pending: %d\n" % [shown_road_build_ms, shown_road_build_max_ms, shown_road_tiles_built, shown_road_pending]
+		+ "road refresh: %.1f ms   cache hit/miss: %d/%d\n" % [shown_road_refresh_ms, shown_cache_hits, shown_cache_misses]
 		+ "POIs: %d   POI tile cache: %d\n" % [poi_count, poi_cache_count]
 		+ "camera near/far: %.1f / %.0f   fov: %.1f\n" % [camera.near, camera.far, camera.fov]
 		+ "focus: x %.0f   z %.0f\n" % [focus.x, focus.z]
@@ -130,27 +148,16 @@ func _write_perf_sample(
 ) -> void:
 	if perf_log == null:
 		return
-	var line: String = "%s,%.0f,%.3f,%.3f,%.0f,%d,%d,%d,%d,%d,%d,%d,%d,%.2f,%.0f,%.2f" % [
-		Time.get_datetime_string_from_system(),
-		fps,
-		shown_avg_ms,
-		shown_worst_ms,
-		distance,
-		lod,
-		road_tiles,
-		road_cache,
-		poi_count,
-		poi_cache,
-		draw_calls,
-		objects,
-		nodes,
-		camera.near,
-		camera.far,
-		camera.fov,
+	var line: String = "%s,%.0f,%.3f,%.3f,%.0f,%d,%d,%d,%d,%d,%d,%d,%d,%.2f,%.0f,%.2f,%.3f,%.3f,%d,%d,%.3f,%d,%d" % [
+		Time.get_datetime_string_from_system(), fps, shown_avg_ms, shown_worst_ms, distance, lod,
+		road_tiles, road_cache, poi_count, poi_cache, draw_calls, objects, nodes,
+		camera.near, camera.far, camera.fov,
+		shown_road_build_ms, shown_road_build_max_ms, shown_road_tiles_built, shown_road_pending,
+		shown_road_refresh_ms, shown_cache_hits, shown_cache_misses,
 	]
 	perf_log.store_line(line)
 	if shown_worst_ms >= 33.3:
-		perf_log.store_line("PERF SPIKE,%s,worst_frame_ms=%.3f,distance=%.0f,lod=%d,pois=%d,road_tiles=%d" % [
-			Time.get_datetime_string_from_system(), shown_worst_ms, distance, lod, poi_count, road_tiles
+		perf_log.store_line("PERF SPIKE,%s,worst_frame_ms=%.3f,distance=%.0f,lod=%d,pois=%d,road_tiles=%d,road_build_max_ms=%.3f,road_pending=%d" % [
+			Time.get_datetime_string_from_system(), shown_worst_ms, distance, lod, poi_count, road_tiles, shown_road_build_max_ms, shown_road_pending
 		])
 	perf_log.flush()
