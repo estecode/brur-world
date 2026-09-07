@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import shutil
 import time
 from collections import OrderedDict
@@ -46,16 +47,21 @@ SPECIAL_HIGHWAY_POIS = {
 
 
 class TileJsonlWriter:
-    """Write lightweight POI records into 32 km runtime tiles."""
+    """Write lightweight POI records to staging, then publish the directory atomically."""
 
     def __init__(self, directory: Path, max_open: int = 256) -> None:
         self.directory = directory
         self.max_open = max_open
         self.files: OrderedDict[tuple[int, int], TextIO] = OrderedDict()
         self.records = 0
-        if directory.exists():
-            shutil.rmtree(directory)
-        directory.mkdir(parents=True, exist_ok=True)
+        self.published = False
+
+        # Never delete the live runtime directory before a build starts. Apart from
+        # preserving the previous good export on failure, this also avoids macOS
+        # rmtree races when a previous/interrupted exporter still has files open.
+        stamp = f"{os.getpid()}-{time.time_ns()}"
+        self.staging_directory = directory.parent / f".{directory.name}.build-{stamp}"
+        self.staging_directory.mkdir(parents=True, exist_ok=False)
 
     def write(self, record: dict) -> None:
         x = float(record["x"])
@@ -63,7 +69,7 @@ class TileJsonlWriter:
         key = (math.floor(x / TILE_SIZE), math.floor(y / TILE_SIZE))
         file = self.files.pop(key, None)
         if file is None:
-            path = self.directory / f"{key[0]}_{key[1]}.jsonl"
+            path = self.staging_directory / f"{key[0]}_{key[1]}.jsonl"
             file = path.open("a", encoding="utf-8")
         self.files[key] = file
         write_jsonl(file, record)
@@ -77,6 +83,42 @@ class TileJsonlWriter:
         for file in self.files.values():
             file.close()
         self.files.clear()
+
+    def publish(self) -> None:
+        """Replace the live tile directory without requiring rmtree on it in place."""
+        self.close()
+        stale: Path | None = None
+        if self.directory.exists():
+            stale = self.directory.parent / (
+                f".{self.directory.name}.old-{os.getpid()}-{time.time_ns()}"
+            )
+            self.directory.rename(stale)
+
+        try:
+            self.staging_directory.rename(self.directory)
+            self.published = True
+        except Exception:
+            # Restore the previous good directory if publishing itself fails.
+            if stale is not None and stale.exists() and not self.directory.exists():
+                stale.rename(self.directory)
+            raise
+
+        # Cleanup is deliberately best-effort. A stale exporter may still hold or
+        # create files in the renamed old directory; that must not fail this build.
+        if stale is not None and stale.exists():
+            try:
+                shutil.rmtree(stale)
+            except OSError as exc:
+                print(f"[features] Warning: could not remove stale POI tiles {stale}: {exc}")
+
+    def cleanup_staging(self) -> None:
+        self.close()
+        if self.published or not self.staging_directory.exists():
+            return
+        try:
+            shutil.rmtree(self.staging_directory)
+        except OSError as exc:
+            print(f"[features] Warning: could not remove staging directory {self.staging_directory}: {exc}")
 
 
 def tags_dict(tags: osmium.osm.TagList) -> dict[str, str]:
@@ -260,14 +302,18 @@ def build_features(pbf: Path, output: Path) -> dict:
     started = time.monotonic()
     print(f"[features] Reading {pbf} ...")
     print("[features] Runtime POI tiles are lightweight; full geometry is kept only in analysis JSONL.")
+    success = False
     try:
         with buildings_path.open("w", encoding="utf-8") as buildings_file, pois_path.open(
             "w", encoding="utf-8"
         ) as pois_file:
             handler = FeatureHandler(buildings_file, pois_file, poi_tiles)
             handler.apply_file(str(pbf), locations=True)
+        poi_tiles.publish()
+        success = True
     finally:
-        poi_tiles.close()
+        if not success:
+            poi_tiles.cleanup_staging()
 
     counts = {
         "buildings": handler.buildings,
