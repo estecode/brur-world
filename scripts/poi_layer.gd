@@ -6,7 +6,7 @@ extends Node3D
 const WORLD_DIR: String = "res://world_data"
 const SHOW_DISTANCE: float = 30000.0
 const REFRESH_INTERVAL: float = 0.30
-const HOVER_INTERVAL: float = 0.05
+const HOVER_INTERVAL: float = 0.10
 const HOVER_RADIUS_PX: float = 16.0
 
 @onready var camera_rig: Node3D = get_parent().get_node("CameraRig") as Node3D
@@ -19,11 +19,14 @@ var origin_y: float = 0.0
 var tile_dir: String = "poi_tiles"
 
 var active_pois: Array[Dictionary] = []
+var tile_cache: Dictionary = {}
 var marker_instance: MultiMeshInstance3D = null
+var marker_mesh: BoxMesh = null
 var refresh_accum: float = 0.0
 var hover_accum: float = 0.0
 var last_min_tile: Vector2i = Vector2i(999999, 999999)
 var last_max_tile: Vector2i = Vector2i(-999999, -999999)
+var last_marker_distance: float = -1.0
 
 var hover_layer: CanvasLayer = null
 var hover_panel: PanelContainer = null
@@ -38,6 +41,9 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if manifest.is_empty():
 		return
+
+	var distance: float = float(camera_rig.call("get_distance"))
+	_update_marker_scale(distance)
 
 	refresh_accum += delta
 	if refresh_accum >= REFRESH_INTERVAL:
@@ -87,7 +93,6 @@ func _refresh(force: bool) -> void:
 	var min_tile: Vector2i = bounds[0]
 	var max_tile: Vector2i = bounds[1]
 	if not force and min_tile == last_min_tile and max_tile == last_max_tile:
-		_update_marker_scale(distance)
 		return
 
 	last_min_tile = min_tile
@@ -96,11 +101,12 @@ func _refresh(force: bool) -> void:
 
 	for ty in range(min_tile.y, max_tile.y + 1):
 		for tx in range(min_tile.x, max_tile.x + 1):
-			_load_poi_tile(tx, ty)
+			var tile_pois: Array[Dictionary] = _get_poi_tile(tx, ty)
+			active_pois.append_array(tile_pois)
 
 	_rebuild_markers()
-	_update_marker_scale(distance)
-	print("POIs visible: ", active_pois.size(), " | tiles: ", min_tile, " -> ", max_tile)
+	_update_marker_scale(distance, true)
+	print("POIs visible: ", active_pois.size(), " | tiles: ", min_tile, " -> ", max_tile, " | cached tiles: ", tile_cache.size())
 
 func _visible_tile_bounds() -> Array[Vector2i]:
 	var min_tx: int = 999999
@@ -124,13 +130,20 @@ func _visible_tile_bounds() -> Array[Vector2i]:
 	var margin: int = 1
 	return [Vector2i(min_tx - margin, min_ty - margin), Vector2i(max_tx + margin, max_ty + margin)]
 
-func _load_poi_tile(tx: int, ty: int) -> void:
+func _get_poi_tile(tx: int, ty: int) -> Array[Dictionary]:
+	var key: String = "%d:%d" % [tx, ty]
+	if tile_cache.has(key):
+		return tile_cache[key] as Array[Dictionary]
+
+	var result: Array[Dictionary] = []
 	var path: String = "%s/%s/%d_%d.jsonl" % [WORLD_DIR, tile_dir, tx, ty]
 	if not FileAccess.file_exists(path):
-		return
+		tile_cache[key] = result
+		return result
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null:
-		return
+		tile_cache[key] = result
+		return result
 
 	while not file.eof_reached():
 		var line: String = file.get_line()
@@ -142,32 +155,43 @@ func _load_poi_tile(tx: int, ty: int) -> void:
 		var poi: Dictionary = parsed as Dictionary
 		if not poi.has("x") or not poi.has("y"):
 			continue
-		active_pois.append(poi)
+		poi["world_position"] = Vector3(
+			float(poi.get("x", 0.0)) - origin_x,
+			0.0,
+			-(float(poi.get("y", 0.0)) - origin_y)
+		)
+		result.append(poi)
+
+	tile_cache[key] = result
+	return result
 
 func _rebuild_markers() -> void:
 	if marker_instance != null:
 		marker_instance.queue_free()
 		marker_instance = null
+	marker_mesh = null
 	if active_pois.is_empty():
 		return
 
-	var box: BoxMesh = BoxMesh.new()
-	box.size = Vector3(1.0, 1.7, 1.0)
+	marker_mesh = BoxMesh.new()
+	marker_mesh.size = Vector3(1.0, 1.7, 1.0)
 	var material: StandardMaterial3D = StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.vertex_color_use_as_albedo = true
 	material.albedo_color = Color.WHITE
-	box.material = material
+	marker_mesh.material = material
 
 	var multimesh: MultiMesh = MultiMesh.new()
 	multimesh.transform_format = MultiMesh.TRANSFORM_3D
 	multimesh.use_colors = true
-	multimesh.mesh = box
+	multimesh.mesh = marker_mesh
 	multimesh.instance_count = active_pois.size()
 
+	var lift: float = _marker_lift(float(camera_rig.call("get_distance")))
 	for i in range(active_pois.size()):
 		var poi: Dictionary = active_pois[i]
 		var position: Vector3 = _poi_world_position(poi)
+		position.y = lift
 		multimesh.set_instance_transform(i, Transform3D(Basis.IDENTITY, position))
 		multimesh.set_instance_color(i, _poi_color(poi))
 
@@ -175,23 +199,30 @@ func _rebuild_markers() -> void:
 	marker_instance.multimesh = multimesh
 	add_child(marker_instance)
 
-func _update_marker_scale(distance: float) -> void:
-	if marker_instance == null or marker_instance.multimesh == null:
+func _update_marker_scale(distance: float, force: bool = false) -> void:
+	if marker_mesh == null or marker_instance == null:
 		return
+	if not force and last_marker_distance > 0.0:
+		var ratio: float = distance / last_marker_distance
+		if ratio > 0.985 and ratio < 1.015:
+			return
+	last_marker_distance = distance
 	var scale_value: float = clampf(distance * 0.0024, 6.0, 58.0)
-	var y_scale: float = scale_value * 1.8
-	var multimesh: MultiMesh = marker_instance.multimesh
-	for i in range(active_pois.size()):
-		var position: Vector3 = _poi_world_position(active_pois[i])
-		var basis: Basis = Basis.IDENTITY.scaled(Vector3(scale_value, y_scale, scale_value))
-		multimesh.set_instance_transform(i, Transform3D(basis, position))
+	marker_mesh.size = Vector3(scale_value, scale_value * 3.06, scale_value)
+	marker_instance.position.y = _marker_lift(distance)
+
+func _marker_lift(distance: float) -> float:
+	return clampf(distance / 6000.0, 2.0, 20.0) * 8.0
 
 func _poi_world_position(poi: Dictionary) -> Vector3:
-	var x: float = float(poi.get("x", 0.0)) - origin_x
-	var y: float = float(poi.get("y", 0.0)) - origin_y
-	var distance: float = float(camera_rig.call("get_distance"))
-	var lift: float = clampf(distance / 6000.0, 2.0, 20.0) * 8.0
-	return Vector3(x, lift, -y)
+	var cached: Variant = poi.get("world_position", Vector3.ZERO)
+	if typeof(cached) == TYPE_VECTOR3:
+		return cached as Vector3
+	return Vector3(
+		float(poi.get("x", 0.0)) - origin_x,
+		0.0,
+		-(float(poi.get("y", 0.0)) - origin_y)
+	)
 
 func _update_hover() -> void:
 	if active_pois.is_empty() or camera == null:
@@ -201,9 +232,11 @@ func _update_hover() -> void:
 	var mouse: Vector2 = get_viewport().get_mouse_position()
 	var best_distance: float = HOVER_RADIUS_PX
 	var best: Dictionary = {}
+	var lift: float = _marker_lift(float(camera_rig.call("get_distance")))
 
 	for poi in active_pois:
 		var world_position: Vector3 = _poi_world_position(poi)
+		world_position.y = lift
 		if camera.is_position_behind(world_position):
 			continue
 		var screen: Vector2 = camera.unproject_position(world_position)
