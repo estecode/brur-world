@@ -149,7 +149,6 @@ func _load_background() -> void:
 	if not FileAccess.file_exists(path):
 		print("No background.brmap yet. Re-run ./build_sweden.sh to build the map background.")
 		return
-
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null or file.get_length() < 8:
 		return
@@ -157,14 +156,12 @@ func _load_background() -> void:
 	if magic != MAP_MAGIC:
 		push_error("Bad background map magic: " + path)
 		return
-
 	var polygon_count: int = file.get_32()
 	var tools: Array[SurfaceTool] = []
 	for _kind in range(5):
 		var tool: SurfaceTool = SurfaceTool.new()
 		tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 		tools.append(tool)
-
 	var accepted: int = 0
 	for _polygon_index in range(polygon_count):
 		var kind: int = file.get_8()
@@ -175,7 +172,6 @@ func _load_background() -> void:
 			var x: float = file.get_float() - origin_x
 			var y: float = file.get_float() - origin_y
 			polygon[i] = Vector2(x, y)
-
 		if kind < 0 or kind >= tools.size() or point_count < 3:
 			continue
 		var indices: PackedInt32Array = Geometry2D.triangulate_polygon(polygon)
@@ -187,7 +183,6 @@ func _load_background() -> void:
 			var p: Vector2 = polygon[index]
 			st.add_vertex(Vector3(p.x, height, -p.y))
 		accepted += 1
-
 	for kind in range(tools.size()):
 		var mesh: ArrayMesh = tools[kind].commit()
 		if mesh == null or mesh.get_surface_count() == 0:
@@ -200,7 +195,6 @@ func _load_background() -> void:
 		mat.albedo_color = _map_color(kind)
 		instance.material_override = mat
 		world.add_child(instance)
-
 	print("Background map polygons rendered: ", accepted, " / ", polygon_count)
 
 func _map_color(kind: int) -> Color:
@@ -227,14 +221,31 @@ func _road_color(road_class: int) -> Color:
 	return Color(0.62, 0.66, 0.64)
 
 func _create_ground() -> void:
+	# The sea/background plane is derived from the actual exported Sweden bounds,
+	# so the map and its background are one coherent surface instead of two unrelated rectangles.
+	var bounds_value: Variant = manifest.get("bounds", [])
+	if typeof(bounds_value) != TYPE_ARRAY:
+		return
+	var bounds: Array = bounds_value as Array
+	if bounds.size() < 4:
+		return
+	var min_x: float = float(bounds[0])
+	var min_y: float = float(bounds[1])
+	var max_x: float = float(bounds[2])
+	var max_y: float = float(bounds[3])
+	var width: float = max_x - min_x
+	var depth: float = max_y - min_y
+	var margin: float = maxf(80000.0, maxf(width, depth) * 0.12)
+	var center_x: float = ((min_x + max_x) * 0.5) - origin_x
+	var center_y: float = ((min_y + max_y) * 0.5) - origin_y
 	var ground: MeshInstance3D = MeshInstance3D.new()
 	var plane: PlaneMesh = PlaneMesh.new()
-	plane.size = Vector2(2200000.0, 2200000.0)
+	plane.size = Vector2(width + margin * 2.0, depth + margin * 2.0)
 	ground.mesh = plane
-	ground.position.y = 0.0
+	ground.position = Vector3(center_x, 0.0, -center_y)
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = Color(0.025, 0.055, 0.085)
-	mat.roughness = 1.0
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	ground.material_override = mat
 	world.add_child(ground)
