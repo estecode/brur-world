@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -180,6 +181,20 @@ class EndToEndBuildTests(unittest.TestCase):
         self.assertEqual(report["unknown_maxspeed"], {"signals": 2})
         self.assertEqual(sum(1 for edge in graph.edges if edge.against_oneway), 2)
         self.assertTrue(any(edge.bridge and edge.layer == 1 for edge in graph.edges))
+
+    def test_interrupted_write_preserves_existing_graph(self) -> None:
+        fixture = ROOT / "tests" / "fixtures" / "routing_minimal.osm"
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            graph_path = output / "routing.brg"
+            graph_path.write_bytes(b"known-good-routing")
+
+            with patch("build_routing.write_brg1", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    build_routing(fixture, output)
+
+            self.assertEqual(graph_path.read_bytes(), b"known-good-routing")
+            self.assertFalse((output / "routing.brg.tmp").exists())
 
 
 if __name__ == "__main__":
