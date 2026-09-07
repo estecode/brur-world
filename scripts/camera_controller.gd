@@ -183,6 +183,11 @@ func get_ground_view_corners() -> PackedVector3Array:
 		result.append(ray_origin + ray_direction * t)
 	return result
 
+func set_view(new_focus: Vector3, new_distance: float) -> void:
+	focus = Vector3(new_focus.x, 0.0, new_focus.z)
+	distance = clampf(new_distance, min_distance, max_distance)
+	_apply_camera()
+
 func get_focus_world() -> Vector3:
 	return focus
 
