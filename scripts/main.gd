@@ -111,6 +111,7 @@ func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 			continue
 		var width: float = base_widths[lod] * (1.0 + max(0, 4 - road_class) * 0.10)
 		var side := Vector3(-d.z, 0.0, d.x).normalized() * width * 0.5
+		st.set_color(_road_color(road_class))
 		st.add_vertex(a - side)
 		st.add_vertex(a + side)
 		st.add_vertex(b + side)
@@ -126,9 +127,19 @@ func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.albedo_color = Color(1.0, 0.95, 0.70)
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_color = Color.WHITE
 	instance.material_override = mat
 	return instance
+
+func _road_color(road_class: int) -> Color:
+	if road_class <= 0:
+		return Color(1.0, 0.58, 0.20)
+	if road_class <= 2:
+		return Color(1.0, 0.78, 0.36)
+	if road_class <= 4:
+		return Color(0.92, 0.88, 0.72)
+	return Color(0.62, 0.66, 0.64)
 
 func _create_ground() -> void:
 	var ground := MeshInstance3D.new()
