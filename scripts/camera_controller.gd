@@ -85,7 +85,6 @@ func _gameplay_blend() -> float:
 	if distance >= gameplay_blend_start:
 		return 0.0
 	var raw: float = 1.0 - inverse_lerp(min_distance, gameplay_blend_start, distance)
-	# Smoothstep keeps the camera from visibly snapping when the blend starts.
 	return raw * raw * (3.0 - 2.0 * raw)
 
 func _apply_camera() -> void:
@@ -95,12 +94,38 @@ func _apply_camera() -> void:
 	var pitch: float = deg_to_rad(pitch_degrees)
 	camera.fov = lerpf(overview_fov, gameplay_fov, blend)
 
-	# Keep the camera behind the focus point. At close zoom the target moves forward,
-	# producing the high-angle drone composition with visible horizon and leading roads.
 	camera.position = Vector3(0.0, sin(pitch) * distance, cos(pitch) * distance)
 	var forward_distance: float = distance * gameplay_forward_look * blend
 	var look_target: Vector3 = global_position + Vector3(0.0, 0.0, -forward_distance)
 	camera.look_at(look_target, Vector3.UP)
+
+	# Tightening near/far with zoom gives the depth buffer enough precision for
+	# stacked map surfaces without clipping the visible ground.
+	camera.near = clampf(distance * 0.0025, 5.0, 2500.0)
+	camera.far = maxf(25000.0, distance * 3.5)
+
+func get_ground_view_corners() -> PackedVector3Array:
+	# Return where the four viewport corner rays hit the y=0 world plane.
+	# Tile streaming can then follow what the camera really sees instead of an
+	# arbitrary radius around the logical focus point.
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var screen_corners: Array[Vector2] = [
+		Vector2(0.0, 0.0),
+		Vector2(viewport_size.x, 0.0),
+		Vector2(viewport_size.x, viewport_size.y),
+		Vector2(0.0, viewport_size.y),
+	]
+	var result: PackedVector3Array = PackedVector3Array()
+	for screen_point in screen_corners:
+		var ray_origin: Vector3 = camera.project_ray_origin(screen_point)
+		var ray_direction: Vector3 = camera.project_ray_normal(screen_point)
+		if ray_direction.y >= -0.000001:
+			continue
+		var t: float = -ray_origin.y / ray_direction.y
+		if t <= 0.0:
+			continue
+		result.append(ray_origin + ray_direction * t)
+	return result
 
 func get_focus_world() -> Vector3:
 	return focus
