@@ -3,6 +3,8 @@ extends CanvasLayer
 # On-screen runtime/performance readout with a persistent one-second metrics log.
 
 const PERF_LOG_PATH: String = "user://brur_performance.log"
+const LUND_FOCUS: Vector3 = Vector3(95477.0, 0.0, -1520656.0)
+const LUND_DISTANCE: float = 12472.0
 
 @onready var main: Node = get_parent()
 @onready var camera_rig: Node = main.get_node("CameraRig")
@@ -19,6 +21,19 @@ var perf_log: FileAccess = null
 
 func _ready() -> void:
 	_open_perf_log()
+	_create_lund_button()
+
+func _create_lund_button() -> void:
+	var button: Button = Button.new()
+	button.text = "Lund"
+	button.tooltip_text = "Focus Lund at the saved gameplay zoom"
+	button.position = Vector2(14.0, 176.0)
+	button.custom_minimum_size = Vector2(110.0, 34.0)
+	button.pressed.connect(_focus_lund)
+	add_child(button)
+
+func _focus_lund() -> void:
+	camera_rig.call("set_view", LUND_FOCUS, LUND_DISTANCE)
 
 func _open_perf_log() -> void:
 	if FileAccess.file_exists(PERF_LOG_PATH):
