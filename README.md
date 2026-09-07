@@ -1,14 +1,51 @@
 # brur-world
 
-Minimal Godot 4 proof of concept for streaming Sweden road data from an external OSM PBF.
+Minimal Godot 4 proof of concept for building a playable Sweden world from an external OSM PBF.
+
+## Project rules
+
+This is a standalone project. Do not reuse or depend on architecture or code from Syndicate. The current local PBF path happens to live under a Syndicate directory, but it is external source data only.
+
+Keep every implementation as small as possible while preserving a clean architecture:
+
+- Prefer small, well-defined objects/modules with one clear responsibility.
+- Keep data, decisions, simulation and rendering separate where practical.
+- Avoid large controllers, monster files and long chains of special-case `if` statements.
+- Add interfaces/states/strategies only when they make an actual implemented feature simpler.
+- Gameplay logic should not depend unnecessarily on Godot scene-tree state or rendering.
+- Important source files should briefly explain in plain English what they do and their dependencies.
+- Prefer real units for simulation data (metres, seconds, m/s, litres, kWh, etc.). Rendering coordinates are not automatically simulation truth.
+- Use credible web sources, open-source projects, technical references or scientific papers when research materially improves realism. Keep the resulting implementation minimal.
+
+## Automated testing rule
+
+**A new gameplay feature is not complete until its core logic has automatic, reproducible tests.**
+
+The target is that functional correctness can be verified without manual play-testing. Design gameplay systems so they can be exercised headlessly with explicit inputs and outputs instead of requiring a running rendered scene.
+
+Examples:
+
+- routing uses small synthetic road graphs to test one-way roads, speed limits, access, disconnected routes, bridges/tunnels/layers and path cost;
+- route following can be tested with fixed routes, positions, speeds and look-ahead geometry;
+- driving policies can be tested against known speed limits, curves and vehicle limits;
+- acceleration, braking, fuel/energy use and tire wear use deterministic calculations with fixed test cases;
+- lightweight traffic can be advanced through road edges without rendering;
+- police observations use controlled timestamps and synthetic observations;
+- pursuit/intercept logic uses deterministic road scenarios;
+- police tactics are testable as state transitions/actions rather than requiring visual inspection;
+- randomness that affects functional tests must be seedable/reproducible.
+
+Godot nodes should generally act as thin adapters around testable gameplay logic rather than owning all logic directly in `_process()`/`_physics_process()`.
+
+Manual testing is primarily for things that are inherently perceptual: visual quality, camera feel, animation, audio, final driving feel and similar presentation. State and decision logic behind those features should still be automatically tested where possible.
+
+When fixing a functional bug, add or update a regression test that reproduces the bug whenever practical.
 
 ## Goal
 
-Prove this flow with as little code as possible:
+Prove the world/gameplay stack incrementally with as little code as possible. The current world pipeline starts from OSM PBF, produces portable runtime data offline, and renders/streams it in Godot 4. Routing, vehicles, traffic and police systems are added as separate small systems as gameplay requires them.
 
-`OSM PBF -> portable road tiles -> Godot 4 -> perspective pan/zoom + streamed LOD`
-
-Godot does not parse OSM. `tools/build_sweden.py` converts the PBF offline to the tiny `BRT1` tile format. Generated world data is intentionally ignored by Git.
+Godot does not parse OSM PBF at runtime. Generated world data is intentionally ignored by Git.
 
 ## Build Sweden
 
@@ -24,7 +61,7 @@ Equivalent explicit command:
 ./build_sweden.sh /Users/stefanlind/Dropbox/Code/syndicate/data/sweden-260824.osm.pbf
 ```
 
-The first run creates `.venv`, installs `osmium`, reads the PBF and writes `world_data/`.
+The PBF is external input and is not part of this repository.
 
 ## Run
 
@@ -36,14 +73,10 @@ Controls:
 - Middle or right mouse drag: pan
 - WASD / arrow keys: pan
 
-## POC LODs
+## POC road LODs
 
 - LOD 0: motorway + trunk, thinned to roughly 400 m point spacing
 - LOD 1: + primary + secondary, thinned to roughly 100 m spacing
 - LOD 2: + tertiary/residential/unclassified/service, source geometry
 
-Tiles are 32 km square. Runtime loads only tiles around the current camera focus and swaps LOD based on camera distance.
-
-## Deliberately not included yet
-
-No routing, traffic, buildings, terrain elevation, HTTP streaming, advanced caching, crossfade, shaders, or game logic. This branch only proves portable world data and perspective streaming in Godot.
+Tiles are 32 km square. Runtime loads tiles around the current camera view and swaps LOD based on camera distance.
