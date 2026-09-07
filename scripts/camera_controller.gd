@@ -1,12 +1,23 @@
 extends Node3D
 
-# Perspective map camera: keyboard pan, drag pan, mouse-wheel zoom, and macOS trackpad gestures.
+# Continuous map-to-gameplay camera: high overview when zoomed out, cinematic drone view when zoomed in.
 
 @export var min_distance: float = 1500.0
 @export var max_distance: float = 1400000.0
 @export var start_distance: float = 800000.0
-@export var pitch_degrees: float = 55.0
 @export var move_speed_factor: float = 0.8
+
+# Zoomed-out Sweden overview.
+@export var overview_pitch_degrees: float = 72.0
+@export var overview_fov: float = 40.0
+
+# Zoomed-in gameplay/drone framing.
+@export var gameplay_pitch_degrees: float = 45.0
+@export var gameplay_fov: float = 52.0
+@export var gameplay_forward_look: float = 0.42
+
+# Camera starts blending toward gameplay below this distance and is fully there near min_distance.
+@export var gameplay_blend_start: float = 110000.0
 
 var focus: Vector3 = Vector3.ZERO
 var distance: float = 800000.0
@@ -70,11 +81,26 @@ func _zoom_by(factor: float) -> void:
 	distance = clampf(distance * factor, min_distance, max_distance)
 	_apply_camera()
 
+func _gameplay_blend() -> float:
+	if distance >= gameplay_blend_start:
+		return 0.0
+	var raw: float = 1.0 - inverse_lerp(min_distance, gameplay_blend_start, distance)
+	# Smoothstep keeps the camera from visibly snapping when the blend starts.
+	return raw * raw * (3.0 - 2.0 * raw)
+
 func _apply_camera() -> void:
 	position = focus
+	var blend: float = _gameplay_blend()
+	var pitch_degrees: float = lerpf(overview_pitch_degrees, gameplay_pitch_degrees, blend)
 	var pitch: float = deg_to_rad(pitch_degrees)
+	camera.fov = lerpf(overview_fov, gameplay_fov, blend)
+
+	# Keep the camera behind the focus point. At close zoom the target moves forward,
+	# producing the high-angle drone composition with visible horizon and leading roads.
 	camera.position = Vector3(0.0, sin(pitch) * distance, cos(pitch) * distance)
-	camera.look_at(global_position, Vector3.UP)
+	var forward_distance: float = distance * gameplay_forward_look * blend
+	var look_target: Vector3 = global_position + Vector3(0.0, 0.0, -forward_distance)
+	camera.look_at(look_target, Vector3.UP)
 
 func get_focus_world() -> Vector3:
 	return focus
