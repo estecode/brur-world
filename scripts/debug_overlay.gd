@@ -27,7 +27,8 @@ func _create_lund_button() -> void:
 	var button: Button = Button.new()
 	button.text = "Lund"
 	button.tooltip_text = "Focus Lund at the saved gameplay zoom"
-	button.position = Vector2(14.0, 176.0)
+	button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	button.position = Vector2(-124.0, 14.0)
 	button.custom_minimum_size = Vector2(110.0, 34.0)
 	button.pressed.connect(_focus_lund)
 	add_child(button)
