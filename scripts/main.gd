@@ -62,17 +62,19 @@ func _load_manifest() -> bool:
 	return true
 
 func _setup_lighting() -> void:
-	sun.rotation_degrees = Vector3(-52.0, -28.0, 0.0)
-	sun.light_color = Color(1.0, 0.95, 0.84)
-	sun.light_energy = 1.35
+	# Clear daylight: a warm directional sun plus cool sky fill keeps the map
+	# readable without flattening all land-use colors into the same brightness.
+	sun.rotation_degrees = Vector3(-48.0, -32.0, 0.0)
+	sun.light_color = Color(1.0, 0.965, 0.90)
+	sun.light_energy = 2.15
 	sun.shadow_enabled = false
 
 	var environment: Environment = Environment.new()
 	environment.background_mode = Environment.BG_COLOR
-	environment.background_color = Color(0.025, 0.04, 0.055)
+	environment.background_color = Color(0.34, 0.56, 0.76)
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color(0.68, 0.74, 0.78)
-	environment.ambient_light_energy = 0.75
+	environment.ambient_light_color = Color(0.78, 0.86, 0.95)
+	environment.ambient_light_energy = 1.05
 	world_environment.environment = environment
 
 func _choose_lod(distance: float) -> int:
