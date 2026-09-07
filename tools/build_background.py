@@ -24,11 +24,11 @@ FOREST = 2
 URBAN = 3
 WATER = 4
 
-# Only tags that actually describe a water surface. In particular, do not use
-# the mere presence of water=* as a water test: OSM objects can carry auxiliary
-# water tags without natural=water, and bad/incomplete relations can otherwise
-# paint enormous areas blue.
-WATER_NATURAL = {"water", "bay", "strait"}
+# Runtime already has an ocean-colored base plane. Background WATER must
+# therefore be conservative and only represent explicit inland water bodies.
+# Do NOT classify natural=bay/strait here: those can be very large coastal
+# polygons and will paint land blue when used as an overlay mask.
+WATER_NATURAL = {"water"}
 WATER_LANDUSE = {"reservoir"}
 
 
@@ -102,6 +102,7 @@ class BackgroundHandler(osmium.SimpleHandler):
         self.counts = [0, 0, 0, 0, 0]
         self.rejected_water_like = 0
         self.rejected_invalid_water = 0
+        self.rejected_coastal_water = 0
         self.min_x = math.inf
         self.min_y = math.inf
         self.max_x = -math.inf
@@ -110,6 +111,9 @@ class BackgroundHandler(osmium.SimpleHandler):
     def area(self, area: osmium.osm.Area) -> None:
         kind = background_class(area.tags)
         if kind is None:
+            natural = area.tags.get("natural")
+            if natural in {"bay", "strait"}:
+                self.rejected_coastal_water += 1
             if (
                 area.tags.get("waterway") == "riverbank"
                 or area.tags.get("landuse") == "basin"
@@ -206,6 +210,7 @@ def build_background(pbf: Path, output: Path) -> dict:
         },
         "rejected_water_like": handler.rejected_water_like,
         "rejected_invalid_water": handler.rejected_invalid_water,
+        "rejected_coastal_water": handler.rejected_coastal_water,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
@@ -217,6 +222,7 @@ def build_background(pbf: Path, output: Path) -> dict:
         f"urban={handler.counts[URBAN]:,}, "
         f"water={handler.counts[WATER]:,}"
     )
+    print(f"[background] Rejected coastal bay/strait areas: {handler.rejected_coastal_water:,}")
     print(f"[background] Rejected ambiguous water-like areas: {handler.rejected_water_like:,}")
     print(f"[background] Rejected invalid water polygons: {handler.rejected_invalid_water:,}")
     print(f"[background] Triangles: {handler.triangles:,}")
