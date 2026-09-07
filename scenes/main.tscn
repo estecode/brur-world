@@ -1,0 +1,24 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
+[ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="World" type="Node3D" parent="."]
+
+[node name="CameraRig" type="Node3D" parent="."]
+script = ExtResource("2_camera")
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig"]
+current = true
+fov = 40.0
+near = 10.0
+far = 2000000.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-60, -25, 0)
+shadow_enabled = false
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
