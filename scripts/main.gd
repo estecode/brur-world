@@ -84,6 +84,8 @@ func _refresh_tiles(force: bool) -> void:
 			loaded[key].queue_free()
 			loaded.erase(key)
 
+	print("LOD ", lod, " | loaded road tiles: ", loaded.size(), " | center: ", center)
+
 func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null or file.get_length() < 8:
@@ -95,15 +97,15 @@ func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 	var count := file.get_32()
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var base_widths := [900.0, 220.0, 15.0]
+	var base_widths := [1400.0, 300.0, 20.0]
 	for _i in range(count):
 		var road_class := file.get_8()
 		var x1 := file.get_float()
 		var y1 := file.get_float()
 		var x2 := file.get_float()
 		var y2 := file.get_float()
-		var a := Vector3(x1, 2.0, -y1)
-		var b := Vector3(x2, 2.0, -y2)
+		var a := Vector3(x1, 10.0, -y1)
+		var b := Vector3(x2, 10.0, -y2)
 		var d := b - a
 		if d.length_squared() < 0.01:
 			continue
@@ -123,7 +125,8 @@ func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 	instance.position = Vector3(tx * tile_size - origin_x, 0.0, -(ty * tile_size - origin_y))
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(0.86, 0.84, 0.76)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = Color(1.0, 0.95, 0.70)
 	instance.material_override = mat
 	return instance
 
@@ -134,7 +137,8 @@ func _create_ground() -> void:
 	ground.mesh = plane
 	ground.position.y = 0.0
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.08, 0.11, 0.10)
+	mat.albedo_color = Color(0.035, 0.045, 0.04)
 	mat.roughness = 1.0
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	ground.material_override = mat
 	world.add_child(ground)
