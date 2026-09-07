@@ -103,7 +103,8 @@ func _apply_camera() -> void:
 	# ground that is actually visible in the drone camera. At shallow angles the
 	# top screen corners can hit the map much farther away than camera distance.
 	camera.near = clampf(distance * 0.0025, 5.0, 2500.0)
-	camera.far = maxf(25000.0, distance * 3.5, _required_ground_far() * 1.12)
+	var normal_far: float = maxf(25000.0, distance * 3.5)
+	camera.far = maxf(normal_far, _required_ground_far() * 1.12)
 
 func _required_ground_far() -> float:
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
