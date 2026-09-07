@@ -99,10 +99,36 @@ func _apply_camera() -> void:
 	var look_target: Vector3 = global_position + Vector3(0.0, 0.0, -forward_distance)
 	camera.look_at(look_target, Vector3.UP)
 
-	# Tightening near/far with zoom gives the depth buffer enough precision for
-	# stacked map surfaces without clipping the visible ground.
+	# Keep the depth buffer tight, but never let the far clip plane cut through
+	# ground that is actually visible in the drone camera. At shallow angles the
+	# top screen corners can hit the map much farther away than camera distance.
 	camera.near = clampf(distance * 0.0025, 5.0, 2500.0)
-	camera.far = maxf(25000.0, distance * 3.5)
+	camera.far = maxf(25000.0, distance * 3.5, _required_ground_far() * 1.12)
+
+func _required_ground_far() -> float:
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	if viewport_size.x <= 1.0 or viewport_size.y <= 1.0:
+		return distance * 3.5
+
+	var screen_points: Array[Vector2] = [
+		Vector2(0.0, 0.0),
+		Vector2(viewport_size.x * 0.5, 0.0),
+		Vector2(viewport_size.x, 0.0),
+		Vector2(viewport_size.x, viewport_size.y),
+		Vector2(0.0, viewport_size.y),
+	]
+	var required: float = distance
+	for screen_point in screen_points:
+		var ray_origin: Vector3 = camera.project_ray_origin(screen_point)
+		var ray_direction: Vector3 = camera.project_ray_normal(screen_point)
+		if ray_direction.y >= -0.000001:
+			continue
+		var t: float = -ray_origin.y / ray_direction.y
+		if t <= 0.0:
+			continue
+		var hit: Vector3 = ray_origin + ray_direction * t
+		required = maxf(required, camera.global_position.distance_to(hit))
+	return required
 
 func get_ground_view_corners() -> PackedVector3Array:
 	# Return where the four viewport corner rays hit the y=0 world plane.
