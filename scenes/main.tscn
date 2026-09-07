@@ -1,8 +1,9 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
 [ext_resource path="res://scripts/debug_overlay.gd" type="Script" id="3_debug"]
+[ext_resource path="res://scripts/poi_layer.gd" type="Script" id="4_poi"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -17,6 +18,9 @@ current = true
 fov = 40.0
 near = 10.0
 far = 2000000.0
+
+[node name="PoiLayer" type="Node3D" parent="."]
+script = ExtResource("4_poi")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 rotation_degrees = Vector3(-60, -25, 0)
