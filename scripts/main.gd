@@ -1,10 +1,10 @@
 extends Node3D
 
-# Streams portable BRT1 road tiles and renders a coarse OSM background map.
+# Streams portable BRT1 road tiles and renders a triangulated OSM background map.
 
 const WORLD_DIR: String = "res://world_data"
 const ROAD_MAGIC: String = "BRT1"
-const MAP_MAGIC: String = "BRM1"
+const MAP_MAGIC: String = "BRM2"
 
 const MAP_LAND: int = 0
 const MAP_FARMLAND: int = 1
@@ -14,6 +14,8 @@ const MAP_WATER: int = 4
 
 @onready var world: Node3D = $World
 @onready var camera_rig: Node3D = $CameraRig
+@onready var sun: DirectionalLight3D = $DirectionalLight3D
+@onready var world_environment: WorldEnvironment = $WorldEnvironment
 
 var manifest: Dictionary = {}
 var tile_size: float = 32000.0
@@ -28,6 +30,7 @@ func _ready() -> void:
 	if not _load_manifest():
 		push_error("No world_data/manifest.json. Run ./build_sweden.sh first.")
 		return
+	_setup_lighting()
 	_create_ground()
 	_load_background()
 	_refresh_tiles(true)
@@ -56,6 +59,20 @@ func _load_manifest() -> bool:
 	origin_x = float(manifest.get("origin_x", 0.0))
 	origin_y = float(manifest.get("origin_y", 0.0))
 	return true
+
+func _setup_lighting() -> void:
+	sun.rotation_degrees = Vector3(-52.0, -28.0, 0.0)
+	sun.light_color = Color(1.0, 0.95, 0.84)
+	sun.light_energy = 1.35
+	sun.shadow_enabled = false
+
+	var environment: Environment = Environment.new()
+	environment.background_mode = Environment.BG_COLOR
+	environment.background_color = Color(0.025, 0.04, 0.055)
+	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	environment.ambient_light_color = Color(0.68, 0.74, 0.78)
+	environment.ambient_light_energy = 0.75
+	world_environment.environment = environment
 
 func _choose_lod(distance: float) -> int:
 	if distance > 180000.0:
@@ -154,35 +171,37 @@ func _load_background() -> void:
 		return
 	var magic: String = file.get_buffer(4).get_string_from_ascii()
 	if magic != MAP_MAGIC:
-		push_error("Bad background map magic: " + path)
+		push_error("Background map is old or invalid. Re-run ./build_sweden.sh.")
 		return
-	var polygon_count: int = file.get_32()
+
+	var triangle_count: int = file.get_32()
 	var tools: Array[SurfaceTool] = []
 	for _kind in range(5):
 		var tool: SurfaceTool = SurfaceTool.new()
 		tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 		tools.append(tool)
+
 	var accepted: int = 0
-	for _polygon_index in range(polygon_count):
+	for _triangle_index in range(triangle_count):
 		var kind: int = file.get_8()
-		var point_count: int = file.get_32()
-		var polygon: PackedVector2Array = PackedVector2Array()
-		polygon.resize(point_count)
-		for i in range(point_count):
-			var x: float = file.get_float() - origin_x
-			var y: float = file.get_float() - origin_y
-			polygon[i] = Vector2(x, y)
-		if kind < 0 or kind >= tools.size() or point_count < 3:
-			continue
-		var indices: PackedInt32Array = Geometry2D.triangulate_polygon(polygon)
-		if indices.is_empty():
+		var x1: float = file.get_float() - origin_x
+		var y1: float = file.get_float() - origin_y
+		var x2: float = file.get_float() - origin_x
+		var y2: float = file.get_float() - origin_y
+		var x3: float = file.get_float() - origin_x
+		var y3: float = file.get_float() - origin_y
+		if kind < 0 or kind >= tools.size():
 			continue
 		var st: SurfaceTool = tools[kind]
-		var height: float = 1.0 + float(kind)
-		for index in indices:
-			var p: Vector2 = polygon[index]
-			st.add_vertex(Vector3(p.x, height, -p.y))
+		var height: float = 1.0 + float(kind) * 1.5
+		st.add_normal(Vector3.UP)
+		st.add_vertex(Vector3(x1, height, -y1))
+		st.add_normal(Vector3.UP)
+		st.add_vertex(Vector3(x2, height, -y2))
+		st.add_normal(Vector3.UP)
+		st.add_vertex(Vector3(x3, height, -y3))
 		accepted += 1
+
 	for kind in range(tools.size()):
 		var mesh: ArrayMesh = tools[kind].commit()
 		if mesh == null or mesh.get_surface_count() == 0:
@@ -190,26 +209,27 @@ func _load_background() -> void:
 		var instance: MeshInstance3D = MeshInstance3D.new()
 		instance.mesh = mesh
 		var mat: StandardMaterial3D = StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		mat.albedo_color = _map_color(kind)
+		mat.roughness = 0.95
 		instance.material_override = mat
 		world.add_child(instance)
-	print("Background map polygons rendered: ", accepted, " / ", polygon_count)
+
+	print("Background map triangles rendered: ", accepted, " / ", triangle_count)
 
 func _map_color(kind: int) -> Color:
 	match kind:
 		MAP_LAND:
-			return Color(0.18, 0.24, 0.16)
+			return Color(0.32, 0.43, 0.27)
 		MAP_FARMLAND:
-			return Color(0.31, 0.34, 0.19)
+			return Color(0.49, 0.50, 0.28)
 		MAP_FOREST:
-			return Color(0.10, 0.22, 0.12)
+			return Color(0.16, 0.34, 0.18)
 		MAP_URBAN:
-			return Color(0.30, 0.29, 0.27)
+			return Color(0.48, 0.45, 0.40)
 		MAP_WATER:
-			return Color(0.08, 0.20, 0.30)
-	return Color(0.2, 0.2, 0.2)
+			return Color(0.12, 0.31, 0.48)
+	return Color(0.3, 0.3, 0.3)
 
 func _road_color(road_class: int) -> Color:
 	if road_class <= 0:
@@ -221,8 +241,6 @@ func _road_color(road_class: int) -> Color:
 	return Color(0.62, 0.66, 0.64)
 
 func _create_ground() -> void:
-	# The sea/background plane is derived from the actual exported Sweden bounds,
-	# so the map and its background are one coherent surface instead of two unrelated rectangles.
 	var bounds_value: Variant = manifest.get("bounds", [])
 	if typeof(bounds_value) != TYPE_ARRAY:
 		return
@@ -244,8 +262,8 @@ func _create_ground() -> void:
 	ground.mesh = plane
 	ground.position = Vector3(center_x, 0.0, -center_y)
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(0.025, 0.055, 0.085)
+	mat.albedo_color = Color(0.055, 0.16, 0.24)
+	mat.roughness = 1.0
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	ground.material_override = mat
 	world.add_child(ground)
