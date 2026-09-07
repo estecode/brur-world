@@ -124,16 +124,19 @@ func _layer_spacing() -> float:
 	return clampf(camera_rig.get_distance() / 6000.0, 4.0, 240.0)
 
 func _background_height(kind: int) -> float:
+	# Ocean base is y=0. Country land is the base overlay. Inland water must sit
+	# above land, but below farmland/forest/urban so broad water polygons cannot
+	# erase higher-detail land-use while the camera moves.
 	match kind:
 		MAP_LAND:
 			return current_layer_spacing * 1.0
-		MAP_FARMLAND:
-			return current_layer_spacing * 2.0
-		MAP_FOREST:
-			return current_layer_spacing * 3.0
-		MAP_URBAN:
-			return current_layer_spacing * 4.0
 		MAP_WATER:
+			return current_layer_spacing * 2.0
+		MAP_FARMLAND:
+			return current_layer_spacing * 3.0
+		MAP_FOREST:
+			return current_layer_spacing * 4.0
+		MAP_URBAN:
 			return current_layer_spacing * 5.0
 	return current_layer_spacing
 
