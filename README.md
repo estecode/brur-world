@@ -16,6 +16,7 @@ Keep every implementation as small as possible while preserving a clean architec
 - Important source files should briefly explain in plain English what they do and their dependencies.
 - Prefer real units for simulation data (metres, seconds, m/s, litres, kWh, etc.). Rendering coordinates are not automatically simulation truth.
 - Use credible web sources, open-source projects, technical references or scientific papers when research materially improves realism. Keep the resulting implementation minimal.
+- Offline builders/compilers that may run for more than a few seconds must report the current phase and periodic progress/heartbeat information so a long build never appears hung.
 
 ## Development workflow
 
