@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build portable road tiles and a simple OSM background map for the Godot POC."""
+"""Build portable road tiles and a robust triangulated OSM background map for the Godot POC."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from collections import defaultdict
 from pathlib import Path
 
 import osmium
+from shapely import constrained_delaunay_triangles, make_valid
+from shapely.geometry import Polygon
 
 TILE_SIZE = 32_000.0
 EARTH_RADIUS = 6_378_137.0
@@ -35,10 +37,8 @@ LOD_MIN_SPACING = (400.0, 100.0, 0.0)
 SEGMENT = struct.Struct("<Bffff")
 HEADER = struct.Struct("<4sI")
 BACKGROUND_HEADER = struct.Struct("<4sI")
-BACKGROUND_POLYGON = struct.Struct("<BI")
-POINT = struct.Struct("<ff")
+BACKGROUND_TRIANGLE = struct.Struct("<Bffffff")
 
-# Background classes, drawn in this order by Godot.
 LAND = 0
 FARMLAND = 1
 FOREST = 2
@@ -70,14 +70,10 @@ def thin(points: list[tuple[float, float]], min_spacing: float) -> list[tuple[fl
 
 
 def background_class(tags: osmium.osm.TagList) -> int | None:
-    """Pick a coarse visual class for OSM polygon areas."""
     if (
         tags.get("boundary") == "administrative"
         and tags.get("admin_level") == "2"
-        and (
-            tags.get("ISO3166-1") == "SE"
-            or tags.get("name") in {"Sverige", "Sweden"}
-        )
+        and (tags.get("ISO3166-1") == "SE" or tags.get("name") in {"Sverige", "Sweden"})
     ):
         return LAND
 
@@ -98,16 +94,15 @@ def background_class(tags: osmium.osm.TagList) -> int | None:
 
 def background_spacing(kind: int) -> float:
     if kind == LAND:
-        return 900.0
+        return 650.0
     if kind == WATER:
-        return 180.0
+        return 140.0
     if kind in {FOREST, FARMLAND}:
-        return 250.0
-    return 120.0
+        return 220.0
+    return 100.0
 
 
 def background_min_bbox_area(kind: int) -> float:
-    # Keep the national map useful without serialising every tiny OSM polygon.
     if kind == LAND:
         return 0.0
     if kind == WATER:
@@ -117,12 +112,24 @@ def background_min_bbox_area(kind: int) -> float:
     return 4_000_000.0
 
 
+def ring_points(ring: osmium.osm.NodeRefList) -> list[tuple[float, float]]:
+    points: list[tuple[float, float]] = []
+    for node in ring:
+        if not node.location.valid():
+            continue
+        points.append(project(node.lon, node.lat))
+    if len(points) > 1 and points[0] == points[-1]:
+        points.pop()
+    return points
+
+
 class WorldHandler(osmium.SimpleHandler):
     def __init__(self) -> None:
         super().__init__()
         self.payloads: list[dict[tuple[int, int], bytearray]] = [defaultdict(bytearray) for _ in range(3)]
         self.counts: list[dict[tuple[int, int], int]] = [defaultdict(int) for _ in range(3)]
-        self.background: list[tuple[int, list[tuple[float, float]]]] = []
+        self.background_payload = bytearray()
+        self.background_triangles = 0
         self.background_counts = [0, 0, 0, 0, 0]
         self.min_x = math.inf
         self.min_y = math.inf
@@ -158,12 +165,14 @@ class WorldHandler(osmium.SimpleHandler):
                 mid_y = (y1 + y2) * 0.5
                 tx = math.floor(mid_x / TILE_SIZE)
                 ty = math.floor(mid_y / TILE_SIZE)
-                local_x1 = x1 - tx * TILE_SIZE
-                local_y1 = y1 - ty * TILE_SIZE
-                local_x2 = x2 - tx * TILE_SIZE
-                local_y2 = y2 - ty * TILE_SIZE
                 self.payloads[lod][(tx, ty)].extend(
-                    SEGMENT.pack(road_class, local_x1, local_y1, local_x2, local_y2)
+                    SEGMENT.pack(
+                        road_class,
+                        x1 - tx * TILE_SIZE,
+                        y1 - ty * TILE_SIZE,
+                        x2 - tx * TILE_SIZE,
+                        y2 - ty * TILE_SIZE,
+                    )
                 )
                 self.counts[lod][(tx, ty)] += 1
                 self.segments[lod] += 1
@@ -175,42 +184,47 @@ class WorldHandler(osmium.SimpleHandler):
 
         for outer in area.outer_rings():
             try:
-                points = [project(node.lon, node.lat) for node in outer if node.location.valid()]
+                shell = ring_points(outer)
+                holes = [ring_points(inner) for inner in area.inner_rings(outer)]
             except osmium.InvalidLocationError:
                 continue
-            if len(points) < 4:
+            if len(shell) < 3:
                 continue
-            # Rings are closed by osmium. Drop the repeated final point for triangulation.
-            if points[0] == points[-1]:
-                points.pop()
-            if len(points) < 3:
-                continue
+            holes = [hole for hole in holes if len(hole) >= 3]
 
-            min_x = min(p[0] for p in points)
-            min_y = min(p[1] for p in points)
-            max_x = max(p[0] for p in points)
-            max_y = max(p[1] for p in points)
+            polygon = Polygon(shell, holes)
+            if polygon.is_empty:
+                continue
+            min_x, min_y, max_x, max_y = polygon.bounds
             if (max_x - min_x) * (max_y - min_y) < background_min_bbox_area(kind):
                 continue
 
-            points = thin(points + [points[0]], background_spacing(kind))
-            if points[0] == points[-1]:
-                points.pop()
-            if len(points) < 3:
+            geometry = make_valid(polygon)
+            geometry = geometry.simplify(background_spacing(kind), preserve_topology=True)
+            if geometry.is_empty:
                 continue
 
-            self.background.append((kind, points))
-            self.background_counts[kind] += 1
+            triangles = constrained_delaunay_triangles(geometry)
+            written_for_area = 0
+            for triangle in triangles.geoms:
+                coords = list(triangle.exterior.coords)
+                if len(coords) < 4:
+                    continue
+                (x1, y1), (x2, y2), (x3, y3) = coords[:3]
+                self.background_payload.extend(
+                    BACKGROUND_TRIANGLE.pack(kind, x1, y1, x2, y2, x3, y3)
+                )
+                self.background_triangles += 1
+                written_for_area += 1
+            if written_for_area > 0:
+                self.background_counts[kind] += 1
 
 
 def write_background(handler: WorldHandler, output: Path) -> None:
     path = output / "background.brmap"
     with path.open("wb") as f:
-        f.write(BACKGROUND_HEADER.pack(b"BRM1", len(handler.background)))
-        for kind, points in handler.background:
-            f.write(BACKGROUND_POLYGON.pack(kind, len(points)))
-            for x, y in points:
-                f.write(POINT.pack(x, y))
+        f.write(BACKGROUND_HEADER.pack(b"BRM2", handler.background_triangles))
+        f.write(handler.background_payload)
 
 
 def write_world(handler: WorldHandler, output: Path) -> None:
@@ -230,7 +244,7 @@ def write_world(handler: WorldHandler, output: Path) -> None:
     origin_y = (handler.min_y + handler.max_y) * 0.5
     manifest = {
         "format": "BRT1",
-        "background_format": "BRM1",
+        "background_format": "BRM2",
         "tile_size": TILE_SIZE,
         "origin_x": origin_x,
         "origin_y": origin_y,
@@ -240,8 +254,8 @@ def write_world(handler: WorldHandler, output: Path) -> None:
             for i in range(3)
         ],
         "background": {
-            "polygons": len(handler.background),
-            "classes": {
+            "triangles": handler.background_triangles,
+            "areas": {
                 "land": handler.background_counts[LAND],
                 "farmland": handler.background_counts[FARMLAND],
                 "forest": handler.background_counts[FOREST],
@@ -271,13 +285,14 @@ def main() -> None:
     for lod in range(3):
         print(f"LOD {lod}: {len(handler.payloads[lod]):,} tiles, {handler.segments[lod]:,} segments")
     print(
-        "Background polygons: "
+        "Background areas: "
         f"land={handler.background_counts[LAND]:,}, "
         f"farmland={handler.background_counts[FARMLAND]:,}, "
         f"forest={handler.background_counts[FOREST]:,}, "
         f"urban={handler.background_counts[URBAN]:,}, "
         f"water={handler.background_counts[WATER]:,}"
     )
+    print(f"Background triangles: {handler.background_triangles:,}")
     print(f"Done: {args.output / 'manifest.json'}")
 
 
