@@ -3,13 +3,13 @@ extends Node3D
 # Minimal perspective map camera: WASD/arrow pan, mouse-wheel zoom, middle/right-drag pan.
 
 @export var min_distance: float = 1500.0
-@export var max_distance: float = 800000.0
-@export var start_distance: float = 120000.0
+@export var max_distance: float = 1400000.0
+@export var start_distance: float = 800000.0
 @export var pitch_degrees: float = 55.0
 @export var move_speed_factor: float = 0.8
 
 var focus: Vector3 = Vector3.ZERO
-var distance: float = 120000.0
+var distance: float = 800000.0
 var dragging: bool = false
 var last_mouse: Vector2 = Vector2.ZERO
 
@@ -62,7 +62,7 @@ func _apply_camera() -> void:
 	position = focus
 	var pitch: float = deg_to_rad(pitch_degrees)
 	camera.position = Vector3(0.0, sin(pitch) * distance, cos(pitch) * distance)
-	camera.look_at(focus, Vector3.UP)
+	camera.look_at(global_position, Vector3.UP)
 
 func get_focus_world() -> Vector3:
 	return focus
