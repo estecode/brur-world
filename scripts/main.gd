@@ -1,6 +1,6 @@
 extends Node3D
 
-# Streams portable BRT1 road tiles and renders a triangulated OSM background map.
+# Streams portable BRT1 road tiles and renders the BRM2 Sweden background map.
 
 const WORLD_DIR: String = "res://world_data"
 const ROAD_MAGIC: String = "BRT1"
@@ -21,10 +21,15 @@ var manifest: Dictionary = {}
 var tile_size: float = 32000.0
 var origin_x: float = 0.0
 var origin_y: float = 0.0
+
 var loaded: Dictionary = {}
 var mesh_cache: Dictionary = {}
+var background_instances: Dictionary = {}
+
 var current_lod: int = -1
-var last_center: Vector2i = Vector2i(999999, 999999)
+var last_min_tile: Vector2i = Vector2i(999999, 999999)
+var last_max_tile: Vector2i = Vector2i(-999999, -999999)
+var current_layer_spacing: float = -1.0
 var update_accum: float = 0.0
 
 func _ready() -> void:
@@ -34,11 +39,13 @@ func _ready() -> void:
 	_setup_lighting()
 	_create_ground()
 	_load_background()
+	_update_depth_layout(true)
 	_refresh_tiles(true)
 
 func _process(delta: float) -> void:
 	if manifest.is_empty():
 		return
+	_update_depth_layout(false)
 	update_accum += delta
 	if update_accum < 0.12:
 		return
@@ -62,8 +69,7 @@ func _load_manifest() -> bool:
 	return true
 
 func _setup_lighting() -> void:
-	# Clear daylight: a warm directional sun plus cool sky fill keeps the map
-	# readable without flattening all land-use colors into the same brightness.
+	# Clear daylight: warm sun and cool sky fill.
 	sun.rotation_degrees = Vector3(-48.0, -32.0, 0.0)
 	sun.light_color = Color(1.0, 0.965, 0.90)
 	sun.light_energy = 2.15
@@ -78,7 +84,6 @@ func _setup_lighting() -> void:
 	world_environment.environment = environment
 
 func _choose_lod(distance: float) -> int:
-	# Hysteresis prevents rapid LOD bouncing while zoom sits near a threshold.
 	if current_lod < 0:
 		if distance > 180000.0:
 			return 0
@@ -102,61 +107,112 @@ func _choose_lod(distance: float) -> int:
 		return 1
 	return 2
 
-func _refresh_tiles(force: bool) -> void:
+func _layer_spacing() -> float:
+	# At country scale a few metres is below depth-buffer precision. Increase the
+	# layer separation with camera distance, while keeping it tiny in gameplay view.
+	return clampf(camera_rig.get_distance() / 6000.0, 2.0, 240.0)
+
+func _background_height(kind: int) -> float:
+	return current_layer_spacing * float(kind + 1)
+
+func _road_height() -> float:
+	return current_layer_spacing * 7.0
+
+func _update_depth_layout(force: bool) -> void:
+	var spacing: float = _layer_spacing()
+	if not force and absf(spacing - current_layer_spacing) < 0.25:
+		return
+	current_layer_spacing = spacing
+
+	for kind_value in background_instances.keys():
+		var kind: int = int(kind_value)
+		var instance: MeshInstance3D = background_instances[kind] as MeshInstance3D
+		if instance != null:
+			instance.position.y = _background_height(kind)
+
+	var road_y: float = _road_height()
+	for key in loaded.keys():
+		var road_instance: MeshInstance3D = loaded[key] as MeshInstance3D
+		if road_instance != null:
+			road_instance.position.y = road_y
+
+func _visible_tile_bounds() -> Array[Vector2i]:
+	var min_tx: int = 999999
+	var min_ty: int = 999999
+	var max_tx: int = -999999
+	var max_ty: int = -999999
+	var points: PackedVector3Array = camera_rig.get_ground_view_corners()
+
+	# Always include the logical focus so edge cases near the horizon remain safe.
 	var focus: Vector3 = camera_rig.get_focus_world()
+	points.append(focus)
+
+	for point in points:
+		var abs_x: float = point.x + origin_x
+		var abs_y: float = -point.z + origin_y
+		var tx: int = floori(abs_x / tile_size)
+		var ty: int = floori(abs_y / tile_size)
+		min_tx = mini(min_tx, tx)
+		min_ty = mini(min_ty, ty)
+		max_tx = maxi(max_tx, tx)
+		max_ty = maxi(max_ty, ty)
+
+	# Prefetch two tiles beyond the visible footprint to avoid exposing edges while panning.
+	var margin: int = 2
+	return [
+		Vector2i(min_tx - margin, min_ty - margin),
+		Vector2i(max_tx + margin, max_ty + margin),
+	]
+
+func _refresh_tiles(force: bool) -> void:
 	var distance: float = camera_rig.get_distance()
 	var lod: int = _choose_lod(distance)
-	var abs_x: float = focus.x + origin_x
-	var abs_y: float = -focus.z + origin_y
-	var center: Vector2i = Vector2i(floori(abs_x / tile_size), floori(abs_y / tile_size))
-	if not force and lod == current_lod and center == last_center:
+	var bounds: Array[Vector2i] = _visible_tile_bounds()
+	var min_tile: Vector2i = bounds[0]
+	var max_tile: Vector2i = bounds[1]
+
+	if not force and lod == current_lod and min_tile == last_min_tile and max_tile == last_max_tile:
 		return
 
 	var lod_changed: bool = lod != current_lod and current_lod >= 0
-	if lod_changed:
-		# Never render two road LODs on the same plane in the same frame.
-		# Hiding first removes the z-fighting that looked like flashing during zoom.
-		for old_key in loaded.keys():
-			var old_instance: MeshInstance3D = loaded[old_key] as MeshInstance3D
-			if old_instance != null:
-				old_instance.visible = false
-
 	current_lod = lod
-	last_center = center
+	last_min_tile = min_tile
+	last_max_tile = max_tile
 
-	var radius: int = clampi(ceili(distance * 0.9 / tile_size) + 3, 3, 29)
 	var wanted: Dictionary = {}
 	var new_nodes: Array[MeshInstance3D] = []
 
-	for ty in range(center.y - radius, center.y + radius + 1):
-		for tx in range(center.x - radius, center.x + radius + 1):
+	# Build the complete replacement set before removing the previous one. This
+	# avoids a visible blank frame during LOD swaps.
+	for ty in range(min_tile.y, max_tile.y + 1):
+		for tx in range(min_tile.x, max_tile.x + 1):
 			var key: String = "%d:%d:%d" % [lod, tx, ty]
 			var path: String = "%s/lod%d/%d_%d.brtile" % [WORLD_DIR, lod, tx, ty]
 			if not FileAccess.file_exists(path):
 				continue
 			wanted[key] = true
-			if not loaded.has(key):
-				var node: MeshInstance3D = _load_tile(path, tx, ty, lod)
-				if node != null:
-					node.visible = not lod_changed
-					world.add_child(node)
-					loaded[key] = node
-					new_nodes.append(node)
+			if loaded.has(key):
+				continue
+			var node: MeshInstance3D = _load_tile(path, tx, ty, lod)
+			if node != null:
+				node.visible = not lod_changed
+				world.add_child(node)
+				loaded[key] = node
+				new_nodes.append(node)
 
-	for key in loaded.keys():
-		if not wanted.has(key):
-			var old_node: Node = loaded[key] as Node
-			if old_node != null:
-				old_node.queue_free()
-			loaded.erase(key)
-
-	# A LOD swap is now atomic from the renderer's point of view: old level is
-	# hidden, new level is fully constructed, then the new level becomes visible.
 	if lod_changed:
 		for node in new_nodes:
 			node.visible = true
 
-	print("LOD ", lod, " | loaded road tiles: ", loaded.size(), " | center: ", center)
+	for key in loaded.keys():
+		if wanted.has(key):
+			continue
+		var old_node: Node = loaded[key] as Node
+		if old_node != null:
+			old_node.queue_free()
+		loaded.erase(key)
+
+	print("LOD ", lod, " | loaded road tiles: ", loaded.size(), " | visible: ", min_tile, " -> ", max_tile)
 
 func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 	var mesh: ArrayMesh = null
@@ -171,7 +227,11 @@ func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 
 	var instance: MeshInstance3D = MeshInstance3D.new()
 	instance.mesh = mesh
-	instance.position = Vector3(tx * tile_size - origin_x, 0.0, -(ty * tile_size - origin_y))
+	instance.position = Vector3(
+		tx * tile_size - origin_x,
+		_road_height(),
+		-(ty * tile_size - origin_y)
+	)
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -192,14 +252,15 @@ func _build_tile_mesh(path: String, lod: int) -> ArrayMesh:
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var base_widths: Array[float] = [1400.0, 300.0, 20.0]
+
 	for _i in range(count):
 		var road_class: int = file.get_8()
 		var x1: float = file.get_float()
 		var y1: float = file.get_float()
 		var x2: float = file.get_float()
 		var y2: float = file.get_float()
-		var a: Vector3 = Vector3(x1, 10.0, -y1)
-		var b: Vector3 = Vector3(x2, 10.0, -y2)
+		var a: Vector3 = Vector3(x1, 0.0, -y1)
+		var b: Vector3 = Vector3(x2, 0.0, -y2)
 		var d: Vector3 = b - a
 		if d.length_squared() < 0.01:
 			continue
@@ -246,13 +307,12 @@ func _load_background() -> void:
 		if kind < 0 or kind >= tools.size():
 			continue
 		var st: SurfaceTool = tools[kind]
-		var height: float = 1.0 + float(kind) * 1.5
 		st.set_normal(Vector3.UP)
-		st.add_vertex(Vector3(x1, height, -y1))
+		st.add_vertex(Vector3(x1, 0.0, -y1))
 		st.set_normal(Vector3.UP)
-		st.add_vertex(Vector3(x2, height, -y2))
+		st.add_vertex(Vector3(x2, 0.0, -y2))
 		st.set_normal(Vector3.UP)
-		st.add_vertex(Vector3(x3, height, -y3))
+		st.add_vertex(Vector3(x3, 0.0, -y3))
 		accepted += 1
 
 	for kind in range(tools.size()):
@@ -267,6 +327,7 @@ func _load_background() -> void:
 		mat.roughness = 0.95
 		instance.material_override = mat
 		world.add_child(instance)
+		background_instances[kind] = instance
 
 	print("Background map triangles rendered: ", accepted, " / ", triangle_count)
 
@@ -309,11 +370,13 @@ func _create_ground() -> void:
 	var margin: float = maxf(80000.0, maxf(width, depth) * 0.12)
 	var center_x: float = ((min_x + max_x) * 0.5) - origin_x
 	var center_y: float = ((min_y + max_y) * 0.5) - origin_y
+
 	var ground: MeshInstance3D = MeshInstance3D.new()
 	var plane: PlaneMesh = PlaneMesh.new()
 	plane.size = Vector2(width + margin * 2.0, depth + margin * 2.0)
 	ground.mesh = plane
 	ground.position = Vector3(center_x, 0.0, -center_y)
+
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.albedo_color = Color(0.055, 0.16, 0.24)
 	mat.roughness = 1.0
