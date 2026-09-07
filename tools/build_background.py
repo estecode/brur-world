@@ -26,11 +26,10 @@ WATER = 4
 
 
 def background_class(tags: osmium.osm.TagList) -> int | None:
-    if (
-        tags.get("boundary") == "administrative"
-        and tags.get("admin_level") == "2"
-        and (tags.get("ISO3166-1") == "SE" or tags.get("name") in {"Sverige", "Sweden"})
-    ):
+    # Treat every country boundary present in the extract as land. The runtime
+    # uses a water base plane, so Sweden and any neighbouring country relations
+    # carried by the PBF are painted back on top as land.
+    if tags.get("boundary") == "administrative" and tags.get("admin_level") == "2":
         return LAND
 
     natural = tags.get("natural")
@@ -134,8 +133,6 @@ class BackgroundHandler(osmium.SimpleHandler):
                 for triangle in constrained_delaunay_triangles(part).geoms:
                     if triangle.is_empty or triangle.geom_type != "Polygon":
                         continue
-                    # Triangulation is not clipping. Only keep triangles fully covered by
-                    # the intended source polygon so concavities and holes cannot bridge.
                     if not part.covers(triangle):
                         continue
                     coords = list(triangle.exterior.coords)
