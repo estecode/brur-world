@@ -19,7 +19,7 @@ var update_accum := 0.0
 
 func _ready() -> void:
 	if not _load_manifest():
-		push_error("No world_data/manifest.json. Run tools/build_sweden.py first.")
+		push_error("No world_data/manifest.json. Run ./build_sweden.sh first.")
 		return
 	_create_ground()
 	_refresh_tiles(true)
@@ -96,7 +96,7 @@ func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var base_widths := [900.0, 220.0, 15.0]
-	for i in count:
+	for _i in range(count):
 		var road_class := file.get_8()
 		var x1 := file.get_float()
 		var y1 := file.get_float()
