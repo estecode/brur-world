@@ -1,0 +1,8 @@
+.godot/
+world_data/
+*.osm.pbf
+*.pbf
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
