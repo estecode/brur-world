@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build all Sweden world data: roads, background, buildings and POIs."""
+"""Build all Sweden world data: roads, background, POIs and buildings."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 
 from build_background import build_background
-from build_features import build_features
+from build_features import build_buildings, build_pois
 from build_roads import build_roads
 from world_common import ensure_pbf
 
@@ -28,8 +28,12 @@ def main() -> None:
     build_background(args.pbf, args.output)
 
     print()
-    print("=== BUILD FEATURES ===")
-    build_features(args.pbf, args.output)
+    print("=== BUILD POIS (FAST) ===")
+    build_pois(args.pbf, args.output)
+
+    print()
+    print("=== BUILD BUILDINGS / RELATION POIS (HEAVY) ===")
+    build_buildings(args.pbf, args.output)
 
     print()
     print(f"Done: {args.output / 'manifest.json'}")
