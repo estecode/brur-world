@@ -1,6 +1,6 @@
 extends Node3D
 
-# Minimal perspective map camera: WASD/arrow pan, mouse-wheel zoom, middle/right-drag pan.
+# Perspective map camera: keyboard pan, drag pan, mouse-wheel zoom, and macOS trackpad gestures.
 
 @export var min_distance: float = 1500.0
 @export var max_distance: float = 1400000.0
@@ -38,25 +38,37 @@ func _process(delta: float) -> void:
 		focus += Vector3(input.x, 0.0, input.y) * speed * delta
 		_apply_camera()
 
-func _unhandled_input(event: InputEvent) -> void:
+func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mouse_button_event: InputEventMouseButton = event as InputEventMouseButton
 		if mouse_button_event.button_index == MOUSE_BUTTON_WHEEL_UP and mouse_button_event.pressed:
-			distance = maxf(min_distance, distance * 0.78)
-			_apply_camera()
+			_zoom_by(0.78)
 		elif mouse_button_event.button_index == MOUSE_BUTTON_WHEEL_DOWN and mouse_button_event.pressed:
-			distance = minf(max_distance, distance / 0.78)
-			_apply_camera()
-		elif mouse_button_event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
+			_zoom_by(1.0 / 0.78)
+		elif mouse_button_event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
 			dragging = mouse_button_event.pressed
 			last_mouse = mouse_button_event.position
 	elif event is InputEventMouseMotion and dragging:
 		var mouse_motion_event: InputEventMouseMotion = event as InputEventMouseMotion
 		var delta_px: Vector2 = mouse_motion_event.position - last_mouse
 		last_mouse = mouse_motion_event.position
-		var meters_per_px: float = distance / 900.0
-		focus += Vector3(-delta_px.x, 0.0, -delta_px.y) * meters_per_px
-		_apply_camera()
+		_pan_pixels(delta_px)
+	elif event is InputEventPanGesture:
+		var pan_event: InputEventPanGesture = event as InputEventPanGesture
+		_pan_pixels(pan_event.delta * 28.0)
+	elif event is InputEventMagnifyGesture:
+		var magnify_event: InputEventMagnifyGesture = event as InputEventMagnifyGesture
+		if magnify_event.factor > 0.0:
+			_zoom_by(1.0 / magnify_event.factor)
+
+func _pan_pixels(delta_px: Vector2) -> void:
+	var meters_per_px: float = distance / 900.0
+	focus += Vector3(-delta_px.x, 0.0, -delta_px.y) * meters_per_px
+	_apply_camera()
+
+func _zoom_by(factor: float) -> void:
+	distance = clampf(distance * factor, min_distance, max_distance)
+	_apply_camera()
 
 func _apply_camera() -> void:
 	position = focus
