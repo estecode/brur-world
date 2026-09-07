@@ -245,11 +245,11 @@ func _load_background() -> void:
 			continue
 		var st: SurfaceTool = tools[kind]
 		var height: float = 1.0 + float(kind) * 1.5
-		st.add_normal(Vector3.UP)
+		st.set_normal(Vector3.UP)
 		st.add_vertex(Vector3(x1, height, -y1))
-		st.add_normal(Vector3.UP)
+		st.set_normal(Vector3.UP)
 		st.add_vertex(Vector3(x2, height, -y2))
-		st.add_normal(Vector3.UP)
+		st.set_normal(Vector3.UP)
 		st.add_vertex(Vector3(x3, height, -y3))
 		accepted += 1
 
