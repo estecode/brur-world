@@ -3,7 +3,7 @@ extends CanvasLayer
 # On-screen runtime/performance readout with a persistent one-second metrics log.
 
 const PERF_LOG_PATH: String = "user://brur_performance.log"
-const LUND_FOCUS: Vector3 = Vector3(95477.0, 0.0, -1520656.0)
+const LUND_FOCUS: Vector3 = Vector3(-489086.0, 0.0, 1582123.0)
 const LUND_DISTANCE: float = 12472.0
 
 @onready var main: Node = get_parent()
