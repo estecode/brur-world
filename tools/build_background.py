@@ -26,17 +26,20 @@ WATER = 4
 
 
 def background_class(tags: osmium.osm.TagList) -> int | None:
-    # Treat every country boundary present in the extract as land. The runtime
-    # uses a water base plane, so Sweden and any neighbouring country relations
-    # carried by the PBF are painted back on top as land.
+    # The runtime uses a water base plane. Country boundaries paint land back on
+    # top, so the explicit WATER class is only for inland water surfaces.
     if tags.get("boundary") == "administrative" and tags.get("admin_level") == "2":
         return LAND
 
     natural = tags.get("natural")
     landuse = tags.get("landuse")
-    waterway = tags.get("waterway")
+    water = tags.get("water")
 
-    if natural == "water" or waterway == "riverbank" or landuse in {"reservoir", "basin"}:
+    # Keep this intentionally strict. riverbank/basin polygons from a country
+    # extract can be incomplete or malformed and previously produced enormous
+    # blue wedges over cities/fields. Lakes/reservoirs are enough for the POC;
+    # the ocean is already supplied by the base plane.
+    if natural == "water" or water is not None or landuse == "reservoir":
         return WATER
     if natural == "wood" or landuse == "forest":
         return FOREST
@@ -95,6 +98,7 @@ class BackgroundHandler(osmium.SimpleHandler):
         self.payload = bytearray()
         self.triangles = 0
         self.counts = [0, 0, 0, 0, 0]
+        self.rejected_water = 0
         self.min_x = math.inf
         self.min_y = math.inf
         self.max_x = -math.inf
@@ -103,6 +107,10 @@ class BackgroundHandler(osmium.SimpleHandler):
     def area(self, area: osmium.osm.Area) -> None:
         kind = background_class(area.tags)
         if kind is None:
+            # Track the two water-like classes we deliberately no longer export,
+            # so the build output makes the policy visible while debugging.
+            if area.tags.get("waterway") == "riverbank" or area.tags.get("landuse") == "basin":
+                self.rejected_water += 1
             return
 
         for outer in area.outer_rings():
@@ -183,6 +191,7 @@ def build_background(pbf: Path, output: Path) -> dict:
             "urban": handler.counts[URBAN],
             "water": handler.counts[WATER],
         },
+        "rejected_riverbank_or_basin": handler.rejected_water,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
@@ -194,6 +203,7 @@ def build_background(pbf: Path, output: Path) -> dict:
         f"urban={handler.counts[URBAN]:,}, "
         f"water={handler.counts[WATER]:,}"
     )
+    print(f"[background] Rejected riverbank/basin water-like areas: {handler.rejected_water:,}")
     print(f"[background] Triangles: {handler.triangles:,}")
     return manifest
 
