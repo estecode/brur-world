@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build minimal portable BRT1 road tiles from an OSM PBF for the Godot POC."""
+"""Build portable road tiles and a simple OSM background map for the Godot POC."""
 
 from __future__ import annotations
 
@@ -34,10 +34,20 @@ LOD_MAX_CLASS = (1, 3, 6)
 LOD_MIN_SPACING = (400.0, 100.0, 0.0)
 SEGMENT = struct.Struct("<Bffff")
 HEADER = struct.Struct("<4sI")
+BACKGROUND_HEADER = struct.Struct("<4sI")
+BACKGROUND_POLYGON = struct.Struct("<BI")
+POINT = struct.Struct("<ff")
+
+# Background classes, drawn in this order by Godot.
+LAND = 0
+FARMLAND = 1
+FOREST = 2
+URBAN = 3
+WATER = 4
 
 
 def project(lon: float, lat: float) -> tuple[float, float]:
-    """Web Mercator meters, sufficient for this rendering POC."""
+    """Web Mercator meters, shared by roads and background geometry."""
     lat = max(-85.05112878, min(85.05112878, lat))
     x = EARTH_RADIUS * math.radians(lon)
     y = EARTH_RADIUS * math.log(math.tan(math.pi / 4.0 + math.radians(lat) / 2.0))
@@ -59,11 +69,61 @@ def thin(points: list[tuple[float, float]], min_spacing: float) -> list[tuple[fl
     return out
 
 
-class RoadHandler(osmium.SimpleHandler):
+def background_class(tags: osmium.osm.TagList) -> int | None:
+    """Pick a coarse visual class for OSM polygon areas."""
+    if (
+        tags.get("boundary") == "administrative"
+        and tags.get("admin_level") == "2"
+        and (
+            tags.get("ISO3166-1") == "SE"
+            or tags.get("name") in {"Sverige", "Sweden"}
+        )
+    ):
+        return LAND
+
+    natural = tags.get("natural")
+    landuse = tags.get("landuse")
+    waterway = tags.get("waterway")
+
+    if natural == "water" or waterway == "riverbank" or landuse in {"reservoir", "basin"}:
+        return WATER
+    if natural == "wood" or landuse == "forest":
+        return FOREST
+    if landuse in {"farmland", "farmyard", "meadow", "grass", "orchard", "vineyard"}:
+        return FARMLAND
+    if landuse in {"residential", "commercial", "industrial", "retail"}:
+        return URBAN
+    return None
+
+
+def background_spacing(kind: int) -> float:
+    if kind == LAND:
+        return 900.0
+    if kind == WATER:
+        return 180.0
+    if kind in {FOREST, FARMLAND}:
+        return 250.0
+    return 120.0
+
+
+def background_min_bbox_area(kind: int) -> float:
+    # Keep the national map useful without serialising every tiny OSM polygon.
+    if kind == LAND:
+        return 0.0
+    if kind == WATER:
+        return 500_000.0
+    if kind == URBAN:
+        return 1_000_000.0
+    return 4_000_000.0
+
+
+class WorldHandler(osmium.SimpleHandler):
     def __init__(self) -> None:
         super().__init__()
         self.payloads: list[dict[tuple[int, int], bytearray]] = [defaultdict(bytearray) for _ in range(3)]
         self.counts: list[dict[tuple[int, int], int]] = [defaultdict(int) for _ in range(3)]
+        self.background: list[tuple[int, list[tuple[float, float]]]] = []
+        self.background_counts = [0, 0, 0, 0, 0]
         self.min_x = math.inf
         self.min_y = math.inf
         self.max_x = -math.inf
@@ -108,8 +168,52 @@ class RoadHandler(osmium.SimpleHandler):
                 self.counts[lod][(tx, ty)] += 1
                 self.segments[lod] += 1
 
+    def area(self, area: osmium.osm.Area) -> None:
+        kind = background_class(area.tags)
+        if kind is None:
+            return
 
-def write_tiles(handler: RoadHandler, output: Path) -> None:
+        for outer in area.outer_rings():
+            try:
+                points = [project(node.lon, node.lat) for node in outer if node.location.valid()]
+            except osmium.InvalidLocationError:
+                continue
+            if len(points) < 4:
+                continue
+            # Rings are closed by osmium. Drop the repeated final point for triangulation.
+            if points[0] == points[-1]:
+                points.pop()
+            if len(points) < 3:
+                continue
+
+            min_x = min(p[0] for p in points)
+            min_y = min(p[1] for p in points)
+            max_x = max(p[0] for p in points)
+            max_y = max(p[1] for p in points)
+            if (max_x - min_x) * (max_y - min_y) < background_min_bbox_area(kind):
+                continue
+
+            points = thin(points + [points[0]], background_spacing(kind))
+            if points[0] == points[-1]:
+                points.pop()
+            if len(points) < 3:
+                continue
+
+            self.background.append((kind, points))
+            self.background_counts[kind] += 1
+
+
+def write_background(handler: WorldHandler, output: Path) -> None:
+    path = output / "background.brmap"
+    with path.open("wb") as f:
+        f.write(BACKGROUND_HEADER.pack(b"BRM1", len(handler.background)))
+        for kind, points in handler.background:
+            f.write(BACKGROUND_POLYGON.pack(kind, len(points)))
+            for x, y in points:
+                f.write(POINT.pack(x, y))
+
+
+def write_world(handler: WorldHandler, output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     for lod in range(3):
         lod_dir = output / f"lod{lod}"
@@ -120,10 +224,13 @@ def write_tiles(handler: RoadHandler, output: Path) -> None:
                 f.write(HEADER.pack(b"BRT1", handler.counts[lod][(tx, ty)]))
                 f.write(payload)
 
+    write_background(handler, output)
+
     origin_x = (handler.min_x + handler.max_x) * 0.5
     origin_y = (handler.min_y + handler.max_y) * 0.5
     manifest = {
         "format": "BRT1",
+        "background_format": "BRM1",
         "tile_size": TILE_SIZE,
         "origin_x": origin_x,
         "origin_y": origin_y,
@@ -132,6 +239,16 @@ def write_tiles(handler: RoadHandler, output: Path) -> None:
             {"lod": i, "tiles": len(handler.payloads[i]), "segments": handler.segments[i]}
             for i in range(3)
         ],
+        "background": {
+            "polygons": len(handler.background),
+            "classes": {
+                "land": handler.background_counts[LAND],
+                "farmland": handler.background_counts[FARMLAND],
+                "forest": handler.background_counts[FOREST],
+                "urban": handler.background_counts[URBAN],
+                "water": handler.background_counts[WATER],
+            },
+        },
     }
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
@@ -144,15 +261,23 @@ def main() -> None:
     if not args.pbf.is_file():
         raise SystemExit(f"PBF not found: {args.pbf}")
 
-    handler = RoadHandler()
+    handler = WorldHandler()
     print(f"Reading {args.pbf} ...")
     handler.apply_file(str(args.pbf), locations=True)
     if handler.ways == 0:
         raise SystemExit("No supported highway ways found")
     print(f"Road ways: {handler.ways:,}")
-    write_tiles(handler, args.output)
+    write_world(handler, args.output)
     for lod in range(3):
         print(f"LOD {lod}: {len(handler.payloads[lod]):,} tiles, {handler.segments[lod]:,} segments")
+    print(
+        "Background polygons: "
+        f"land={handler.background_counts[LAND]:,}, "
+        f"farmland={handler.background_counts[FARMLAND]:,}, "
+        f"forest={handler.background_counts[FOREST]:,}, "
+        f"urban={handler.background_counts[URBAN]:,}, "
+        f"water={handler.background_counts[WATER]:,}"
+    )
     print(f"Done: {args.output / 'manifest.json'}")
 
 
