@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build all Sweden world data: roads, background, POIs and buildings."""
+"""Build all Sweden world data: roads, routing, background, POIs and buildings."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 from build_background import build_background
 from build_features import build_buildings, build_pois
 from build_roads import build_roads
+from build_routing import build_routing
 from world_common import ensure_pbf
 
 
@@ -22,6 +23,10 @@ def main() -> None:
 
     print("=== BUILD ROADS ===")
     build_roads(args.pbf, args.output)
+
+    print()
+    print("=== BUILD ROUTING ===")
+    build_routing(args.pbf, args.output)
 
     print()
     print("=== BUILD BACKGROUND ===")
