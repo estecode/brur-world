@@ -53,9 +53,9 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mouse_button_event: InputEventMouseButton = event as InputEventMouseButton
 		if mouse_button_event.button_index == MOUSE_BUTTON_WHEEL_UP and mouse_button_event.pressed:
-			_zoom_by(0.78)
+			_zoom_by(0.78, mouse_button_event.position)
 		elif mouse_button_event.button_index == MOUSE_BUTTON_WHEEL_DOWN and mouse_button_event.pressed:
-			_zoom_by(1.0 / 0.78)
+			_zoom_by(1.0 / 0.78, mouse_button_event.position)
 		elif mouse_button_event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
 			dragging = mouse_button_event.pressed
 			last_mouse = mouse_button_event.position
@@ -70,16 +70,45 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventMagnifyGesture:
 		var magnify_event: InputEventMagnifyGesture = event as InputEventMagnifyGesture
 		if magnify_event.factor > 0.0:
-			_zoom_by(1.0 / magnify_event.factor)
+			_zoom_by(1.0 / magnify_event.factor, magnify_event.position)
 
 func _pan_pixels(delta_px: Vector2) -> void:
 	var meters_per_px: float = distance / 900.0
 	focus += Vector3(-delta_px.x, 0.0, -delta_px.y) * meters_per_px
 	_apply_camera()
 
-func _zoom_by(factor: float) -> void:
+func _zoom_by(factor: float, screen_position: Vector2) -> void:
+	# Keep the map point under the mouse/fingers anchored while zooming. First
+	# project the pointer onto the ground, apply the new camera distance, then
+	# compensate the logical focus by the movement of that same screen ray.
+	var before: Vector3 = _ground_point(screen_position)
+	var old_distance: float = distance
 	distance = clampf(distance * factor, min_distance, max_distance)
+	if is_equal_approx(distance, old_distance):
+		return
+
 	_apply_camera()
+	if not before.is_finite():
+		return
+
+	var after: Vector3 = _ground_point(screen_position)
+	if not after.is_finite():
+		return
+
+	var correction: Vector3 = before - after
+	correction.y = 0.0
+	focus += correction
+	_apply_camera()
+
+func _ground_point(screen_position: Vector2) -> Vector3:
+	var ray_origin: Vector3 = camera.project_ray_origin(screen_position)
+	var ray_direction: Vector3 = camera.project_ray_normal(screen_position)
+	if ray_direction.y >= -0.000001:
+		return Vector3(INF, INF, INF)
+	var t: float = -ray_origin.y / ray_direction.y
+	if t <= 0.0:
+		return Vector3(INF, INF, INF)
+	return ray_origin + ray_direction * t
 
 func _gameplay_blend() -> float:
 	if distance >= gameplay_blend_start:
