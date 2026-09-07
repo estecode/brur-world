@@ -22,6 +22,7 @@ var tile_size: float = 32000.0
 var origin_x: float = 0.0
 var origin_y: float = 0.0
 var loaded: Dictionary = {}
+var mesh_cache: Dictionary = {}
 var current_lod: int = -1
 var last_center: Vector2i = Vector2i(999999, 999999)
 var update_accum: float = 0.0
@@ -39,7 +40,7 @@ func _process(delta: float) -> void:
 	if manifest.is_empty():
 		return
 	update_accum += delta
-	if update_accum < 0.15:
+	if update_accum < 0.12:
 		return
 	update_accum = 0.0
 	_refresh_tiles(false)
@@ -75,9 +76,27 @@ func _setup_lighting() -> void:
 	world_environment.environment = environment
 
 func _choose_lod(distance: float) -> int:
-	if distance > 180000.0:
+	# Hysteresis prevents rapid LOD bouncing while zoom sits near a threshold.
+	if current_lod < 0:
+		if distance > 180000.0:
+			return 0
+		if distance > 45000.0:
+			return 1
+		return 2
+
+	if current_lod == 0:
+		if distance < 155000.0:
+			return 1
 		return 0
-	if distance > 45000.0:
+
+	if current_lod == 1:
+		if distance > 205000.0:
+			return 0
+		if distance < 38000.0:
+			return 2
+		return 1
+
+	if distance > 56000.0:
 		return 1
 	return 2
 
@@ -90,32 +109,76 @@ func _refresh_tiles(force: bool) -> void:
 	var center: Vector2i = Vector2i(floori(abs_x / tile_size), floori(abs_y / tile_size))
 	if not force and lod == current_lod and center == last_center:
 		return
+
+	var lod_changed: bool = lod != current_lod and current_lod >= 0
+	if lod_changed:
+		# Never render two road LODs on the same plane in the same frame.
+		# Hiding first removes the z-fighting that looked like flashing during zoom.
+		for old_key in loaded.keys():
+			var old_instance: MeshInstance3D = loaded[old_key] as MeshInstance3D
+			if old_instance != null:
+				old_instance.visible = false
+
 	current_lod = lod
 	last_center = center
 
-	var radius: int = clampi(ceili(distance * 0.9 / tile_size) + 2, 2, 28)
+	var radius: int = clampi(ceili(distance * 0.9 / tile_size) + 3, 3, 29)
 	var wanted: Dictionary = {}
+	var new_nodes: Array[MeshInstance3D] = []
+
 	for ty in range(center.y - radius, center.y + radius + 1):
 		for tx in range(center.x - radius, center.x + radius + 1):
 			var key: String = "%d:%d:%d" % [lod, tx, ty]
 			var path: String = "%s/lod%d/%d_%d.brtile" % [WORLD_DIR, lod, tx, ty]
-			if FileAccess.file_exists(path):
-				wanted[key] = true
-				if not loaded.has(key):
-					var node: MeshInstance3D = _load_tile(path, tx, ty, lod)
-					if node != null:
-						world.add_child(node)
-						loaded[key] = node
+			if not FileAccess.file_exists(path):
+				continue
+			wanted[key] = true
+			if not loaded.has(key):
+				var node: MeshInstance3D = _load_tile(path, tx, ty, lod)
+				if node != null:
+					node.visible = not lod_changed
+					world.add_child(node)
+					loaded[key] = node
+					new_nodes.append(node)
 
 	for key in loaded.keys():
 		if not wanted.has(key):
 			var old_node: Node = loaded[key] as Node
-			old_node.queue_free()
+			if old_node != null:
+				old_node.queue_free()
 			loaded.erase(key)
+
+	# A LOD swap is now atomic from the renderer's point of view: old level is
+	# hidden, new level is fully constructed, then the new level becomes visible.
+	if lod_changed:
+		for node in new_nodes:
+			node.visible = true
 
 	print("LOD ", lod, " | loaded road tiles: ", loaded.size(), " | center: ", center)
 
 func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
+	var mesh: ArrayMesh = null
+	if mesh_cache.has(path):
+		mesh = mesh_cache[path] as ArrayMesh
+	else:
+		mesh = _build_tile_mesh(path, lod)
+		if mesh != null:
+			mesh_cache[path] = mesh
+	if mesh == null:
+		return null
+
+	var instance: MeshInstance3D = MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.position = Vector3(tx * tile_size - origin_x, 0.0, -(ty * tile_size - origin_y))
+	var mat: StandardMaterial3D = StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.vertex_color_use_as_albedo = true
+	mat.albedo_color = Color.WHITE
+	instance.material_override = mat
+	return instance
+
+func _build_tile_mesh(path: String, lod: int) -> ArrayMesh:
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null or file.get_length() < 8:
 		return null
@@ -147,19 +210,7 @@ func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 		st.add_vertex(a - side)
 		st.add_vertex(b + side)
 		st.add_vertex(b - side)
-	var mesh: ArrayMesh = st.commit()
-	if mesh == null:
-		return null
-	var instance: MeshInstance3D = MeshInstance3D.new()
-	instance.mesh = mesh
-	instance.position = Vector3(tx * tile_size - origin_x, 0.0, -(ty * tile_size - origin_y))
-	var mat: StandardMaterial3D = StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.vertex_color_use_as_albedo = true
-	mat.albedo_color = Color.WHITE
-	instance.material_override = mat
-	return instance
+	return st.commit()
 
 func _load_background() -> void:
 	var path: String = WORLD_DIR + "/background.brmap"
