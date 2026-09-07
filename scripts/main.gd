@@ -5,6 +5,8 @@ extends Node3D
 const WORLD_DIR: String = "res://world_data"
 const ROAD_MAGIC: String = "BRT1"
 const MAP_MAGIC: String = "BRM2"
+const ROAD_BUILDS_PER_FRAME: int = 1
+const ROAD_MESH_CACHE_LIMIT: int = 512
 
 const MAP_LAND: int = 0
 const MAP_FARMLAND: int = 1
@@ -24,6 +26,7 @@ var origin_y: float = 0.0
 
 var loaded: Dictionary = {}
 var mesh_cache: Dictionary = {}
+var mesh_cache_order: Array[String] = []
 var background_instances: Dictionary = {}
 
 var current_lod: int = -1
@@ -31,6 +34,19 @@ var last_min_tile: Vector2i = Vector2i(999999, 999999)
 var last_max_tile: Vector2i = Vector2i(-999999, -999999)
 var current_layer_spacing: float = -1.0
 var update_accum: float = 0.0
+
+var pending_tiles: Array[Dictionary] = []
+var pending_wanted: Dictionary = {}
+var pending_lod: int = -1
+var pending_lod_swap: bool = false
+
+var perf_road_build_ms: float = 0.0
+var perf_road_build_max_ms: float = 0.0
+var perf_road_tiles_built: int = 0
+var perf_road_refresh_ms: float = 0.0
+var perf_road_refresh_max_ms: float = 0.0
+var perf_cache_hits: int = 0
+var perf_cache_misses: int = 0
 
 func _ready() -> void:
 	if not _load_manifest():
@@ -46,6 +62,7 @@ func _process(delta: float) -> void:
 	if manifest.is_empty():
 		return
 	_update_depth_layout(false)
+	_process_pending_tiles()
 	update_accum += delta
 	if update_accum < 0.12:
 		return
@@ -69,7 +86,6 @@ func _load_manifest() -> bool:
 	return true
 
 func _setup_lighting() -> void:
-	# Clear daylight: warm sun and cool sky fill.
 	sun.rotation_degrees = Vector3(-48.0, -32.0, 0.0)
 	sun.light_color = Color(1.0, 0.965, 0.90)
 	sun.light_energy = 2.15
@@ -90,31 +106,24 @@ func _choose_lod(distance: float) -> int:
 		if distance > 45000.0:
 			return 1
 		return 2
-
 	if current_lod == 0:
 		if distance < 155000.0:
 			return 1
 		return 0
-
 	if current_lod == 1:
 		if distance > 205000.0:
 			return 0
 		if distance < 38000.0:
 			return 2
 		return 1
-
 	if distance > 56000.0:
 		return 1
 	return 2
 
 func _layer_spacing() -> float:
-	# Keep a minimum separation large enough to avoid z-fighting in the low-angle
-	# gameplay camera while still scaling the gap at country overview distances.
 	return clampf(camera_rig.get_distance() / 6000.0, 4.0, 240.0)
 
 func _background_height(kind: int) -> float:
-	# Base plane is ocean at y=0. Every rendered map class gets its own height so
-	# no two different classes share a coplanar surface and flicker while zooming.
 	match kind:
 		MAP_LAND:
 			return current_layer_spacing * 1.0
@@ -136,13 +145,11 @@ func _update_depth_layout(force: bool) -> void:
 	if not force and absf(spacing - current_layer_spacing) < 0.25:
 		return
 	current_layer_spacing = spacing
-
 	for kind_value in background_instances.keys():
 		var kind: int = int(kind_value)
 		var instance: MeshInstance3D = background_instances[kind] as MeshInstance3D
 		if instance != null:
 			instance.position.y = _background_height(kind)
-
 	var road_y: float = _road_height()
 	for key in loaded.keys():
 		var road_instance: MeshInstance3D = loaded[key] as MeshInstance3D
@@ -155,10 +162,8 @@ func _visible_tile_bounds() -> Array[Vector2i]:
 	var max_tx: int = -999999
 	var max_ty: int = -999999
 	var points: PackedVector3Array = camera_rig.get_ground_view_corners()
-
 	var focus: Vector3 = camera_rig.get_focus_world()
 	points.append(focus)
-
 	for point in points:
 		var abs_x: float = point.x + origin_x
 		var abs_y: float = -point.z + origin_y
@@ -168,30 +173,26 @@ func _visible_tile_bounds() -> Array[Vector2i]:
 		min_ty = mini(min_ty, ty)
 		max_tx = maxi(max_tx, tx)
 		max_ty = maxi(max_ty, ty)
-
 	var margin: int = 2
-	return [
-		Vector2i(min_tx - margin, min_ty - margin),
-		Vector2i(max_tx + margin, max_ty + margin),
-	]
+	return [Vector2i(min_tx - margin, min_ty - margin), Vector2i(max_tx + margin, max_ty + margin)]
 
 func _refresh_tiles(force: bool) -> void:
+	var started_usec: int = Time.get_ticks_usec()
 	var distance: float = camera_rig.get_distance()
 	var lod: int = _choose_lod(distance)
 	var bounds: Array[Vector2i] = _visible_tile_bounds()
 	var min_tile: Vector2i = bounds[0]
 	var max_tile: Vector2i = bounds[1]
-
-	if not force and lod == current_lod and min_tile == last_min_tile and max_tile == last_max_tile:
+	if not force and lod == pending_lod and min_tile == last_min_tile and max_tile == last_max_tile:
 		return
 
 	var lod_changed: bool = lod != current_lod and current_lod >= 0
-	current_lod = lod
+	pending_lod = lod
 	last_min_tile = min_tile
 	last_max_tile = max_tile
-
-	var wanted: Dictionary = {}
-	var new_nodes: Array[MeshInstance3D] = []
+	pending_lod_swap = lod_changed
+	pending_tiles.clear()
+	pending_wanted.clear()
 
 	for ty in range(min_tile.y, max_tile.y + 1):
 		for tx in range(min_tile.x, max_tile.x + 1):
@@ -199,48 +200,71 @@ func _refresh_tiles(force: bool) -> void:
 			var path: String = "%s/lod%d/%d_%d.brtile" % [WORLD_DIR, lod, tx, ty]
 			if not FileAccess.file_exists(path):
 				continue
-			wanted[key] = true
+			pending_wanted[key] = true
 			if loaded.has(key):
 				continue
-			var node: MeshInstance3D = _load_tile(path, tx, ty, lod)
-			if node != null:
-				node.visible = not lod_changed
-				world.add_child(node)
-				loaded[key] = node
-				new_nodes.append(node)
+			pending_tiles.append({"key": key, "path": path, "tx": tx, "ty": ty, "lod": lod})
 
-	if lod_changed:
-		for node in new_nodes:
-			node.visible = true
+	if pending_tiles.is_empty():
+		_finish_pending_set()
+	var elapsed_ms: float = float(Time.get_ticks_usec() - started_usec) / 1000.0
+	perf_road_refresh_ms += elapsed_ms
+	perf_road_refresh_max_ms = maxf(perf_road_refresh_max_ms, elapsed_ms)
 
+func _process_pending_tiles() -> void:
+	var built_this_frame: int = 0
+	while built_this_frame < ROAD_BUILDS_PER_FRAME and not pending_tiles.is_empty():
+		var item: Dictionary = pending_tiles.pop_front()
+		var key: String = String(item["key"])
+		if loaded.has(key):
+			continue
+		var started_usec: int = Time.get_ticks_usec()
+		var node: MeshInstance3D = _load_tile(String(item["path"]), int(item["tx"]), int(item["ty"]), int(item["lod"]))
+		var elapsed_ms: float = float(Time.get_ticks_usec() - started_usec) / 1000.0
+		perf_road_build_ms += elapsed_ms
+		perf_road_build_max_ms = maxf(perf_road_build_max_ms, elapsed_ms)
+		if node != null:
+			node.visible = not pending_lod_swap
+			world.add_child(node)
+			loaded[key] = node
+			perf_road_tiles_built += 1
+		built_this_frame += 1
+	if pending_tiles.is_empty() and pending_lod >= 0:
+		_finish_pending_set()
+
+func _finish_pending_set() -> void:
+	if pending_lod_swap:
+		for key in pending_wanted.keys():
+			if loaded.has(key):
+				var new_node: MeshInstance3D = loaded[key] as MeshInstance3D
+				if new_node != null:
+					new_node.visible = true
 	for key in loaded.keys():
-		if wanted.has(key):
+		if pending_wanted.has(key):
 			continue
 		var old_node: Node = loaded[key] as Node
 		if old_node != null:
 			old_node.queue_free()
 		loaded.erase(key)
-
-	print("LOD ", lod, " | loaded road tiles: ", loaded.size(), " | visible: ", min_tile, " -> ", max_tile)
+	current_lod = pending_lod
+	pending_lod_swap = false
+	print("LOD ", current_lod, " | loaded road tiles: ", loaded.size(), " | pending: 0")
 
 func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 	var mesh: ArrayMesh = null
 	if mesh_cache.has(path):
 		mesh = mesh_cache[path] as ArrayMesh
+		perf_cache_hits += 1
 	else:
+		perf_cache_misses += 1
 		mesh = _build_tile_mesh(path, lod)
 		if mesh != null:
-			mesh_cache[path] = mesh
+			_cache_mesh(path, mesh)
 	if mesh == null:
 		return null
-
 	var instance: MeshInstance3D = MeshInstance3D.new()
 	instance.mesh = mesh
-	instance.position = Vector3(
-		tx * tile_size - origin_x,
-		_road_height(),
-		-(ty * tile_size - origin_y)
-	)
+	instance.position = Vector3(tx * tile_size - origin_x, _road_height(), -(ty * tile_size - origin_y))
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -248,6 +272,14 @@ func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 	mat.albedo_color = Color.WHITE
 	instance.material_override = mat
 	return instance
+
+func _cache_mesh(path: String, mesh: ArrayMesh) -> void:
+	mesh_cache[path] = mesh
+	mesh_cache_order.append(path)
+	while mesh_cache_order.size() > ROAD_MESH_CACHE_LIMIT:
+		var oldest: String = mesh_cache_order.pop_front()
+		if mesh_cache.has(oldest):
+			mesh_cache.erase(oldest)
 
 func _build_tile_mesh(path: String, lod: int) -> ArrayMesh:
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
@@ -261,7 +293,6 @@ func _build_tile_mesh(path: String, lod: int) -> ArrayMesh:
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var base_widths: Array[float] = [1400.0, 300.0, 20.0]
-
 	for _i in range(count):
 		var road_class: int = file.get_8()
 		var x1: float = file.get_float()
@@ -284,6 +315,26 @@ func _build_tile_mesh(path: String, lod: int) -> ArrayMesh:
 		st.add_vertex(b - side)
 	return st.commit()
 
+func consume_perf_metrics() -> Dictionary:
+	var result: Dictionary = {
+		"road_build_ms": perf_road_build_ms,
+		"road_build_max_ms": perf_road_build_max_ms,
+		"road_tiles_built": perf_road_tiles_built,
+		"road_refresh_ms": perf_road_refresh_ms,
+		"road_refresh_max_ms": perf_road_refresh_max_ms,
+		"road_cache_hits": perf_cache_hits,
+		"road_cache_misses": perf_cache_misses,
+		"road_pending": pending_tiles.size(),
+	}
+	perf_road_build_ms = 0.0
+	perf_road_build_max_ms = 0.0
+	perf_road_tiles_built = 0
+	perf_road_refresh_ms = 0.0
+	perf_road_refresh_max_ms = 0.0
+	perf_cache_hits = 0
+	perf_cache_misses = 0
+	return result
+
 func _load_background() -> void:
 	var path: String = WORLD_DIR + "/background.brmap"
 	if not FileAccess.file_exists(path):
@@ -296,14 +347,12 @@ func _load_background() -> void:
 	if magic != MAP_MAGIC:
 		push_error("Background map is old or invalid. Re-run ./build_sweden.sh.")
 		return
-
 	var triangle_count: int = file.get_32()
 	var tools: Array[SurfaceTool] = []
 	for _kind in range(5):
 		var tool: SurfaceTool = SurfaceTool.new()
 		tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 		tools.append(tool)
-
 	var accepted: int = 0
 	for _triangle_index in range(triangle_count):
 		var kind: int = file.get_8()
@@ -323,7 +372,6 @@ func _load_background() -> void:
 		st.set_normal(Vector3.UP)
 		st.add_vertex(Vector3(x3, 0.0, -y3))
 		accepted += 1
-
 	for kind in range(tools.size()):
 		var mesh: ArrayMesh = tools[kind].commit()
 		if mesh == null or mesh.get_surface_count() == 0:
@@ -337,7 +385,6 @@ func _load_background() -> void:
 		instance.material_override = mat
 		world.add_child(instance)
 		background_instances[kind] = instance
-
 	print("Background triangles rendered: ", accepted, " | ocean base enabled")
 
 func _map_color(kind: int) -> Color:
@@ -379,13 +426,11 @@ func _create_ground() -> void:
 	var margin: float = maxf(80000.0, maxf(width, depth) * 0.12)
 	var center_x: float = ((min_x + max_x) * 0.5) - origin_x
 	var center_y: float = ((min_y + max_y) * 0.5) - origin_y
-
 	var ground: MeshInstance3D = MeshInstance3D.new()
 	var plane: PlaneMesh = PlaneMesh.new()
 	plane.size = Vector2(width + margin * 2.0, depth + margin * 2.0)
 	ground.mesh = plane
 	ground.position = Vector3(center_x, 0.0, -center_y)
-
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.albedo_color = _map_color(MAP_WATER)
 	mat.roughness = 1.0
