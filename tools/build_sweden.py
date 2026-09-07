@@ -123,6 +123,18 @@ def ring_points(ring: osmium.osm.NodeRefList) -> list[tuple[float, float]]:
     return points
 
 
+def iter_polygons(geometry):
+    """Yield only polygon components from possibly repaired multi/geocollection geometry."""
+    if geometry.is_empty:
+        return
+    if geometry.geom_type == "Polygon":
+        yield geometry
+        return
+    if hasattr(geometry, "geoms"):
+        for child in geometry.geoms:
+            yield from iter_polygons(child)
+
+
 class WorldHandler(osmium.SimpleHandler):
     def __init__(self) -> None:
         super().__init__()
@@ -204,18 +216,28 @@ class WorldHandler(osmium.SimpleHandler):
             if geometry.is_empty:
                 continue
 
-            triangles = constrained_delaunay_triangles(geometry)
             written_for_area = 0
-            for triangle in triangles.geoms:
-                coords = list(triangle.exterior.coords)
-                if len(coords) < 4:
+            for part in iter_polygons(geometry):
+                if part.is_empty or part.area <= 0.0:
                     continue
-                (x1, y1), (x2, y2), (x3, y3) = coords[:3]
-                self.background_payload.extend(
-                    BACKGROUND_TRIANGLE.pack(kind, x1, y1, x2, y2, x3, y3)
-                )
-                self.background_triangles += 1
-                written_for_area += 1
+                triangles = constrained_delaunay_triangles(part)
+                for triangle in triangles.geoms:
+                    if triangle.is_empty or triangle.geom_type != "Polygon":
+                        continue
+                    # GEOS triangulation is not a clipping operation. Never emit a
+                    # triangle unless the repaired/simplified source polygon covers it.
+                    # This prevents giant chords across concavities, islands and holes.
+                    if not part.covers(triangle):
+                        continue
+                    coords = list(triangle.exterior.coords)
+                    if len(coords) < 4:
+                        continue
+                    (x1, y1), (x2, y2), (x3, y3) = coords[:3]
+                    self.background_payload.extend(
+                        BACKGROUND_TRIANGLE.pack(kind, x1, y1, x2, y2, x3, y3)
+                    )
+                    self.background_triangles += 1
+                    written_for_area += 1
             if written_for_area > 0:
                 self.background_counts[kind] += 1
 
