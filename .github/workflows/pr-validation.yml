@@ -46,14 +46,21 @@ jobs:
         run: bash tests/test_playtest_launcher.sh
 
       - name: Run portable vehicle dynamics tests
-        run: |
-          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_dynamics.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_dynamics.gd
 
       - name: Run vehicle integration tests
-        run: |
-          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_integration.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_integration.gd
+
+      - name: Run map controls tests
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_map_controls.gd
 
       - name: Run objective GPS regression suite
         env:
           CXX: g++
         run: bash tools/test_issue4_gps.sh
+
+      - name: Run objective music playback tests
+        run: bash tools/test_music.sh
+
+      - name: Run objective world clock tests
+        run: bash tools/test_world_clock.sh
