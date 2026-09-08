@@ -20,7 +20,7 @@ For tracked implementation such as `fixa #48`:
 2. Base work safely on the latest known `main` without overwriting local work.
 3. Use `issue/<number>-<short-name>` and isolate concurrent issue work.
 4. Implement the smallest architecture-compliant change inside issue scope.
-5. Run relevant available deterministic tests, native/headless checks, benchmarks, and Godot/harness validation. Never claim validation not performed.
+5. Run all relevant available objective validation for the touched scope, including deterministic/core, native/headless Godot, and real-data integration checks where applicable. Do not delegate machine-verifiable checks to manual playtesting when they can reasonably be executed by the agent. Never claim validation not performed.
 6. Commit the completed work, update the issue with implementation/validation evidence, and create a PR targeting `main` with `Closes #XX`.
 7. Treat the PR as the persistent merge-decision object. PR body and final chat must agree.
 8. Keep the issue open until merge. Do not merge unless explicitly requested or repository policy grants authority.
@@ -71,9 +71,9 @@ FIX: <concrete blocker>
 RECHECK: <concrete verification after fix>
 ```
 
-`MERGE` means all relevant available validation passed and no further relevant check is required. `CHECK THEN MERGE` means agent-executable validation passed but one meaningful runtime/visual/hardware/production-data/environment-specific human check remains. `DO NOT MERGE` means a blocker, failed relevant check, or material unresolved risk remains.
+`MERGE` means all relevant available objective validation passed and no meaningful manual check remains. `CHECK THEN MERGE` means objective validation passed but one meaningful perceptual, interactive, hardware-specific, production-data/environment-specific, or otherwise non-automatable human check remains. `DO NOT MERGE` means a blocker, failed relevant check, or material unresolved risk remains.
 
-Do not use `CHECK THEN MERGE` merely because this is Godot. Do not delegate a check the agent can execute. Name the concrete scene/harness/runtime verification.
+Do not use `CHECK THEN MERGE` merely because this is Godot. Do not delegate a check the agent can execute. Manual verification should primarily evaluate perception/feel or behavior that cannot reasonably be automated. Repeated objective manual checks are candidates for automation. Name the concrete scene/harness/runtime verification.
 
 Final delivery reporting must include issue, branch, delivery commit, actual validation/results, PR, issue-update status, outstanding notes, and the same merge decision as the PR.
 
