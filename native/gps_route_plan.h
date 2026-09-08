@@ -86,11 +86,11 @@ RoutePlanResult execute_route_plan(const std::vector<Stop> &stops, RouteLegFn ro
         leg.leg_index = leg_index;
         leg.from_stop_index = leg_index;
         leg.to_stop_index = leg_index + 1;
-        leg.point_start_index = result.points.size();
+        leg.point_start_index = result.points.empty() ? 0 : result.points.size() - 1;
         leg.route = route_leg(stops[leg_index], stops[leg_index + 1], leg_index);
 
         if (!leg.route.success) {
-            leg.point_end_index = result.points.size();
+            leg.point_end_index = leg.point_start_index;
             result.legs.push_back(std::move(leg));
             result.failure_reason = result.legs.back().route.failure_reason.empty()
                 ? "unreachable"
