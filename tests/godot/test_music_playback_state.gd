@@ -10,6 +10,8 @@ const FIXTURE_STREAM := "res://tests/fixtures/music_test_stream.tres"
 
 func _init() -> void:
 	_test_library()
+	_test_empty_library_playback()
+	_test_one_track_library()
 	_test_playback()
 	_test_shuffle_determinism()
 	_test_adapter_playback()
@@ -34,6 +36,28 @@ func _test_library() -> void:
 	var copy := library.track("one")
 	copy["title"] = "Mutated"
 	_assert(str(library.track("one")["title"]) == "One", "returned metadata cannot mutate library")
+
+func _test_empty_library_playback() -> void:
+	var state = MusicPlaybackStateScript.new(MusicLibraryScript.new(), 7)
+	_assert(not state.play(), "empty library cannot start playback")
+	_assert(not state.next(), "empty library next fails cleanly")
+	_assert(not state.previous(), "empty library previous fails cleanly")
+	_assert(not state.advance_after_finished(), "empty library finish handling fails cleanly")
+	_assert(state.current_track_id().is_empty(), "empty library keeps no current track")
+	_assert(not state.is_playing() and not state.is_paused(), "empty library remains stopped")
+
+func _test_one_track_library() -> void:
+	var library = MusicLibraryScript.new()
+	_assert(library.add_track({"id": "solo", "title": "Solo", "asset_path": "res://assets/music/solo.ogg"}), "single track is accepted")
+	var state = MusicPlaybackStateScript.new(library, 9)
+	_assert(state.play(), "single-track library starts")
+	_assert(state.current_track_id() == "solo", "single-track play selects its only track")
+	_assert(state.next() and state.current_track_id() == "solo", "single-track next wraps to itself")
+	_assert(state.previous() and state.current_track_id() == "solo", "single-track previous wraps to itself")
+	state.set_shuffle_enabled(true)
+	_assert(state.next() and state.current_track_id() == "solo", "single-track shuffle remains on valid track")
+	state.set_repeat_enabled(true)
+	_assert(state.advance_after_finished() and state.current_track_id() == "solo", "single-track repeat restarts itself")
 
 func _test_playback() -> void:
 	var library = _fixture_library()
