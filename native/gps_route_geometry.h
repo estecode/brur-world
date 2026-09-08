@@ -170,9 +170,9 @@ private:
                 to = {shape.size() - 2, 1.0, shape.back(), 0.0};
             }
 
-            // BRG1 still owns snapping and route selection, but its snap position lies on
-            // the topology-compressed chord. Visible route geometry must start/end on the
-            // detailed BRH1 road shape, otherwise a curved edge gets an off-road connector.
+            // Projection is deterministic by coordinate rather than traversal order so a
+            // shared waypoint resolves to one visible point on both directed copies of the
+            // same physical shape. Otherwise adjacent legs can be joined by a false chord.
             append_unique(points, from.point);
             for (std::size_t i = from.segment + 1; i <= to.segment && i < shape.size(); ++i)
                 append_unique(points, shape[i]);
