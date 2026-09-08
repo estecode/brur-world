@@ -27,12 +27,17 @@ script = ExtResource("4_poi")
 
 [node name="GpsRouteLayer" type="Node3D" parent="."]
 script = ExtResource("5_gps")
+main_path = NodePath("..")
+camera_rig_path = NodePath("../CameraRig")
+camera_path = NodePath("../CameraRig/Camera3D")
 
 [node name="GpsSearchUi" type="CanvasLayer" parent="."]
 script = ExtResource("6_search_ui")
 
 [node name="GpsSearchRouteAdapter" type="Node" parent="."]
 script = ExtResource("7_search_adapter")
+search_ui_path = NodePath("../GpsSearchUi")
+route_layer_path = NodePath("../GpsRouteLayer")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 rotation_degrees = Vector3(-60, -25, 0)

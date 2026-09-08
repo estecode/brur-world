@@ -11,11 +11,21 @@ class FakeRouteLayer extends Node:
 	var request_count: int = 0
 	var refresh_count: int = 0
 
-	func _request_current_plan() -> void:
+	func set_destination(point: Vector2) -> bool:
+		if not point.is_finite():
+			return false
+		route_model.set_destination(point)
 		request_count += 1
+		return true
 
-	func _refresh_waypoint_ui() -> void:
+	func add_waypoint(point: Vector2) -> bool:
+		if not point.is_finite():
+			return false
+		route_model.add_waypoint(point)
 		refresh_count += 1
+		if route_model.has_destination():
+			request_count += 1
+		return true
 
 func _init() -> void:
 	var route_layer := FakeRouteLayer.new()
@@ -23,24 +33,21 @@ func _init() -> void:
 	_assert(AdapterScript._apply_destination(route_layer, Vector2(10.0, 20.0)), "destination adapter succeeds")
 	_assert(route_layer.route_model.has_destination(), "destination becomes route-model state")
 	_assert(route_layer.route_model.destination() == Vector2(10.0, 20.0), "destination coordinate is exact")
-	_assert(route_layer.request_count == 1, "destination triggers one route request")
+	_assert(route_layer.request_count == 1, "destination triggers one public route command")
 
 	_assert(AdapterScript._apply_waypoint(route_layer, Vector2(30.0, 40.0)), "waypoint adapter succeeds")
 	_assert(route_layer.route_model.waypoints() == [Vector2(30.0, 40.0)], "waypoint coordinate is exact")
-	_assert(route_layer.refresh_count == 1, "waypoint refreshes waypoint presentation once")
+	_assert(route_layer.refresh_count == 1, "waypoint presentation command occurs once")
 	_assert(route_layer.request_count == 2, "waypoint reroutes when destination exists")
 
 	var empty_route_layer := FakeRouteLayer.new()
 	_assert(AdapterScript._apply_waypoint(empty_route_layer, Vector2(5.0, 6.0)), "waypoint without destination succeeds")
 	_assert(empty_route_layer.request_count == 0, "waypoint without destination does not route")
-	_assert(empty_route_layer.refresh_count == 1, "waypoint without destination still refreshes presentation")
+	_assert(empty_route_layer.refresh_count == 1, "waypoint without destination still updates presentation")
 
 	_assert(not AdapterScript._apply_destination(null, Vector2.ZERO), "null route layer is rejected")
 	_assert(not AdapterScript._apply_waypoint(route_layer, Vector2(INF, INF)), "invalid coordinate is rejected")
 
-	# These test doubles are Nodes but are never added to the SceneTree, so SceneTree
-	# shutdown will not own/free them for us. Free them explicitly to keep the
-	# headless contract leak-free and make ObjectDB warnings meaningful.
 	empty_route_layer.free()
 	route_layer.free()
 

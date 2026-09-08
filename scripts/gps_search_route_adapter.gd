@@ -1,45 +1,42 @@
 extends Node
 
-## Thin adapter from offline search selections to the existing GPS route-plan layer.
+## Adapts offline search selections into explicit GPS destination/waypoint commands.
 ##
 ## Dependencies:
-## - Receives destination/waypoint Vector2 coordinates from GpsSearchUi.
-## - GpsRouteLayer remains the owner of route-plan state and native requests.
-## - Contains no search ranking, rendering, snapping or routing logic.
+## - Game/harness composition supplies GpsSearchUi and GpsRouteLayer through exported NodePaths or setup().
+## - Calls only GpsRouteLayer's public destination/waypoint API; owns no route state or search logic.
 
-@onready var search_ui: Node = get_node("../GpsSearchUi")
-@onready var route_layer: Node = get_node("../GpsRouteLayer")
+@export var search_ui_path: NodePath
+@export var route_layer_path: NodePath
+
+var _search_ui: Node
+var _route_layer: Node
 
 func _ready() -> void:
-	search_ui.connect("destination_selected", _on_destination_selected)
-	search_ui.connect("waypoint_selected", _on_waypoint_selected)
+	if not search_ui_path.is_empty() and not route_layer_path.is_empty():
+		setup(get_node(search_ui_path), get_node(route_layer_path))
+
+func setup(search_ui: Node, route_layer: Node) -> void:
+	_search_ui = search_ui
+	_route_layer = route_layer
+	if _search_ui != null:
+		if not _search_ui.is_connected("destination_selected", _on_destination_selected):
+			_search_ui.connect("destination_selected", _on_destination_selected)
+		if not _search_ui.is_connected("waypoint_selected", _on_waypoint_selected):
+			_search_ui.connect("waypoint_selected", _on_waypoint_selected)
 
 func _on_destination_selected(point: Vector2) -> void:
-	_apply_destination(route_layer, point)
+	_apply_destination(_route_layer, point)
 
 func _on_waypoint_selected(point: Vector2) -> void:
-	_apply_waypoint(route_layer, point)
+	_apply_waypoint(_route_layer, point)
 
 static func _apply_destination(target_route_layer: Node, point: Vector2) -> bool:
-	if target_route_layer == null or not point.is_finite():
+	if target_route_layer == null or not point.is_finite() or not target_route_layer.has_method("set_destination"):
 		return false
-	var model: Variant = target_route_layer.get("route_model")
-	if model == null or not model.has_method("set_destination"):
-		return false
-	model.call("set_destination", point)
-	if target_route_layer.has_method("_request_current_plan"):
-		target_route_layer.call("_request_current_plan")
-	return true
+	return bool(target_route_layer.call("set_destination", point))
 
 static func _apply_waypoint(target_route_layer: Node, point: Vector2) -> bool:
-	if target_route_layer == null or not point.is_finite():
+	if target_route_layer == null or not point.is_finite() or not target_route_layer.has_method("add_waypoint"):
 		return false
-	var model: Variant = target_route_layer.get("route_model")
-	if model == null or not model.has_method("add_waypoint"):
-		return false
-	model.call("add_waypoint", point)
-	if target_route_layer.has_method("_refresh_waypoint_ui"):
-		target_route_layer.call("_refresh_waypoint_ui")
-	if model.has_method("has_destination") and bool(model.call("has_destination")) and target_route_layer.has_method("_request_current_plan"):
-		target_route_layer.call("_request_current_plan")
-	return true
+	return bool(target_route_layer.call("add_waypoint", point))

@@ -44,6 +44,32 @@ Prefer a lightweight project process: prioritized backlog, well-defined issues, 
 
 Use feature branches for substantial work and keep the stable branch usable. Preserve known-good snapshots/checkpoints before risky architectural changes when useful.
 
+### One-click PR checks
+
+PRs that still need a human Godot/runtime check use **Safe Command Links**. A `CHECK THEN MERGE` PR contains a clickable `▶ Run safe check` link. Clicking it launches the exact PR revision in an isolated temporary worktree, reuses this checkout's ignored `world_data`, starts Godot, and removes the temporary checkout after Godot exits.
+
+Safe Command Links is installed once per Mac. After cloning both repositories, run from the Safe Command Links checkout:
+
+```bash
+bash install.sh
+bash allow-repo.sh estecode/brur-world /absolute/path/to/brur-world
+bash allow-project.sh /absolute/path/to/brur-world pr-check . /bin/bash tools/pr_check.sh --param pr:positive-int
+```
+
+That is the complete project registration. The GitHub link contains only the portable repository identity and PR number; no developer-specific path is committed or placed in a PR. Safe Command Links maps the repository identity to the local checkout and executes only the locally approved command.
+
+A PR check requires:
+
+- macOS with Safe Command Links installed;
+- this repository mapped and `pr-check` approved as above;
+- Godot available as `godot` or installed at `/Applications/Godot.app`;
+- local `world_data/manifest.json` in the mapped checkout;
+- `tools/pr_check.sh` present in the mapped checkout.
+
+If the browser reports that the approved command was started, Safe Command Links itself accepted the request. Any subsequent error is from the project-owned `tools/pr_check.sh` and is shown in Terminal.
+
+Project/agent rules for generating the clickable link are defined in `AGENTS.md`. Safe Command Links itself stays generic; this repository owns the Godot-specific PR-check behavior.
+
 ### Definition of done
 
 A gameplay issue is complete when:
@@ -98,7 +124,7 @@ The helper script already defaults to the local source used for this POC:
 Equivalent explicit command:
 
 ```bash
-./build_sweden.sh /Users/stefanlind/Dropbox/Code/syndicate/data/sweden-260824.osm.pbf
+./build_sweden.sh /path/to/sweden.osm.pbf
 ```
 
 The PBF is external input and is not part of this repository.
