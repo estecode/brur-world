@@ -7,8 +7,11 @@
 // - Consumes an immutable byte span; file mapping/loading belongs to adapters.
 // - Query text must already be normalized to lowercase ASCII words using the
 //   same normalization contract as tools/gps_search.py.
+// - SearchEngine builds an immutable in-memory trigram candidate index once at
+//   startup; query ranking remains exactly the same as the BSI1 reference.
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -20,6 +23,8 @@ namespace brur::gps::search {
 
 constexpr std::size_t BSI2_HEADER_SIZE = 32;
 constexpr std::size_t BSI2_RECORD_SIZE = 72;
+constexpr uint32_t TRIGRAM_ALPHABET = 36;
+constexpr uint32_t TRIGRAM_BUCKETS = TRIGRAM_ALPHABET * TRIGRAM_ALPHABET * TRIGRAM_ALPHABET;
 
 inline uint32_t read_u32_le(const uint8_t *p) {
     return static_cast<uint32_t>(p[0]) |
@@ -195,27 +200,35 @@ public:
     }
 
     std::vector<Result> search(std::string_view normalized_query, std::size_t limit = 8) const {
-        std::vector<Result> best;
-        if (limit == 0 || normalized_query.empty()) return best;
         const auto tokens = split_words(normalized_query);
+        std::vector<Result> best;
         best.reserve(limit);
-        for (uint32_t i = 0; i < count_; ++i) {
-            const RecordView item = record(i);
-            Score score;
-            if (!match_score(normalized_query, tokens, item, score)) continue;
-            Result result {item, score};
-            if (best.size() < limit) {
-                best.push_back(result);
-                if (best.size() == limit) std::sort(best.begin(), best.end(), result_less);
-                continue;
-            }
-            if (!score_less(score, best.back().score)) continue;
-            best.back() = result;
-            for (std::size_t pos = best.size() - 1; pos > 0 && result_less(best[pos], best[pos - 1]); --pos)
-                std::swap(best[pos], best[pos - 1]);
-        }
-        if (best.size() < limit) std::sort(best.begin(), best.end(), result_less);
+        if (limit == 0 || normalized_query.empty()) return best;
+        for (uint32_t i = 0; i < count_; ++i) consider(i, normalized_query, tokens, limit, best);
+        finish(best, limit);
         return best;
+    }
+
+    void consider(uint32_t index, std::string_view query,
+                  const std::vector<std::string_view> &tokens,
+                  std::size_t limit, std::vector<Result> &best) const {
+        const RecordView item = record(index);
+        Score score;
+        if (!match_score(query, tokens, item, score)) return;
+        Result result {item, score};
+        if (best.size() < limit) {
+            best.push_back(result);
+            if (best.size() == limit) std::sort(best.begin(), best.end(), result_less);
+            return;
+        }
+        if (!score_less(score, best.back().score)) return;
+        best.back() = result;
+        for (std::size_t pos = best.size() - 1; pos > 0 && result_less(best[pos], best[pos - 1]); --pos)
+            std::swap(best[pos], best[pos - 1]);
+    }
+
+    static void finish(std::vector<Result> &best, std::size_t limit) {
+        if (best.size() < limit) std::sort(best.begin(), best.end(), result_less);
     }
 
 private:
@@ -231,6 +244,80 @@ private:
     uint32_t count_ = 0;
     uint64_t records_offset_ = 0;
     uint64_t strings_offset_ = 0;
+};
+
+inline int trigram_symbol(char value) {
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'z') return 10 + value - 'a';
+    return -1;
+}
+
+inline uint32_t trigram_id(std::string_view text) {
+    if (text.size() < 3) return TRIGRAM_BUCKETS;
+    const int a = trigram_symbol(text[0]);
+    const int b = trigram_symbol(text[1]);
+    const int c = trigram_symbol(text[2]);
+    if (a < 0 || b < 0 || c < 0) return TRIGRAM_BUCKETS;
+    return (static_cast<uint32_t>(a) * TRIGRAM_ALPHABET + static_cast<uint32_t>(b)) *
+        TRIGRAM_ALPHABET + static_cast<uint32_t>(c);
+}
+
+class SearchEngine {
+public:
+    explicit SearchEngine(const IndexView &index) : index_(index) { build_candidates(); }
+
+    std::vector<Result> search(std::string_view normalized_query, std::size_t limit = 8) const {
+        if (limit == 0 || normalized_query.empty()) return {};
+        const auto tokens = split_words(normalized_query);
+        std::string_view longest;
+        for (const auto token : tokens)
+            if (token.size() > longest.size()) longest = token;
+        if (longest.size() < 3) return index_.search(normalized_query, limit);
+
+        const std::vector<uint32_t> *candidates = nullptr;
+        for (std::size_t i = 0; i + 3 <= longest.size(); ++i) {
+            const uint32_t id = trigram_id(longest.substr(i, 3));
+            if (id >= TRIGRAM_BUCKETS) continue;
+            const auto &bucket = buckets_[id];
+            if (candidates == nullptr || bucket.size() < candidates->size()) candidates = &bucket;
+        }
+        if (candidates == nullptr) return index_.search(normalized_query, limit);
+
+        std::vector<Result> best;
+        best.reserve(limit);
+        for (const uint32_t index : *candidates)
+            index_.consider(index, normalized_query, tokens, limit, best);
+        IndexView::finish(best, limit);
+        return best;
+    }
+
+    std::size_t posting_count() const { return posting_count_; }
+
+private:
+    void build_candidates() {
+        std::vector<uint32_t> ids;
+        ids.reserve(64);
+        for (uint32_t record_index = 0; record_index < index_.count(); ++record_index) {
+            ids.clear();
+            const auto text = index_.record(record_index).search_text;
+            const auto words = split_words(text);
+            for (const auto word : words) {
+                if (word.size() < 3) continue;
+                for (std::size_t i = 0; i + 3 <= word.size(); ++i) {
+                    const uint32_t id = trigram_id(word.substr(i, 3));
+                    if (id < TRIGRAM_BUCKETS) ids.push_back(id);
+                }
+            }
+            std::sort(ids.begin(), ids.end());
+            ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+            for (const uint32_t id : ids) buckets_[id].push_back(record_index);
+            posting_count_ += ids.size();
+        }
+    }
+
+    const IndexView &index_;
+    std::array<std::vector<uint32_t>, TRIGRAM_BUCKETS> buckets_;
+    std::size_t posting_count_ = 0;
 };
 
 } // namespace brur::gps::search
