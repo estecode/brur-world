@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launches an exact pull-request revision in an isolated temporary worktree for human Godot verification.
+# Validates an exact PR revision against local production data before launching Godot for any remaining human check.
 # Dependencies: git, Python 3, a local Godot executable, a C++20 compiler, ignored world_data, and Sweden PBF for stale routing rebuilds.
 set -euo pipefail
 
@@ -124,6 +124,11 @@ ln -s "$WORLD_DATA" "$TMP/world_data"
 if [[ -f "$TMP/tools/build_native_gps.sh" ]]; then
   printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s\n' "$PR"
   bash "$TMP/tools/build_native_gps.sh"
+fi
+
+if [[ -f "$TMP/tools/check_route_geometry_dataset.py" ]]; then
+  printf 'PR_CHECK=CHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
+  "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"
 fi
 
 printf 'PR_CHECK=RUN pr=%s revision=%s\n' "$PR" "$(git -C "$TMP" rev-parse --short HEAD)"
