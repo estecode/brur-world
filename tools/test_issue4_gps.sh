@@ -7,9 +7,20 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GODOT_BIN="${GODOT_BIN:-/Applications/Godot.app/Contents/MacOS/Godot}"
 
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  PYTHON_BIN="$ROOT/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="$(command -v python3)"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="$(command -v python)"
+else
+  echo "Python 3 not found. Expected .venv/bin/python, python3, or python." >&2
+  exit 2
+fi
+
 cd "$ROOT"
 
-python -m unittest \
+"$PYTHON_BIN" -m unittest \
   tests.test_gps_routing \
   tests.test_gps_search \
   tests.test_search_postcode_enrichment \
@@ -57,6 +68,7 @@ run_godot_contract() {
 
 run_godot_contract tests/godot/test_gps_route_model.gd "godot gps route-model tests: OK"
 run_godot_contract tests/godot/test_gps_adapter_split.gd "godot gps adapter-split tests: OK"
+run_godot_contract tests/godot/test_gps_harness_scene.gd "godot gps harness-scene tests: OK"
 run_godot_contract tests/godot/test_gps_search_index.gd "godot gps search-index tests: OK"
 run_godot_contract tests/godot/test_gps_search_route_adapter.gd "godot gps search-route adapter tests: OK"
 run_godot_contract tests/godot/test_gps_search_native_adapter.gd "godot gps native-search adapter tests: OK"
