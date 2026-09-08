@@ -48,10 +48,11 @@ def build_routing_dataset(source: Path, output: Path) -> dict:
 
         report = dict(report)
         report["routing_dataset_format"] = DATASET_FORMAT
-        report["snap_output_bytes"] = snap_path.stat().st_size
-        report["snap_cell_size_m"] = snap_report["cell_size_m"]
+        report["snap_output_bytes"] = snap_report["output_bytes"]
         report["snap_cell_count"] = snap_report["cell_count"]
-        report["snap_edge_ref_count"] = snap_report["edge_ref_count"]
+        report["snap_reference_count"] = snap_report["reference_count"]
+        report["snap_physical_edge_count"] = snap_report["physical_edge_count"]
+        report["snap_max_legal_speed_kmh"] = snap_report["max_legal_speed_kmh"]
         (staging / "routing_stats.json").write_text(
             json.dumps(report, indent=2, sort_keys=True),
             encoding="utf-8",
