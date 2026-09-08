@@ -52,3 +52,6 @@ jobs:
 
       - name: Run objective music playback tests
         run: bash tools/test_music.sh
+
+      - name: Run objective cloud field tests
+        run: bash tools/test_clouds.sh
