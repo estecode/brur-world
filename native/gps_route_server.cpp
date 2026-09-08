@@ -1,5 +1,6 @@
 #include "gps_core.h"
 #include "gps_mapped_data.h"
+#include "gps_route_geometry.h"
 #include "gps_route_protocol.h"
 
 #include <arpa/inet.h>
@@ -18,16 +19,24 @@
 //
 // Dependencies:
 // - gps_core owns snapping, legality, preferences, routing and ordered plan semantics.
+// - gps_route_geometry expands chosen edges with BRH1 road-shape points before serialization.
 // - gps_mapped_data owns POSIX file mapping/warming.
 // - This file owns text parsing, JSON serialization, process priority and TCP only.
 
 namespace {
 using namespace brur::gps;
+using brur::gps::adapter::MappedFile;
 using brur::gps::adapter::MappedRoutingData;
 
 template <class A, class B>
 double elapsed_ms(A a, B b) {
     return std::chrono::duration<double, std::milli>(b - a).count();
+}
+
+std::string geometry_path_for_graph(const std::string &graph_path) {
+    const auto separator = graph_path.find_last_of("/\\");
+    const std::string parent = separator == std::string::npos ? "" : graph_path.substr(0, separator + 1);
+    return parent + "routing_geometry.brh";
 }
 
 std::string error_json(const std::string &error) {
@@ -97,7 +106,7 @@ void append_json_result(std::ostringstream &out, const RouteResult &result,
     out << "]}\n";
 }
 
-std::string handle_plan(const std::string &line, RoutingContext &core) {
+std::string handle_plan(const std::string &line, RoutingContext &core, const RouteGeometryView &geometry) {
     const auto parsed = parse_route_plan_request(line);
     if (!parsed.success) return error_json("bad_plan");
 
@@ -131,14 +140,15 @@ std::string handle_plan(const std::string &line, RoutingContext &core) {
     }
 
     const auto route_started = std::chrono::steady_clock::now();
-    const auto result = core.route_plan(request);
+    auto result = core.route_plan(request);
+    geometry.densify(result);
     const auto route_finished = std::chrono::steady_clock::now();
     std::ostringstream out;
     append_json_result(out, result, snap_ms, elapsed_ms(route_started, route_finished));
     return out.str();
 }
 
-std::string handle_direct(const std::string &line, RoutingContext &core) {
+std::string handle_direct(const std::string &line, RoutingContext &core, const RouteGeometryView &geometry) {
     std::istringstream input(line);
     double start_x = 0.0;
     double start_y = 0.0;
@@ -168,6 +178,7 @@ std::string handle_direct(const std::string &line, RoutingContext &core) {
         result.snap_candidates = {start.candidates, target.candidates};
     } else {
         result = core.route({start, target, preference});
+        geometry.densify(result);
     }
     const auto d = std::chrono::steady_clock::now();
 
@@ -176,9 +187,9 @@ std::string handle_direct(const std::string &line, RoutingContext &core) {
     return out.str();
 }
 
-std::string handle_query(const std::string &line, RoutingContext &core) {
-    if (line.rfind("plan ", 0) == 0) return handle_plan(line, core);
-    return handle_direct(line, core);
+std::string handle_query(const std::string &line, RoutingContext &core, const RouteGeometryView &geometry) {
+    if (line.rfind("plan ", 0) == 0) return handle_plan(line, core, geometry);
+    return handle_direct(line, core, geometry);
 }
 
 bool send_all(int fd, const std::string &payload) {
@@ -202,15 +213,21 @@ int main(int argc, char **argv) {
         const std::string graph_path = argc > 1 ? argv[1] : "world_data/routing.brg";
         const std::string snap_path = argc > 2 ? argv[2] : "world_data/routing_snap.brs";
         const int port = argc > 3 ? std::stoi(argv[3]) : 47741;
+        const std::string geometry_path = geometry_path_for_graph(graph_path);
 
         lower_background_priority();
         const auto started = std::chrono::steady_clock::now();
         MappedRoutingData mapped(graph_path, snap_path);
+        MappedFile mapped_geometry(geometry_path);
         RoutingContext core(mapped.view());
+        RouteGeometryView geometry(mapped_geometry.view());
+        if (geometry.edge_count() != core.edge_count())
+            throw std::runtime_error("BRH1/BRG1 edge count mismatch");
 
         const auto warm_started = std::chrono::steady_clock::now();
         const auto checksum = brur::gps::adapter::warm_mapped_file(mapped.graph) ^
-                              brur::gps::adapter::warm_mapped_file(mapped.snap);
+                              brur::gps::adapter::warm_mapped_file(mapped.snap) ^
+                              brur::gps::adapter::warm_mapped_file(mapped_geometry);
         const auto warm_finished = std::chrono::steady_clock::now();
 
         const int server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -234,6 +251,7 @@ int main(int argc, char **argv) {
         std::cerr << "[native-gps-server] ready on 127.0.0.1:" << port
                   << " | nodes " << core.node_count()
                   << " | edges " << core.edge_count()
+                  << " | shape points " << geometry.point_count()
                   << " | startup " << elapsed_ms(started, std::chrono::steady_clock::now()) << " ms"
                   << " | page warm " << elapsed_ms(warm_started, warm_finished) << " ms"
                   << " | checksum " << checksum << "\n";
@@ -258,7 +276,7 @@ int main(int argc, char **argv) {
                     pending.erase(0, newline + 1);
                     if (line.empty()) continue;
                     try {
-                        if (!send_all(client_fd, handle_query(line, core))) {
+                        if (!send_all(client_fd, handle_query(line, core, geometry))) {
                             connected = false;
                             break;
                         }
