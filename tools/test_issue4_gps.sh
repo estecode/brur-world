@@ -66,6 +66,7 @@ run_godot_contract() {
   fi
 }
 
+run_godot_contract tests/godot/test_world_coordinates.gd "godot world-coordinate tests: OK"
 run_godot_contract tests/godot/test_gps_route_model.gd "godot gps route-model tests: OK"
 run_godot_contract tests/godot/test_gps_adapter_split.gd "godot gps adapter-split tests: OK"
 run_godot_contract tests/godot/test_gps_harness_scene.gd "godot gps harness-scene tests: OK"
