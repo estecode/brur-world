@@ -24,7 +24,13 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from build_routing import build_routing
 from gps_snap_index import build_snap_index
-from route_geometry import RouteGeometryView
+from route_geometry import (
+    EDGE_RECORD as GEOMETRY_EDGE_RECORD,
+    HEADER as GEOMETRY_HEADER,
+    POINT_RECORD as GEOMETRY_POINT_RECORD,
+    RouteGeometryView,
+    validate_route_geometry_alignment,
+)
 from routing_graph_view import RoutingGraphView
 from world_common import project
 
@@ -96,6 +102,33 @@ class RouteGeometryTests(unittest.TestCase):
             for actual, wanted in zip(reverse, reversed(expected)):
                 self.assertAlmostEqual(actual[0], wanted[0], delta=0.75)
                 self.assertAlmostEqual(actual[1], wanted[1], delta=0.75)
+
+    def test_dataset_alignment_validator_rejects_collapsed_curved_shape(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="brur-route-geometry-invariant-") as temp_dir:
+            temp = Path(temp_dir)
+            graph_path, _snap_path, expected = build_curved_fixture(temp)
+            geometry_path = temp / "routing_geometry.brh"
+
+            report = validate_route_geometry_alignment(graph_path, geometry_path)
+            self.assertEqual(int(report["edge_count"]), 2)
+
+            payload = bytearray(geometry_path.read_bytes())
+            _magic, edge_count, _point_count = GEOMETRY_HEADER.unpack_from(payload, 0)
+            point_table_offset = GEOMETRY_HEADER.size + edge_count * GEOMETRY_EDGE_RECORD.size
+            midpoint = (
+                (expected[0][0] + expected[-1][0]) * 0.5,
+                (expected[0][1] + expected[-1][1]) * 0.5,
+            )
+            GEOMETRY_POINT_RECORD.pack_into(
+                payload,
+                point_table_offset + GEOMETRY_POINT_RECORD.size,
+                midpoint[0],
+                midpoint[1],
+            )
+            geometry_path.write_bytes(payload)
+
+            with self.assertRaisesRegex(ValueError, "geometry length mismatch"):
+                validate_route_geometry_alignment(graph_path, geometry_path)
 
     def test_portable_native_densifier(self) -> None:
         compiler = os.environ.get("CXX") or shutil.which("clang++") or shutil.which("g++")
