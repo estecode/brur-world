@@ -6,6 +6,7 @@ Currently supported targets:
 
 - `game` — full game scene
 - `gps` — isolated GPS harness
+- `driving` — full production world through the driving harness, including the player vehicle and GPS follow toggle
 
 Future targets should be added only when the corresponding production subsystem/harness actually exists.
 
@@ -15,10 +16,10 @@ Map the repository and approve the target allowlist from the Safe Command Links 
 
 ```bash
 bash allow-repo.sh estecode/brur-world /absolute/path/to/brur-world
-bash allow-project.sh /absolute/path/to/brur-world playtest . /bin/bash tools/playtest.sh --param target:enum=game,gps
+bash allow-project.sh /absolute/path/to/brur-world playtest . /bin/bash tools/playtest.sh --param target:enum=game,gps,driving
 ```
 
-Safe Command Links must include enum project-parameter support. The signed local approval allows only `game` or `gps`; arbitrary paths, scenes, shell arguments, and unknown target values are rejected before `tools/playtest.sh` runs.
+Safe Command Links must include enum project-parameter support. The signed local approval allows only `game`, `gps` or `driving`; arbitrary paths, scenes, shell arguments, and unknown target values are rejected before `tools/playtest.sh` runs.
 
 If generated Sweden data already exists and is compatible, no source PBF setting is needed. If a required world/routing artifact is missing or known stale, set the external source once in the environment used by Safe Command Links:
 
@@ -49,5 +50,13 @@ GPS harness:
 ```text
 http://127.0.0.1:17384/safecommand/project?repo=estecode/brur-world&command=playtest&target=gps
 ```
+
+Driving harness:
+
+```text
+http://127.0.0.1:17384/safecommand/project?repo=estecode/brur-world&command=playtest&target=driving
+```
+
+In the driving view, W/S/A/D + Space control the player car manually. After calculating a GPS route, `Follow route` hands control intent to the route follower for the same vehicle; any manual driving input disengages follow without replacing or resetting the car.
 
 `playtest` always runs the current mapped checkout. It is intentionally separate from `pr-check`, which verifies an exact isolated pull-request revision.
