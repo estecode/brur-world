@@ -49,3 +49,6 @@ jobs:
         env:
           CXX: g++
         run: bash tools/test_issue4_gps.sh
+
+      - name: Run objective music playback tests
+        run: bash tools/test_music.sh
