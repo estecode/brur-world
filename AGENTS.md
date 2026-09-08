@@ -35,6 +35,39 @@ When asked to implement or fix a GitHub issue, including shorthand requests such
 
 The dedicated issue branch is the default for issue implementation work and does not need to be requested separately.
 
+## User-facing CLI commands
+
+When asking the user to run project commands manually:
+
+1. Make commands copy-paste ready and independent of the current repository subdirectory where practical.
+2. Refer to project files with explicit repository-relative paths, for example `harness/gps/gps_harness.tscn`.
+3. When a command requires the repository root on macOS/Linux, prefer:
+
+   ```bash
+   ROOT="$(git rev-parse --show-toplevel)" && <command using "$ROOT">
+   ```
+
+   This may assume the user is somewhere inside the Git working tree, but must not assume the user is already at its root.
+4. Do not add `git pull`, `git reset`, `git clean`, branch deletion, merge, or similar state-changing Git operations merely to make a command convenient.
+5. Do not assume the working tree is clean before suggesting branch-changing commands.
+6. Prefer one complete command the user can execute directly over a sequence that depends on unstated shell state.
+
+### Godot CLI
+
+When asking the user to launch Godot manually on macOS/Linux, resolve the repository root and pass it with `--path` instead of relying on the current working directory. Prefer commands such as:
+
+```bash
+ROOT="$(git rev-parse --show-toplevel)" && godot --path "$ROOT" harness/world/world_harness.tscn
+```
+
+Do not use ambiguous bare commands such as:
+
+```bash
+godot harness/world/world_harness.tscn
+```
+
+when behavior depends on the current working directory.
+
 ## Key reminders
 
 ### 1. No speculative abstraction
