@@ -1,8 +1,9 @@
 extends SceneTree
 
 ## Headless contracts for the split GPS input, transport-facing protocol and renderer boundaries.
-## Dependencies: production gps_input_adapter.gd, gps_protocol.gd and gps_route_renderer.gd only.
+## Dependencies: production gps_client.gd, gps_input_adapter.gd, gps_protocol.gd and gps_route_renderer.gd only.
 
+const GpsClientScript = preload("res://scripts/gps_client.gd")
 const GpsInputAdapterScript = preload("res://scripts/gps_input_adapter.gd")
 const GpsProtocolScript = preload("res://scripts/gps_protocol.gd")
 const GpsRouteRendererScript = preload("res://scripts/gps_route_renderer.gd")
@@ -10,6 +11,7 @@ const GpsRouteRendererScript = preload("res://scripts/gps_route_renderer.gd")
 func _init() -> void:
 	_test_input_commands()
 	_test_response_protocol()
+	_test_client_clears_busy_on_disconnect()
 	_test_renderer_fixture()
 	print("godot gps adapter-split tests: OK")
 	quit(0)
@@ -46,6 +48,16 @@ func _test_response_protocol() -> void:
 	_assert(str(payload.get("failure_reason", "")) == "unreachable", "failure reason stays structured")
 	_assert(int(payload.get("failed_leg_index", -1)) == 1, "failed leg stays structured")
 	_assert(str(GpsProtocolScript.decode_response("broken").get("error", "")) == "invalid_response", "malformed JSON fails at protocol boundary")
+
+func _test_client_clears_busy_on_disconnect() -> void:
+	var client: Node = GpsClientScript.new()
+	client.set("_peer", StreamPeerTCP.new())
+	client.call("_set_ready", true)
+	client.call("_set_busy", true)
+	client.call("poll", 0.0)
+	_assert(not bool(client.call("is_busy")), "transport loss clears an in-flight route so the next request is not blocked")
+	client.call("stop")
+	client.free()
 
 func _test_renderer_fixture() -> void:
 	var renderer: Node3D = GpsRouteRendererScript.new()
