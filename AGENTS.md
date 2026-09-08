@@ -32,13 +32,46 @@ When asked to implement or fix a GitHub issue, including shorthand requests such
 8. Commit completed work to the issue branch with a message that references the issue.
 9. Update the original GitHub issue with a concise implementation summary and concrete validation evidence.
 10. Create a Pull Request targeting `main` and link it to the issue using `Closes #XX` in the PR body.
-11. Keep the issue open until the PR is merged; the closing link should close it as part of the normal merge lifecycle.
-12. Do not merge the PR unless explicitly requested by the user or repository policy explicitly grants merge authority.
-13. After PR creation, make no further implementation changes unless required to correct PR metadata/linkage, repair failed validation, or address explicit review feedback.
+11. Make the Pull Request the persistent merge decision object. The PR body and final chat response must contain the same required decision fields and the same Merge Recommendation. Chat wording may be condensed, but the two must not contradict each other.
+12. Keep the issue open until the PR is merged; the closing link should close it as part of the normal merge lifecycle.
+13. Do not merge the PR unless explicitly requested by the user or repository policy explicitly grants merge authority.
+14. After PR creation, make no further implementation changes unless required to correct PR metadata/linkage, repair failed validation, or address explicit review feedback.
 
 For tracked issue implementation, the Pull Request is the delivery object. A branch or commit by itself is not a completed delivery.
 
-The final report must include the issue number, active branch name, delivery commit hash, tests/validation actually performed and their results, PR link or ID, confirmation that the issue was updated with validation evidence, and anything still outstanding.
+Every tracked issue PR and final chat report must contain these decision fields:
+
+```markdown
+## Merge decision
+
+**What changed**
+<plain-language summary>
+
+**Why this approach**
+<why this was the smallest/correct solution>
+
+**Behavioral impact**
+<what can change or regress>
+
+**Executed validation**
+<exact checks actually run + results>
+
+**Risk assessment**
+<remaining risks, untested areas, known gaps>
+
+**Merge recommendation**
+READY | READY WITH MANUAL CHECK | NOT READY
+```
+
+Evaluate the recommendation strictly:
+
+- `READY` — All relevant available validation for the touched scope passed. No known merge blocker remains.
+- `READY WITH MANUAL CHECK` — Automated/relevant validation passed, but one meaningful runtime, visual, hardware, production-data, or environment-specific check could not be performed by the agent and should be done before merge.
+- `NOT READY` — A relevant check fails, a material requirement is unresolved, or a known risk is too large to recommend merge.
+
+Do not downgrade work to `READY WITH MANUAL CHECK` merely because this is a Godot project. The missing runtime/manual check must be materially relevant to the touched scope. For runtime or presentation changes, explicitly state any concrete Godot scene/harness check the user should perform before merge when the agent could not perform it.
+
+The final report must also include the issue number, active branch name, delivery commit hash, tests/validation actually performed and their results, PR link or ID, confirmation that the issue was updated with validation evidence, and anything still outstanding.
 
 The dedicated issue branch and PR delivery workflow are the default for issue implementation work and do not need to be requested separately.
 
