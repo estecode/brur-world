@@ -45,6 +45,12 @@ jobs:
       - name: Validate playtest launcher
         run: bash tests/test_playtest_launcher.sh
 
+      - name: Run portable vehicle dynamics tests
+        run: "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_dynamics.gd
+
+      - name: Run vehicle integration tests
+        run: "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_integration.gd
+
       - name: Run objective GPS regression suite
         env:
           CXX: g++
