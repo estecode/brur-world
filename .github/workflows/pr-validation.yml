@@ -51,4 +51,4 @@ jobs:
         run: bash tools/test_issue4_gps.sh
 
       - name: Run objective music playback tests
-        run: "$GODOT_BIN" --headless --path . --script tests/godot/test_music_playback_state.gd
+        run: bash tools/test_music.sh
