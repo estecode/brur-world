@@ -251,7 +251,6 @@ func _finish_pending_set() -> void:
 		loaded.erase(key)
 	current_lod = pending_lod
 	pending_lod_swap = false
-	print("LOD ", current_lod, " | loaded road tiles: ", loaded.size(), " | pending: 0")
 
 func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 	var mesh: ArrayMesh = null
