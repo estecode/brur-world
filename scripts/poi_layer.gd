@@ -1,8 +1,12 @@
 extends Node3D
 
-# Streams exported OSM POIs around the camera, draws lightweight map markers,
-# and shows a pulsing hover card with useful source tags.
+## Streams exported OSM POIs around the camera and renders lightweight map markers.
+##
+## Dependencies:
+## - world_coordinates.gd owns projected/world/tile coordinate conversion.
+## - CameraRig supplies visible world bounds and Camera3D supplies hover projection.
 
+const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 const WORLD_DIR: String = "res://world_data"
 const SHOW_DISTANCE: float = 30000.0
 const REFRESH_INTERVAL: float = 0.30
@@ -17,6 +21,7 @@ var tile_size: float = 32000.0
 var origin_x: float = 0.0
 var origin_y: float = 0.0
 var tile_dir: String = "poi_tiles"
+var world_coordinates: RefCounted = WorldCoordinatesScript.new(Vector2.ZERO, 32000.0)
 
 var active_pois: Array[Dictionary] = []
 var tile_cache: Dictionary = {}
@@ -73,6 +78,7 @@ func _load_manifest() -> void:
 	tile_size = float(manifest.get("tile_size", 32000.0))
 	origin_x = float(manifest.get("origin_x", 0.0))
 	origin_y = float(manifest.get("origin_y", 0.0))
+	world_coordinates = WorldCoordinatesScript.new(Vector2(origin_x, origin_y), tile_size)
 	var features_value: Variant = manifest.get("features", {})
 	if typeof(features_value) == TYPE_DICTIONARY:
 		var features: Dictionary = features_value as Dictionary
@@ -118,14 +124,11 @@ func _visible_tile_bounds() -> Array[Vector2i]:
 	points.append(focus)
 
 	for point in points:
-		var abs_x: float = point.x + origin_x
-		var abs_y: float = -point.z + origin_y
-		var tx: int = floori(abs_x / tile_size)
-		var ty: int = floori(abs_y / tile_size)
-		min_tx = mini(min_tx, tx)
-		min_ty = mini(min_ty, ty)
-		max_tx = maxi(max_tx, tx)
-		max_ty = maxi(max_ty, ty)
+		var tile: Vector2i = world_coordinates.call("world_to_tile", point) as Vector2i
+		min_tx = mini(min_tx, tile.x)
+		min_ty = mini(min_ty, tile.y)
+		max_tx = maxi(max_tx, tile.x)
+		max_ty = maxi(max_ty, tile.y)
 
 	var margin: int = 1
 	return [Vector2i(min_tx - margin, min_ty - margin), Vector2i(max_tx + margin, max_ty + margin)]
@@ -155,11 +158,10 @@ func _get_poi_tile(tx: int, ty: int) -> Array[Dictionary]:
 		var poi: Dictionary = parsed as Dictionary
 		if not poi.has("x") or not poi.has("y"):
 			continue
-		poi["world_position"] = Vector3(
-			float(poi.get("x", 0.0)) - origin_x,
-			0.0,
-			-(float(poi.get("y", 0.0)) - origin_y)
-		)
+		poi["world_position"] = world_coordinates.call(
+			"absolute_to_world",
+			Vector2(float(poi.get("x", 0.0)), float(poi.get("y", 0.0)))
+		) as Vector3
 		result.append(poi)
 
 	tile_cache[key] = result
@@ -218,11 +220,10 @@ func _poi_world_position(poi: Dictionary) -> Vector3:
 	var cached: Variant = poi.get("world_position", Vector3.ZERO)
 	if typeof(cached) == TYPE_VECTOR3:
 		return cached as Vector3
-	return Vector3(
-		float(poi.get("x", 0.0)) - origin_x,
-		0.0,
-		-(float(poi.get("y", 0.0)) - origin_y)
-	)
+	return world_coordinates.call(
+		"absolute_to_world",
+		Vector2(float(poi.get("x", 0.0)), float(poi.get("y", 0.0)))
+	) as Vector3
 
 func _update_hover() -> void:
 	if active_pois.is_empty() or camera == null:
