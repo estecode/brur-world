@@ -4,6 +4,8 @@
 Dependencies:
 - Reads world_data/search_index.jsonl produced by build_search_index.py.
 - Writes pointer-free little-endian BSI2 consumed by native/gps_search_index.h.
+- Appends an optional BSA1 trigram accelerator so production queries do not scan
+  every Sweden record. The base BSI2 record/string layout remains unchanged.
 - No runtime/Godot dependency.
 """
 
@@ -14,18 +16,78 @@ import json
 import shutil
 import struct
 import time
+from array import array
 from pathlib import Path
 
 from gps_search import normalize_search_text
 
 HEADER = struct.Struct("<4sIIIQQ")
 RECORD = struct.Struct("<" + "II" * 6 + "II" + "dd")
+ACCEL_ENTRY = struct.Struct("<III")
+ACCEL_FOOTER = struct.Struct("<4sIIIQQQ")
 assert HEADER.size == 32
 assert RECORD.size == 72
+assert ACCEL_ENTRY.size == 12
+assert ACCEL_FOOTER.size == 40
 
 
 def _encoded(value: object) -> bytes:
     return str(value).encode("utf-8")
+
+
+def _trigram_key(value: str) -> int:
+    if len(value) != 3 or any(ord(char) > 0x7F for char in value):
+        raise ValueError(f"invalid normalized trigram: {value!r}")
+    encoded = value.encode("ascii")
+    return encoded[0] | (encoded[1] << 8) | (encoded[2] << 16)
+
+
+def _record_trigrams(display: str, search_text: str) -> set[int]:
+    # Index word-local trigrams. Every existing ranking tier either contains the
+    # query literally or requires each query token to prefix a word, so any
+    # matching token of length >=3 must contain these trigrams.
+    normalized = normalize_search_text(f"{display} {search_text}")
+    keys: set[int] = set()
+    for word in normalized.split():
+        if len(word) < 3:
+            continue
+        for offset in range(len(word) - 2):
+            keys.add(_trigram_key(word[offset : offset + 3]))
+    return keys
+
+
+def _write_accelerator(out, postings_by_key: dict[int, array]) -> tuple[int, int]:
+    entries_offset = out.tell()
+    ordered_keys = sorted(postings_by_key)
+    posting_start = 0
+    for key in ordered_keys:
+        postings = postings_by_key[key]
+        out.write(ACCEL_ENTRY.pack(key, posting_start, len(postings)))
+        posting_start += len(postings)
+
+    postings_offset = out.tell()
+    for key in ordered_keys:
+        postings = postings_by_key[key]
+        # array('I') is native-endian. macOS build machines are little-endian,
+        # but keep the on-disk contract explicit for other build hosts.
+        if struct.pack("=I", 1) != struct.pack("<I", 1):
+            postings = array("I", postings)
+            postings.byteswap()
+        postings.tofile(out)
+
+    footer_offset = out.tell()
+    out.write(
+        ACCEL_FOOTER.pack(
+            b"BSA1",
+            ACCEL_ENTRY.size,
+            len(ordered_keys),
+            posting_start,
+            entries_offset,
+            postings_offset,
+            footer_offset,
+        )
+    )
+    return len(ordered_keys), posting_start
 
 
 def build_search_binary(source: Path, output: Path) -> Path:
@@ -52,6 +114,7 @@ def build_search_binary(source: Path, output: Path) -> Path:
 
     actual = 0
     string_pos = 0
+    postings_by_key: dict[int, array] = {}
     try:
         with source.open("r", encoding="utf-8") as source_handle, \
              tmp.open("wb") as out, strings_tmp.open("wb") as strings:
@@ -63,13 +126,14 @@ def build_search_binary(source: Path, output: Path) -> Path:
                     continue
                 item = json.loads(line)
                 display = str(item.get("display", ""))
+                search_text = str(item.get("search", ""))
                 values = [
                     _encoded(item.get("id", "")),
                     _encoded(item.get("kind", "")),
                     _encoded(display),
                     _encoded(item.get("subtitle", "")),
                     _encoded(normalize_search_text(display)),
-                    _encoded(item.get("search", "")),
+                    _encoded(search_text),
                 ]
                 spans: list[int] = []
                 for value in values:
@@ -85,6 +149,10 @@ def build_search_binary(source: Path, output: Path) -> Path:
                     float(item.get("x", 0.0)),
                     float(item.get("y", 0.0)),
                 ))
+
+                for key in _record_trigrams(display, search_text):
+                    postings_by_key.setdefault(key, array("I")).append(actual)
+
                 actual += 1
                 if actual % 250_000 == 0:
                     print(f"[search-binary] {actual:,}/{count:,} records", flush=True)
@@ -95,6 +163,8 @@ def build_search_binary(source: Path, output: Path) -> Path:
             with strings_tmp.open("rb") as strings_read:
                 shutil.copyfileobj(strings_read, out, length=8 * 1024 * 1024)
 
+            trigram_count, posting_count = _write_accelerator(out, postings_by_key)
+
         tmp.replace(output)
     finally:
         strings_tmp.unlink(missing_ok=True)
@@ -102,7 +172,8 @@ def build_search_binary(source: Path, output: Path) -> Path:
 
     print(
         f"[search-binary] output: {output} ({output.stat().st_size:,} bytes) | "
-        f"records={actual:,} | {time.monotonic() - started:.1f}s",
+        f"records={actual:,} | trigrams={trigram_count:,} | postings={posting_count:,} | "
+        f"{time.monotonic() - started:.1f}s",
         flush=True,
     )
     return output
