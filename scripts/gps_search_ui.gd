@@ -3,40 +3,35 @@ extends CanvasLayer
 ## Thin offline GPS search presentation.
 ##
 ## Dependencies:
-## - gps_search_index.gd owns loading, normalization, ranking and result data.
+## - gps_search_client.gd owns native process/TCP transport.
+## - Native BSI2 search owns Sweden-scale matching/ranking.
 ## - Emits selected projected coordinates only; it does not know routing, waypoints,
-##   the player, native GPS transport or map rendering.
+##   the player, native routing transport or map rendering.
 
 signal destination_selected(point: Vector2)
 signal waypoint_selected(point: Vector2)
 
-const GpsSearchIndexScript = preload("res://scripts/gps_search_index.gd")
-const SEARCH_INDEX_PATH: String = "res://world_data/search_index.jsonl"
+const GpsSearchClientScript = preload("res://scripts/gps_search_client.gd")
 const RESULT_LIMIT: int = 8
 
-var search_index = GpsSearchIndexScript.new()
+var search_client: Node
 var search_field: LineEdit
 var result_list: ItemList
 var status_label: Label
 var destination_button: Button
 var waypoint_button: Button
 var current_results: Array[Dictionary] = []
-var index_count: int = 0
-var index_load_ms: float = 0.0
 var last_search_ms: float = 0.0
 
 func _ready() -> void:
 	layer = 45
 	_create_ui()
-	var load_started: int = Time.get_ticks_usec()
-	var loaded: Dictionary = search_index.load_file(SEARCH_INDEX_PATH)
-	index_load_ms = float(Time.get_ticks_usec() - load_started) / 1000.0
-	if bool(loaded.get("success", false)):
-		index_count = int(loaded.get("count", 0))
-		_set_status("Search ready · %d offline places · load %.1f ms" % [index_count, index_load_ms])
-	else:
-		_set_status("Search index missing — build world_data/search_index.jsonl")
-		search_field.editable = false
+	search_client = GpsSearchClientScript.new()
+	search_client.ready_changed.connect(_on_native_ready_changed)
+	search_client.response_received.connect(_on_native_response)
+	search_client.status_changed.connect(_set_status)
+	add_child(search_client)
+	search_field.editable = false
 	_refresh_buttons()
 
 func _create_ui() -> void:
@@ -83,13 +78,51 @@ func _create_ui() -> void:
 	buttons.add_child(waypoint_button)
 
 	status_label = Label.new()
-	status_label.text = "Loading search…"
+	status_label.text = "Native search starting…"
 	content.add_child(status_label)
 
+func _on_native_ready_changed(ready: bool) -> void:
+	search_field.editable = ready
+	if ready:
+		_set_status("Search ready · native offline index")
+		if not search_field.text.strip_edges().is_empty():
+			search_client.request(search_field.text, RESULT_LIMIT)
+	else:
+		_set_status("Native search connecting…")
+
 func _on_search_text_changed(query: String) -> void:
-	var search_started: int = Time.get_ticks_usec()
-	current_results = search_index.search(query, RESULT_LIMIT)
-	last_search_ms = float(Time.get_ticks_usec() - search_started) / 1000.0
+	if query.strip_edges().is_empty():
+		current_results.clear()
+		result_list.clear()
+		_set_status("Search offline addresses and POIs")
+		_refresh_buttons()
+		return
+	if search_client == null or not search_client.is_ready():
+		_set_status("Native search is not ready yet")
+		return
+	_set_status("Searching…")
+	search_client.request(query, RESULT_LIMIT)
+
+func _on_native_response(query: String, response: Dictionary) -> void:
+	if query != search_field.text:
+		return
+	if not bool(response.get("success", false)):
+		current_results.clear()
+		result_list.clear()
+		_set_status("Search failed: %s" % str(response.get("adapter_error", "unknown")))
+		_refresh_buttons()
+		return
+	last_search_ms = float(response.get("query_ms", 0.0))
+	current_results.clear()
+	var values: Variant = response.get("results", [])
+	if typeof(values) == TYPE_ARRAY:
+		for value in values as Array:
+			if typeof(value) == TYPE_DICTIONARY:
+				current_results.append(value as Dictionary)
+	_refresh_result_list()
+	_set_status("%d result(s) · native %.2f ms" % [current_results.size(), last_search_ms])
+
+func _refresh_result_list() -> void:
 	result_list.clear()
 	for result in current_results:
 		var display: String = str(result.get("display", ""))
@@ -103,10 +136,6 @@ func _on_search_text_changed(query: String) -> void:
 		result_list.add_item(text)
 	if not current_results.is_empty():
 		result_list.select(0)
-	if query.strip_edges().is_empty():
-		_set_status("Search offline addresses and POIs")
-	else:
-		_set_status("%d result(s) · %.2f ms" % [current_results.size(), last_search_ms])
 	_refresh_buttons()
 
 func _on_search_submitted(_query: String) -> void:
