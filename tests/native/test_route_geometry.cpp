@@ -49,6 +49,20 @@ brur::gps::RouteResult one_edge_result(std::uint32_t edge_index,
     return result;
 }
 
+brur::gps::RouteLegResult one_edge_leg(std::size_t index, std::uint32_t edge_index,
+                                       brur::gps::RoutePoint start,
+                                       brur::gps::RoutePoint target) {
+    brur::gps::RouteLegResult leg;
+    leg.success = true;
+    leg.failure = brur::gps::RouteFailure::None;
+    leg.leg_index = index;
+    leg.from_stop_index = index;
+    leg.to_stop_index = index + 1;
+    leg.points = {start, target};
+    leg.edge_indices = {edge_index};
+    return leg;
+}
+
 } // namespace
 
 int main() {
@@ -96,6 +110,26 @@ int main() {
                 "raw BRG1 chord start must not create an off-road connector");
         require(!(near(chord_snapped.points.back().x, 7.5) && near(chord_snapped.points.back().y, 0.0)),
                 "raw BRG1 chord target must not create an off-road connector");
+
+        // A shared waypoint can lie on a compressed chord with two equally-near points
+        // on the curved physical road. Forward/reverse traversal must resolve that
+        // ambiguity to the same visible road point or the merged plan draws a chord.
+        brur::gps::RouteResult waypoint_plan;
+        waypoint_plan.success = true;
+        waypoint_plan.failure = brur::gps::RouteFailure::None;
+        const brur::gps::RoutePoint ambiguous_waypoint{5.0, 0.0};
+        waypoint_plan.legs = {
+            one_edge_leg(0, 0, {0.0, 0.0}, ambiguous_waypoint),
+            one_edge_leg(1, 1, ambiguous_waypoint, {0.0, 0.0}),
+        };
+        geometry.densify(waypoint_plan);
+        require(!waypoint_plan.legs[0].points.empty() && !waypoint_plan.legs[1].points.empty(),
+                "waypoint legs must retain detailed geometry");
+        const auto &incoming_waypoint = waypoint_plan.legs[0].points.back();
+        const auto &outgoing_waypoint = waypoint_plan.legs[1].points.front();
+        require(near(incoming_waypoint.x, outgoing_waypoint.x) &&
+                near(incoming_waypoint.y, outgoing_waypoint.y),
+                "shared waypoint must project to the same detailed road point in both directions");
 
         std::cout << "native route geometry tests: OK\n";
         return 0;
