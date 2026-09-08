@@ -57,7 +57,7 @@ func destination() -> Vector2:
 	return _destination
 
 func set_preference(value: String) -> bool:
-	if not value in ROUTING_PREFERENCES:
+	if value not in ROUTING_PREFERENCES:
 		return false
 	_preference = value
 	return true
