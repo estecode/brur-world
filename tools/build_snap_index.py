@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Build the persistent BRS1 road-snap index from an existing BRG1 graph.
+"""Build the persistent BRS2 road-snap index from an existing BRG1 graph.
 
 Dependencies:
 - routing_graph_view.py memory-maps BRG1 without expanding Sweden in memory.
-- gps_snap_index.py owns the compact BRS1 format and builder.
+- gps_snap_index.py owns the compact BRS2 format and builder.
 """
 
 from __future__ import annotations
