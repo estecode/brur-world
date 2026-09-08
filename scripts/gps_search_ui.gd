@@ -21,13 +21,19 @@ var status_label: Label
 var destination_button: Button
 var waypoint_button: Button
 var current_results: Array[Dictionary] = []
+var index_count: int = 0
+var index_load_ms: float = 0.0
+var last_search_ms: float = 0.0
 
 func _ready() -> void:
 	layer = 45
 	_create_ui()
+	var load_started: int = Time.get_ticks_usec()
 	var loaded: Dictionary = search_index.load_file(SEARCH_INDEX_PATH)
+	index_load_ms = float(Time.get_ticks_usec() - load_started) / 1000.0
 	if bool(loaded.get("success", false)):
-		_set_status("Search ready · %d offline places" % int(loaded.get("count", 0)))
+		index_count = int(loaded.get("count", 0))
+		_set_status("Search ready · %d offline places · load %.1f ms" % [index_count, index_load_ms])
 	else:
 		_set_status("Search index missing — build world_data/search_index.jsonl")
 		search_field.editable = false
@@ -81,7 +87,9 @@ func _create_ui() -> void:
 	content.add_child(status_label)
 
 func _on_search_text_changed(query: String) -> void:
+	var search_started: int = Time.get_ticks_usec()
 	current_results = search_index.search(query, RESULT_LIMIT)
+	last_search_ms = float(Time.get_ticks_usec() - search_started) / 1000.0
 	result_list.clear()
 	for result in current_results:
 		var display: String = str(result.get("display", ""))
@@ -95,7 +103,10 @@ func _on_search_text_changed(query: String) -> void:
 		result_list.add_item(text)
 	if not current_results.is_empty():
 		result_list.select(0)
-	_set_status("%d result(s)" % current_results.size() if not query.strip_edges().is_empty() else "Search offline addresses and POIs")
+	if query.strip_edges().is_empty():
+		_set_status("Search offline addresses and POIs")
+	else:
+		_set_status("%d result(s) · %.2f ms" % [current_results.size(), last_search_ms])
 	_refresh_buttons()
 
 func _on_search_submitted(_query: String) -> void:
