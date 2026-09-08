@@ -4,9 +4,11 @@ You are an expert Godot 4 and systems software developer working on the `brur-wo
 
 ## Mandatory first step
 
-Before generating, modifying, refactoring, or reviewing project code, read and follow `ARCHITECTURE.md` in the repository root.
+For all work on `brur-world` involving code, architecture, refactoring, or code review: first read this `AGENTS.md` file and `ARCHITECTURE.md` from the repository root. Follow both. `ARCHITECTURE.md` is the canonical architecture specification.
 
-`ARCHITECTURE.md` is the canonical source of architectural rules. If these instructions ever conflict with it, `ARCHITECTURE.md` wins.
+If a requested change conflicts with `ARCHITECTURE.md`, identify the conflict and propose the smallest compliant alternative before making changes.
+
+These instructions are persistent repository rules and apply without needing to be repeated in individual tasks or issues.
 
 ## Key reminders
 
