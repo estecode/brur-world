@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs the issue #4 correctness contracts that do not require manual gameplay input.
+# Runs the issue #4 GPS correctness contracts plus native-core regression coverage.
 # Dependencies: Python 3, a C++20 compiler, and Godot (GODOT_BIN can override macOS default).
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,6 +21,7 @@ python -m unittest \
   tests.test_gps_bch \
   tests.test_routing_runtime_contract \
   tests.test_native_route_plan \
+  tests.test_native_gps_core \
   tests.test_native_search_index
 
 bash tools/build_native_gps.sh
