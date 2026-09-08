@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,10 @@ from gps_search import SearchRecord, normalize_search_text, write_search_index
 from world_common import ensure_pbf, project
 
 PROGRESS_INTERVAL = 5_000_000
+POSTCODE_GRID_METERS = 250.0
+POSTCODE_NEARBY_RADIUS_METERS = 500.0
+POSTCODE_NEARBY_SUPPORT = 2
+POSTCODE_NEARBY_SAMPLE_LIMIT = 5
 
 
 def _join_unique(*values: str | None) -> str:
@@ -55,6 +60,14 @@ def _postcode_key(street: str, locality: str) -> tuple[str, str] | None:
     return street_key, locality_key
 
 
+def _locality_key(locality: str) -> str:
+    return normalize_search_text(locality)
+
+
+def _grid_cell(x: float, y: float) -> tuple[int, int]:
+    return math.floor(x / POSTCODE_GRID_METERS), math.floor(y / POSTCODE_GRID_METERS)
+
+
 @dataclass(frozen=True)
 class AddressFact:
     osm_type: str
@@ -63,6 +76,14 @@ class AddressFact:
     street: str
     postcode: str
     locality: str
+    x: float
+    y: float
+
+
+@dataclass(frozen=True)
+class PostcodeSample:
+    postcode: str
+    locality_key: str
     x: float
     y: float
 
@@ -82,6 +103,40 @@ def infer_postcode(
     return next(iter(values))
 
 
+def infer_nearby_postcode(
+    x: float,
+    y: float,
+    locality: str,
+    sample_grid: dict[tuple[int, int], list[PostcodeSample]],
+) -> str:
+    """Infer a postcode only when nearby same-locality address samples strongly agree."""
+    locality_normalized = _locality_key(locality)
+    if not locality_normalized:
+        return ""
+
+    cell_x, cell_y = _grid_cell(x, y)
+    cell_radius = math.ceil(POSTCODE_NEARBY_RADIUS_METERS / POSTCODE_GRID_METERS)
+    radius_sq = POSTCODE_NEARBY_RADIUS_METERS * POSTCODE_NEARBY_RADIUS_METERS
+    candidates: list[tuple[float, str]] = []
+    for dy in range(-cell_radius, cell_radius + 1):
+        for dx in range(-cell_radius, cell_radius + 1):
+            for sample in sample_grid.get((cell_x + dx, cell_y + dy), ()):  # type: ignore[arg-type]
+                if sample.locality_key != locality_normalized:
+                    continue
+                distance_sq = (sample.x - x) ** 2 + (sample.y - y) ** 2
+                if distance_sq <= radius_sq:
+                    candidates.append((distance_sq, sample.postcode))
+
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    nearest = candidates[:POSTCODE_NEARBY_SAMPLE_LIMIT]
+    if len(nearest) < POSTCODE_NEARBY_SUPPORT:
+        return ""
+    postcode = nearest[0][1]
+    if any(candidate_postcode != postcode for _, candidate_postcode in nearest):
+        return ""
+    return postcode
+
+
 class AddressHandler(osmium.SimpleHandler):
     """Collect address facts, then deterministically enrich safe missing postcodes."""
 
@@ -89,7 +144,9 @@ class AddressHandler(osmium.SimpleHandler):
         super().__init__()
         self.facts: list[AddressFact] = []
         self.known_postcodes: dict[tuple[str, str], set[str]] = {}
+        self.postcode_samples: dict[tuple[int, int], list[PostcodeSample]] = {}
         self.inferred_postcodes = 0
+        self.inferred_postcodes_nearby = 0
         self.scanned_nodes = 0
         self.scanned_ways = 0
         self.started = time.monotonic()
@@ -121,6 +178,10 @@ class AddressHandler(osmium.SimpleHandler):
             key = _postcode_key(street, locality)
             if key is not None:
                 self.known_postcodes.setdefault(key, set()).add(postcode)
+            locality_normalized = _locality_key(locality)
+            if locality_normalized:
+                sample = PostcodeSample(postcode, locality_normalized, x, y)
+                self.postcode_samples.setdefault(_grid_cell(x, y), []).append(sample)
 
     def node(self, node: osmium.osm.Node) -> None:
         self.scanned_nodes += 1
@@ -153,17 +214,28 @@ class AddressHandler(osmium.SimpleHandler):
     def build_records(self) -> list[SearchRecord]:
         records: list[SearchRecord] = []
         inferred = 0
+        nearby_inferred = 0
         for fact in self.facts:
             postcode = fact.postcode
             if not postcode:
                 postcode = infer_postcode(fact.street, fact.locality, self.known_postcodes)
                 if postcode:
                     inferred += 1
+                else:
+                    postcode = infer_nearby_postcode(
+                        fact.x,
+                        fact.y,
+                        fact.locality,
+                        self.postcode_samples,
+                    )
+                    if postcode:
+                        nearby_inferred += 1
             subtitle = _join_unique(postcode, fact.locality)
             records.append(
                 _record("address", fact.osm_type, fact.osm_id, fact.display, subtitle, fact.x, fact.y)
             )
-        self.inferred_postcodes = inferred
+        self.inferred_postcodes = inferred + nearby_inferred
+        self.inferred_postcodes_nearby = nearby_inferred
         return records
 
 
@@ -238,6 +310,7 @@ def build_search_index(pbf: Path, output: Path) -> Path:
     write_search_index(records, path)
     print(f"[search] addresses: {len(address_records):,}", flush=True)
     print(f"[search] inferred missing postcodes: {handler.inferred_postcodes:,}", flush=True)
+    print(f"[search] inferred from nearby locality samples: {handler.inferred_postcodes_nearby:,}", flush=True)
     print(f"[search] total searchable records: {len(records):,}", flush=True)
     print(f"[search] output: {path} ({path.stat().st_size:,} bytes)", flush=True)
     print(f"[search] build time: {time.monotonic() - started:.1f}s", flush=True)
