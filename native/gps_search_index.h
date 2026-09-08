@@ -7,9 +7,9 @@
 // - Consumes an immutable byte span; file mapping/loading belongs to adapters.
 // - Query text must already be normalized to lowercase ASCII words using the
 //   same normalization contract as tools/gps_search.py.
-// - BSI2 may append a BSA1 mmap trigram accelerator. Queries with at least one
-//   3+ character token use its immutable postings; older BSI2 files fall back
-//   to the exact full scan.
+// - BSI2 may append a BSA1 mmap trigram accelerator. New indexes also contain
+//   tagged display-only postings used to finish broad visible-name queries
+//   before scanning records that merely contain the term in subtitle text.
 
 #include <algorithm>
 #include <cstdint>
@@ -25,6 +25,7 @@ constexpr std::size_t BSI2_HEADER_SIZE = 32;
 constexpr std::size_t BSI2_RECORD_SIZE = 72;
 constexpr std::size_t BSA1_ENTRY_SIZE = 12;
 constexpr std::size_t BSA1_FOOTER_SIZE = 40;
+constexpr uint32_t DISPLAY_TRIGRAM_FLAG = 0x80000000u;
 
 inline uint32_t read_u32_le(const uint8_t *p) {
     return static_cast<uint32_t>(p[0]) |
@@ -224,26 +225,25 @@ public:
         const auto tokens = split_words(normalized_query);
         best.reserve(limit);
 
-        std::vector<PostingSpan> spans;
-        if (accelerator_ && collect_posting_spans(tokens, spans)) {
-            if (spans.empty()) return full_scan(normalized_query, tokens, limit);
-            std::sort(spans.begin(), spans.end(), [](const PostingSpan &a, const PostingSpan &b) {
-                return a.count < b.count;
-            });
-            if (spans.front().count == 0) return best;
-            for (uint32_t pos = 0; pos < spans.front().count; ++pos) {
-                const uint32_t candidate = posting_value(spans.front(), pos);
-                bool present = true;
-                for (std::size_t i = 1; i < spans.size(); ++i) {
-                    if (!posting_contains(spans[i], candidate)) {
-                        present = false;
-                        break;
-                    }
+        if (accelerator_) {
+            std::vector<PostingSpan> display_spans;
+            if (collect_posting_spans(tokens, display_spans, DISPLAY_TRIGRAM_FLAG) &&
+                !display_spans.empty()) {
+                evaluate_spans(display_spans, normalized_query, tokens, limit, best);
+                if (best.size() == limit && best.back().score.tier <= 3) {
+                    finish(best, limit);
+                    return best;
                 }
-                if (present) consider(candidate, normalized_query, tokens, limit, best);
+                best.clear();
             }
-            finish(best, limit);
-            return best;
+
+            std::vector<PostingSpan> spans;
+            if (collect_posting_spans(tokens, spans, 0)) {
+                if (spans.empty()) return full_scan(normalized_query, tokens, limit);
+                evaluate_spans(spans, normalized_query, tokens, limit, best);
+                finish(best, limit);
+                return best;
+            }
         }
 
         return full_scan(normalized_query, tokens, limit);
@@ -263,6 +263,28 @@ private:
         for (uint32_t i = 0; i < count_; ++i) consider(i, query, tokens, limit, best);
         finish(best, limit);
         return best;
+    }
+
+    void evaluate_spans(std::vector<PostingSpan> &spans,
+                        std::string_view query,
+                        const std::vector<std::string_view> &tokens,
+                        std::size_t limit,
+                        std::vector<Result> &best) const {
+        std::sort(spans.begin(), spans.end(), [](const PostingSpan &a, const PostingSpan &b) {
+            return a.count < b.count;
+        });
+        if (spans.front().count == 0) return;
+        for (uint32_t pos = 0; pos < spans.front().count; ++pos) {
+            const uint32_t candidate = posting_value(spans.front(), pos);
+            bool present = true;
+            for (std::size_t i = 1; i < spans.size(); ++i) {
+                if (!posting_contains(spans[i], candidate)) {
+                    present = false;
+                    break;
+                }
+            }
+            if (present) consider(candidate, query, tokens, limit, best);
+        }
     }
 
     void consider(uint32_t index, std::string_view query,
@@ -288,7 +310,8 @@ private:
     }
 
     bool collect_posting_spans(const std::vector<std::string_view> &tokens,
-                               std::vector<PostingSpan> &spans) const {
+                               std::vector<PostingSpan> &spans,
+                               uint32_t key_flag) const {
         std::vector<uint32_t> keys;
         std::size_t trigram_count = 0;
         for (const auto token : tokens) {
@@ -298,7 +321,7 @@ private:
         for (const auto token : tokens) {
             if (token.size() < 3) continue;
             for (std::size_t offset = 0; offset + 3 <= token.size(); ++offset)
-                keys.push_back(trigram_key(token.substr(offset, 3)));
+                keys.push_back(trigram_key(token.substr(offset, 3)) | key_flag);
         }
         if (keys.empty()) return false;
         std::sort(keys.begin(), keys.end());
