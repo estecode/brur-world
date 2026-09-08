@@ -48,6 +48,11 @@ func configure(
 	_port = port
 
 func start() -> bool:
+	if _server_pid > 0:
+		if _peer == null:
+			_peer = StreamPeerTCP.new()
+		_try_connect()
+		return true
 	if not FileAccess.file_exists(_server_binary):
 		transport_status.emit("GPS native server missing. Run: bash tools/build_native_gps.sh")
 		return false
@@ -150,7 +155,8 @@ func _read_responses() -> void:
 		_parse_ms += float(Time.get_ticks_usec() - parse_started) / 1000.0
 		_set_busy(false)
 		if bool(decoded.get("valid", false)):
-			response_received.emit(decoded.get("payload", {}) as Dictionary)
+			var payload: Dictionary = decoded.get("payload", {}) as Dictionary
+			response_received.emit(payload)
 		else:
 			protocol_error.emit(str(decoded.get("error", "invalid_response")))
 
