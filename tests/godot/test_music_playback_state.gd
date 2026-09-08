@@ -1,15 +1,17 @@
 extends SceneTree
 
-## Headless deterministic tests for the reusable music library and playback state.
-## Dependencies: scripts/music_library.gd and scripts/music_playback_state.gd only.
+## Headless deterministic tests for the reusable music library, playback state, and adapter loadability.
+## Dependencies: scripts/music_library.gd, scripts/music_playback_state.gd, and scripts/music_player.gd.
 
 const MusicLibraryScript = preload("res://scripts/music_library.gd")
 const MusicPlaybackStateScript = preload("res://scripts/music_playback_state.gd")
+const MusicPlayerScript = preload("res://scripts/music_player.gd")
 
 func _init() -> void:
 	_test_library()
 	_test_playback()
 	_test_shuffle_determinism()
+	_test_adapter_loads()
 	print("godot music playback-state tests: OK")
 	quit(0)
 
@@ -75,6 +77,11 @@ func _test_shuffle_determinism() -> void:
 	_assert(first_sequence == second_sequence, "same seed produces same shuffle sequence")
 	for track_id in first_sequence:
 		_assert(track_id in ["one", "two", "three"], "shuffle selects only valid tracks")
+
+func _test_adapter_loads() -> void:
+	var player = MusicPlayerScript.new()
+	_assert(player != null, "Godot music adapter instantiates")
+	player.free()
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:
