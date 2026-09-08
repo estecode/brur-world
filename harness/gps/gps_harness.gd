@@ -53,6 +53,14 @@ func _input(event: InputEvent) -> void:
 			show_waypoint_fixture()
 		KEY_3:
 			show_failure_fixture()
+		KEY_F:
+			_set_preference("fastest")
+		KEY_S:
+			_set_preference("shortest")
+		KEY_X:
+			_set_preference("avoid_small_roads")
+		KEY_M:
+			_set_preference("avoid_major_roads")
 		KEY_R:
 			request_real_sweden_route()
 
@@ -84,7 +92,7 @@ func show_failure_fixture() -> void:
 		"points": [],
 	}
 	renderer.call("apply_response", response)
-	_set_status("Fixture failure: unreachable")
+	_set_status("Fixture failure: unreachable · F fastest · S shortest · X avoid small · M avoid major · R real")
 
 func request_real_sweden_route() -> void:
 	model.clear_waypoints()
@@ -101,7 +109,7 @@ func _send_real_request() -> void:
 	var request: String = GpsProtocolScript.encode_plan(model.ordered_stops(STOCKHOLM_START), model.preference())
 	if bool(client.call("send_request", request)):
 		_pending_real_request = false
-		_set_status("Real Sweden route requested…")
+		_set_status("Real Sweden %s route requested…" % model.preference())
 
 func _on_client_ready_changed(ready: bool) -> void:
 	if ready and _pending_real_request:
@@ -109,7 +117,8 @@ func _on_client_ready_changed(ready: bool) -> void:
 
 func _on_real_response(response: Dictionary) -> void:
 	if bool(renderer.call("apply_response", response)):
-		_set_status("Real route: %.1f km · %.1f ms" % [
+		_set_status("Real %s route: %.1f km · %.1f ms" % [
+			model.preference(),
 			float(response.get("distance_m", 0.0)) / 1000.0,
 			float(response.get("route_ms", 0.0)),
 		])
@@ -119,6 +128,10 @@ func _on_real_response(response: Dictionary) -> void:
 func _on_protocol_error(error: String) -> void:
 	_set_status("Protocol error: " + error)
 
+func _set_preference(preference: String) -> void:
+	if model.set_preference(preference):
+		_set_status("Preference: %s · press R for real Sweden route" % preference)
+
 func _apply_fixture(points: Array, target: Vector2, label: String) -> void:
 	var response := {
 		"success": true,
@@ -126,7 +139,7 @@ func _apply_fixture(points: Array, target: Vector2, label: String) -> void:
 		"target_snap": [target.x, target.y],
 	}
 	renderer.call("apply_response", response)
-	_set_status(label + " · 1 direct · 2 waypoint · 3 failure · R real Sweden")
+	_set_status(label + " · 1 direct · 2 waypoint · 3 failure · F/S/X/M preferences · R real")
 
 func _absolute_to_harness(x: float, y: float) -> Vector3:
 	return Vector3(x - STOCKHOLM_START.x, 0.0, -(y - STOCKHOLM_START.y))
