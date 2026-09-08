@@ -3,9 +3,9 @@ extends Node3D
 ## Thin Godot adapter for click-to-road GPS routing.
 ##
 ## Dependencies:
-## - bin/brur-gps-server owns snapping and route search in resident native C++.
+## - bin/brur-gps-server owns snapping, cost policy and route search in resident native C++.
 ## - Main owns world origin coordinates; CameraRig supplies the current screen ray.
-## - Godot only sends projected coordinates over localhost TCP and renders the returned polyline.
+## - Godot sends coordinates plus the selected preference and renders the returned polyline.
 
 const EARTH_RADIUS: float = 6378137.0
 const START_LON: float = 18.0686
@@ -16,6 +16,18 @@ const SNAP_PATH: String = "res://world_data/routing_snap.brs"
 const SERVER_HOST: String = "127.0.0.1"
 const SERVER_PORT: int = 47741
 const CONNECT_RETRY_SECONDS: float = 0.15
+const ROUTING_PREFERENCE_IDS: Array[String] = [
+	"fastest",
+	"shortest",
+	"avoid_small_roads",
+	"avoid_major_roads",
+]
+const ROUTING_PREFERENCE_LABELS: Array[String] = [
+	"Fastest",
+	"Shortest",
+	"Avoid small roads",
+	"Avoid major roads",
+]
 
 @onready var main: Node3D = get_parent()
 @onready var camera_rig: Node3D = get_node("../CameraRig")
@@ -26,6 +38,7 @@ var route_mesh_instance: MeshInstance3D
 var route_material: StandardMaterial3D
 var target_marker: MeshInstance3D
 var status_label: Label
+var preference_select: OptionButton
 
 var server_path: String = ""
 var graph_path: String = ""
@@ -207,27 +220,43 @@ func _create_status_ui() -> void:
 	panel.offset_left = -520.0
 	panel.offset_top = 14.0
 	panel.offset_right = -14.0
-	panel.offset_bottom = 58.0
+	panel.offset_bottom = 94.0
 	canvas.add_child(panel)
+	var content: VBoxContainer = VBoxContainer.new()
+	panel.add_child(content)
 	status_label = Label.new()
 	status_label.text = "GPS starting…"
-	panel.add_child(status_label)
+	content.add_child(status_label)
+	preference_select = OptionButton.new()
+	for label_text in ROUTING_PREFERENCE_LABELS:
+		preference_select.add_item(label_text)
+	preference_select.selected = 0
+	preference_select.tooltip_text = "Routing preference used for every GPS query"
+	content.add_child(preference_select)
+
+func _selected_preference() -> String:
+	if preference_select == null:
+		return ROUTING_PREFERENCE_IDS[0]
+	var index: int = clampi(preference_select.selected, 0, ROUTING_PREFERENCE_IDS.size() - 1)
+	return ROUTING_PREFERENCE_IDS[index]
 
 func _request_route(target_world: Vector3) -> void:
 	var start_abs: Vector2 = _world_to_absolute(player.global_position)
 	var target_abs: Vector2 = _world_to_absolute(target_world)
-	var request: String = "%.9f %.9f %.9f %.9f\n" % [
+	var preference: String = _selected_preference()
+	var request: String = "%.9f %.9f %.9f %.9f %s\n" % [
 		start_abs.x,
 		start_abs.y,
 		target_abs.x,
 		target_abs.y,
+		preference,
 	]
 	var error: Error = server_peer.put_data(request.to_utf8_buffer())
 	if error != OK:
 		_set_status("Could not send GPS query")
 		return
 	gps_busy = true
-	_set_status("Calculating GPS route…")
+	_set_status("Calculating %s GPS route…" % preference_select.get_item_text(preference_select.selected))
 
 func _apply_route_response(response: Dictionary) -> void:
 	var apply_started: int = Time.get_ticks_usec()
@@ -240,7 +269,8 @@ func _apply_route_response(response: Dictionary) -> void:
 	perf_last_success = bool(response.get("success", false))
 
 	if not perf_last_success:
-		_set_status("No drivable route found")
+		var adapter_error: String = str(response.get("adapter_error", ""))
+		_set_status("GPS error: %s" % adapter_error if not adapter_error.is_empty() else "No drivable route found")
 		_clear_route_visual()
 		perf_apply_ms += float(Time.get_ticks_usec() - apply_started) / 1000.0
 		return
@@ -273,10 +303,12 @@ func _apply_route_response(response: Dictionary) -> void:
 
 	var distance_km: float = float(response.get("distance_m", 0.0)) / 1000.0
 	var minutes: float = float(response.get("travel_time_s", 0.0)) / 60.0
-	_set_status("GPS %.1f km · %.0f min · %.1f ms" % [distance_km, minutes, route_ms])
+	var preference: String = str(response.get("preference", _selected_preference()))
+	_set_status("GPS %s · %.1f km · %.0f min · %.1f ms" % [preference, distance_km, minutes, route_ms])
 	perf_apply_ms += float(Time.get_ticks_usec() - apply_started) / 1000.0
 	print(
-		"GPS route | %.1f km | %.1f min | %.2f ms | settled %d | relaxed %d | points %d" % [
+		"GPS route | %s | %.1f km | %.1f min | %.2f ms | settled %d | relaxed %d | points %d" % [
+			preference,
 			distance_km,
 			minutes,
 			route_ms,
