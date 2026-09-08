@@ -8,6 +8,24 @@ assignees: ""
 
 **Architecture:** Before changing code for this issue, read and follow `AGENTS.md` and `ARCHITECTURE.md`. `ARCHITECTURE.md` is canonical.
 
+## Dependencies
+
+For non-trivial work, declare real implementation dependencies and likely integration conflicts. Remove fields that do not add useful information.
+
+Status: Independent | Blocked | Integration-sensitive
+
+Depends on:
+- None
+
+Blocks:
+- None
+
+Can run in parallel with:
+- None
+
+Potential conflicts:
+- None
+
 ## Goal
 
 Describe the concrete outcome.
