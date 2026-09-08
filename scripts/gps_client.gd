@@ -59,6 +59,10 @@ func start() -> bool:
 	if not FileAccess.file_exists(_graph_path) or not FileAccess.file_exists(_snap_path):
 		transport_status.emit("GPS data missing: routing.brg / routing_snap.brs")
 		return false
+	var geometry_path := _graph_path.get_base_dir().path_join("routing_geometry.brh")
+	if not FileAccess.file_exists(geometry_path):
+		transport_status.emit("GPS data missing: routing_geometry.brh — rebuild routing data")
+		return false
 	var args := PackedStringArray([
 		ProjectSettings.globalize_path(_graph_path),
 		ProjectSettings.globalize_path(_snap_path),
