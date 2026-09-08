@@ -90,6 +90,9 @@ func _exit_tree() -> void:
 
 func poll(delta: float) -> void:
 	if _peer == null:
+		if _busy:
+			_set_busy(false)
+			transport_status.emit("GPS connection lost during route calculation — try again")
 		return
 	_peer.poll()
 	var status: StreamPeerTCP.Status = _peer.get_status()
@@ -98,6 +101,9 @@ func poll(delta: float) -> void:
 		_read_responses()
 		return
 	_set_ready(false)
+	if _busy:
+		_set_busy(false)
+		transport_status.emit("GPS connection lost during route calculation — try again")
 	if status == StreamPeerTCP.STATUS_CONNECTING:
 		return
 	_connect_retry_left -= delta
