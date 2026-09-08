@@ -80,8 +80,7 @@ def receive_line() -> str:
         if newline >= 0:
             return chunks[:newline].decode("utf-8")
 
-times = []
-for query in queries:
+def run_query(query: str) -> tuple[dict, float]:
     normalized = normalize_search_text(query)
     payload = f"search 8 {normalized}\n".encode("utf-8")
     wall_started = time.perf_counter()
@@ -90,11 +89,35 @@ for query in queries:
     wall_ms = (time.perf_counter() - wall_started) * 1000.0
     if not response.get("success"):
         raise RuntimeError(response)
+    return response, wall_ms
+
+times = []
+responses: dict[str, dict] = {}
+for query in queries:
+    response, wall_ms = run_query(query)
+    responses[query] = response
     query_ms = float(response.get("query_ms", 0.0))
     times.append(query_ms)
     results = response.get("results", [])
-    first = results[0].get("display", "") if results else "-"
-    print(f"{query:34s} native={query_ms:9.3f} ms | wall={wall_ms:9.3f} ms | {len(results)} result(s) | first={first}")
+    if results:
+        first = results[0].get("display", "")
+        subtitle = results[0].get("subtitle", "")
+        first_text = f"{first} — {subtitle}" if subtitle else first
+    else:
+        first_text = "-"
+    print(f"{query:34s} native={query_ms:9.3f} ms | wall={wall_ms:9.3f} ms | {len(results)} result(s) | first={first_text}")
+
+street_results = responses["kungsljusgatan 22"].get("results", [])
+full_results = responses["kungsljusgatan 22 24756 dalby"].get("results", [])
+if street_results and not full_results:
+    subtitles = sorted({str(item.get("subtitle", "")).strip() for item in street_results})
+    print(
+        "address locality diagnostic | full query missing; indexed subtitle(s): "
+        + ", ".join(value if value else "<empty>" for value in subtitles)
+    )
+    print(
+        "address locality diagnostic | if 24756 Dalby is absent above, rebuild search_index.jsonl from the PBF before rebuilding BSI2"
+    )
 
 ordered = sorted(times)
 p50 = statistics.median(ordered)
