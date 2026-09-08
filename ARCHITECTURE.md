@@ -195,40 +195,87 @@ Police problem  -> police harness
 
 ---
 
-## 7. Tests vs harnesses
+## 7. Testing strategy
 
-These solve different problems.
+> **Correctness is automated. Feel is playtested.**
+>
+> **Anything objectively machine-verifiable should be caught automatically, not discovered during playtesting.**
 
-### Headless / contract tests
+Validation is divided by responsibility and cost.
 
-Answer:
+### 1. Core tests
 
-> Is the logic/data contract correct?
+Fast, deterministic tests for portable/domain behavior without SceneTree or presentation dependencies.
 
-Use deterministic input -> expected-output tests for portable logic.
+Typical examples:
 
-Examples:
+- rules and algorithms
+- state transitions
+- coordinate conversion
+- routing semantics
+- protocol/data contracts
+- native/reference parity
 
-- route request -> route result
-- bytes -> decoded values
-- coordinates -> converted coordinates
-- policy/state transition -> expected state
-- Python reference -> native C++ semantic parity
+### 2. Godot integration and harness tests
 
-### Harness scenes
+Headless Godot tests verify integration that requires the runtime while using the real production modules.
 
-Answer:
+Typical examples:
 
-> Does the production subsystem work correctly inside Godot/runtime?
+- scene wiring
+- signals and adapters
+- input -> production API
+- lifecycle
+- generated meshes
+- visibility/state
+- runtime contracts
 
-Use harnesses for:
+Tests and harness controls should use existing public subsystem APIs, or a small harness-specific adapter/controller when that boundary is useful. Do not add test-specific APIs to production/domain code, and do not require a harness controller when the existing production API is sufficient.
 
-- interaction
-- streaming
-- visualization
-- performance
-- integration boundaries
-- real-data edge cases
+### 3. Real-data integration tests
+
+Use real production datasets and native processes where synthetic fixtures could hide integration failures.
+
+Typical examples:
+
+- real Sweden routing/world data
+- native process startup/shutdown
+- cross-boundary coordinate correctness
+- streaming/data-format compatibility
+- realistic data edge cases
+
+These tests may be slower and should run when relevant to the touched integration boundary rather than for every small change.
+
+### 4. Manual harness and playtesting
+
+Manual verification is primarily for human perception, interaction, hardware-specific behavior, or behavior that cannot reasonably be automated.
+
+Typical examples:
+
+- visual readability
+- camera feel
+- driving feel
+- animation
+- UX
+- gameplay/police feel
+- difficulty and presentation
+
+Repeated objective manual checks should be treated as candidates for automation.
+
+### Render validation
+
+Prefer deterministic state and geometric assertions for correctness, such as:
+
+- node/mesh existence
+- visibility/state
+- vertex and surface counts
+- sane bounding boxes
+- coordinate alignment
+- route length/endpoints
+- streamed tile counts
+- POI counts
+
+Avoid pixel-perfect screenshot comparison when structural assertions verify the same behavior more reliably. Screenshot regression tests may be used when rendered pixels themselves are the behavior under test.
 
 Do not replace deterministic tests with manual harness testing.
 
