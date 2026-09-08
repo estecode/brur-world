@@ -17,7 +17,7 @@ namespace brur::gps {
 
 constexpr std::size_t MAX_ROUTE_PLAN_STOPS = 32;
 
-struct RoutePlanRequest {
+struct RoutePlanCommand {
     std::string preference;
     std::vector<RoutePlanPoint> stops;
 };
@@ -25,7 +25,7 @@ struct RoutePlanRequest {
 struct RoutePlanParseResult {
     bool success = false;
     std::string error;
-    RoutePlanRequest request;
+    RoutePlanCommand request;
 };
 
 inline RoutePlanParseResult parse_route_plan_request(const std::string &line) {
