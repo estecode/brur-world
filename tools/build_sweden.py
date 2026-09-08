@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build all Sweden world data: roads, routing, background, POIs, search and buildings."""
+"""Build all Sweden world data: roads, routing, background, POIs, search and buildings.
+
+Dependencies:
+- Uses the owned offline builders for each runtime dataset.
+- Routing is published through build_routing_dataset.py so BRG1/BRS2/BRH1 stay source-aligned.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +14,7 @@ from pathlib import Path
 from build_background import build_background
 from build_features import build_buildings, build_pois
 from build_roads import build_roads
-from build_routing import build_routing
+from build_routing_dataset import build_routing_dataset
 from build_search_binary import build_search_binary
 from build_search_index import build_search_index
 from world_common import ensure_pbf
@@ -27,8 +32,8 @@ def main() -> None:
     build_roads(args.pbf, args.output)
 
     print()
-    print("=== BUILD ROUTING ===")
-    build_routing(args.pbf, args.output)
+    print("=== BUILD ROUTING DATASET ===")
+    build_routing_dataset(args.pbf, args.output)
 
     print()
     print("=== BUILD BACKGROUND ===")
