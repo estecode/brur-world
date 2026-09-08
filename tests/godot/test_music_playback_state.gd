@@ -20,6 +20,9 @@ func _run() -> void:
 	_test_playback()
 	_test_shuffle_determinism()
 	await _test_adapter_playback()
+	call_deferred("_finish")
+
+func _finish() -> void:
 	if _failed:
 		quit(1)
 		return
