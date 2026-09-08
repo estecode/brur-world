@@ -1,6 +1,10 @@
 extends Node3D
 
-# Continuous map-to-gameplay camera: high overview when zoomed out, cinematic drone view when zoomed in.
+## Controls the continuous map/gameplay camera and can follow an explicitly supplied world target at driving zoom.
+##
+## Dependencies:
+## - Reads local map-pan/zoom input.
+## - May follow a generic Node3D target supplied by composition; has no vehicle/GPS dependency.
 
 @export var min_distance: float = 1500.0
 @export var max_distance: float = 1400000.0
@@ -23,6 +27,7 @@ var focus: Vector3 = Vector3.ZERO
 var distance: float = 800000.0
 var dragging: bool = false
 var last_mouse: Vector2 = Vector2.ZERO
+var _follow_target: Node3D = null
 
 @onready var camera: Camera3D = $Camera3D
 
@@ -31,6 +36,12 @@ func _ready() -> void:
 	_apply_camera()
 
 func _process(delta: float) -> void:
+	if is_driving_view() and _follow_target != null and is_instance_valid(_follow_target):
+		var target_position: Vector3 = _follow_target.global_position
+		focus = Vector3(target_position.x, 0.0, target_position.z)
+		_apply_camera()
+		return
+
 	var input: Vector2 = Vector2(
 		Input.get_axis("ui_left", "ui_right"),
 		Input.get_axis("ui_up", "ui_down")
@@ -187,6 +198,15 @@ func set_view(new_focus: Vector3, new_distance: float) -> void:
 	focus = Vector3(new_focus.x, 0.0, new_focus.z)
 	distance = clampf(new_distance, min_distance, max_distance)
 	_apply_camera()
+
+func set_follow_target(target: Node3D) -> void:
+	_follow_target = target
+
+func clear_follow_target() -> void:
+	_follow_target = null
+
+func is_driving_view() -> bool:
+	return distance < gameplay_blend_start
 
 func get_focus_world() -> Vector3:
 	return focus
