@@ -9,7 +9,7 @@ WORLD_DATA="$ROOT/world_data"
 PBF="${BRUR_WORLD_PBF:-}"
 
 usage() {
-  printf 'Usage: %s <game|gps>\n' "$0" >&2
+  printf 'Usage: %s <game|gps|driving>\n' "$0" >&2
 }
 
 fail() {
@@ -18,7 +18,7 @@ fail() {
 }
 
 case "$TARGET" in
-  game|gps) ;;
+  game|gps|driving) ;;
   "") usage; exit 64 ;;
   *) printf 'PLAYTEST=FAIL unsupported target: %s\n' "$TARGET" >&2; usage; exit 64 ;;
 esac
@@ -233,6 +233,11 @@ case "$TARGET" in
     ensure_gps_data
     ensure_native brur-gps-server
     SCENE="$ROOT/harness/gps/gps_harness.tscn"
+    ;;
+  driving)
+    ensure_game_data
+    ensure_native brur-gps-server brur-gps-search-server
+    SCENE="$ROOT/harness/driving/driving_harness.tscn"
     ;;
 esac
 
