@@ -111,6 +111,11 @@ private:
         points.push_back(point);
     }
 
+    static bool projection_tie_break(const RoutePoint &candidate, const RoutePoint &best) {
+        if (candidate.x != best.x) return candidate.x < best.x;
+        return candidate.y < best.y;
+    }
+
     static Projection closest_on_polyline(const std::vector<RoutePoint> &shape, RoutePoint wanted) {
         Projection best;
         best.distance_sq = std::numeric_limits<double>::infinity();
@@ -128,7 +133,12 @@ private:
             const double ex = wanted.x - projected.x;
             const double ey = wanted.y - projected.y;
             const double distance_sq = ex * ex + ey * ey;
-            if (distance_sq < best.distance_sq) best = {i, fraction, projected, distance_sq};
+            const double tie_tolerance = 1e-10 * std::max({1.0, std::abs(best.distance_sq), std::abs(distance_sq)});
+            if (distance_sq + tie_tolerance < best.distance_sq ||
+                (std::abs(distance_sq - best.distance_sq) <= tie_tolerance &&
+                 projection_tie_break(projected, best.point))) {
+                best = {i, fraction, projected, distance_sq};
+            }
         }
         return best;
     }
