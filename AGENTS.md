@@ -22,18 +22,25 @@ These instructions are persistent repository rules and apply without needing to 
 
 When asked to implement or fix a GitHub issue, including shorthand requests such as `fix #48` or `fixa #48`:
 
-1. Read `AGENTS.md`, `ARCHITECTURE.md`, and the current issue before changing code.
-2. Start from the latest `main` branch.
+1. Read `AGENTS.md`, `ARCHITECTURE.md`, and the current GitHub issue including its acceptance criteria before changing code.
+2. Base the issue branch on the latest known `main`, updating repository refs safely when necessary and without overwriting local work.
 3. Create a dedicated branch named `issue/<number>-<short-name>`.
 4. Keep concurrent issue work isolated on separate branches and avoid unrelated changes that increase merge conflicts.
 5. Keep the implementation within the issue scope and acceptance criteria.
 6. Implement the smallest architecture-compliant change that satisfies the issue.
-7. Run the relevant tests and validation for the touched subsystem.
+7. Run the relevant available deterministic tests, native/headless checks, benchmarks, and Godot harness validation for the touched subsystem. Run only the forms of validation that are relevant and available, and never claim validation that was not actually performed.
 8. Commit completed work to the issue branch with a message that references the issue.
-9. Do not merge the issue branch into `main` unless explicitly requested.
-10. Report the branch name, commit, tests/validation performed, and anything still outstanding.
+9. Update the original GitHub issue with a concise implementation summary and concrete validation evidence.
+10. Create a Pull Request targeting `main` and link it to the issue using `Closes #XX` in the PR body.
+11. Keep the issue open until the PR is merged; the closing link should close it as part of the normal merge lifecycle.
+12. Do not merge the PR unless explicitly requested by the user or repository policy explicitly grants merge authority.
+13. After PR creation, make no further implementation changes unless required to correct PR metadata/linkage, repair failed validation, or address explicit review feedback.
 
-The dedicated issue branch is the default for issue implementation work and does not need to be requested separately.
+For tracked issue implementation, the Pull Request is the delivery object. A branch or commit by itself is not a completed delivery.
+
+The final report must include the issue number, active branch name, delivery commit hash, tests/validation actually performed and their results, PR link or ID, confirmation that the issue was updated with validation evidence, and anything still outstanding.
+
+The dedicated issue branch and PR delivery workflow are the default for issue implementation work and do not need to be requested separately.
 
 ## User-facing CLI commands
 
