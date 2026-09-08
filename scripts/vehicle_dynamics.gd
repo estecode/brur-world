@@ -4,11 +4,11 @@ extends RefCounted
 ## Integrates deterministic flat-road vehicle motion from generic control intent.
 ##
 ## Dependencies:
-## - Mutates VehicleState only; has no SceneTree, rendering, input, routing, traffic, or police dependency.
+## - Mutates VehicleState-compatible data only; has no SceneTree, rendering, input, routing, traffic, or police dependency.
 ## - Uses real SI units and explicit vehicle limits supplied by the adapter/configuration layer.
 
 func step(
-	state: VehicleState,
+	state,
 	throttle: float,
 	brake: float,
 	steering: float,
