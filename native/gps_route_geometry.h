@@ -133,6 +133,10 @@ private:
             const double ex = wanted.x - projected.x;
             const double ey = wanted.y - projected.y;
             const double distance_sq = ex * ex + ey * ey;
+            if (!std::isfinite(best.distance_sq)) {
+                best = {i, fraction, projected, distance_sq};
+                continue;
+            }
             const double tie_tolerance = 1e-10 * std::max({1.0, std::abs(best.distance_sq), std::abs(distance_sq)});
             if (distance_sq + tie_tolerance < best.distance_sq ||
                 (std::abs(distance_sq - best.distance_sq) <= tie_tolerance &&
