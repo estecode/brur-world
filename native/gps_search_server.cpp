@@ -187,6 +187,9 @@ int main(int argc, char **argv) {
         std::cerr << "[native-gps-search] ready on 127.0.0.1:" << port
                   << " | records " << index.count()
                   << " | mapped " << mapped.size() << " bytes"
+                  << " | accelerator " << (index.has_accelerator() ? "BSA1" : "none")
+                  << " | trigram entries " << index.accelerator_entry_count()
+                  << " | postings " << index.accelerator_posting_count()
                   << " | startup " << elapsed_ms(started, std::chrono::steady_clock::now()) << " ms\n";
 
         while (true) {
