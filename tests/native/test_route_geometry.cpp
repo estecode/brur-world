@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <vector>
 
-// Verifies portable BRH1 route densification for forward and reverse edge traversal.
+// Verifies portable BRH1 route densification for forward/reverse traversal and partial-edge snaps.
 // Dependencies: native/gps_route_geometry.h and standard C++20 only.
 
 namespace {
@@ -84,7 +84,18 @@ int main() {
         geometry.densify(partial);
         require(partial.points.size() >= 3, "partial edge must keep curved geometry between snaps");
         require(near(partial.points.front().x, 2.5) && near(partial.points.back().x, 7.5),
-                "partial route preserves snap anchors");
+                "partial route preserves anchors already on detailed shape");
+
+        auto chord_snapped = one_edge_result(0, {2.5, 0.0}, {7.5, 0.0});
+        geometry.densify(chord_snapped);
+        require(chord_snapped.points.size() >= 3,
+                "chord-snapped partial edge must keep detailed curved geometry");
+        require(chord_snapped.points.front().y > 0.5 && chord_snapped.points.back().y > 0.5,
+                "visible partial-edge endpoints must be projected onto detailed road shape");
+        require(!(near(chord_snapped.points.front().x, 2.5) && near(chord_snapped.points.front().y, 0.0)),
+                "raw BRG1 chord start must not create an off-road connector");
+        require(!(near(chord_snapped.points.back().x, 7.5) && near(chord_snapped.points.back().y, 0.0)),
+                "raw BRG1 chord target must not create an off-road connector");
 
         std::cout << "native route geometry tests: OK\n";
         return 0;
