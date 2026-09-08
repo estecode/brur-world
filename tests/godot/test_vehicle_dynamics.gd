@@ -6,6 +6,8 @@ extends SceneTree
 const VehicleStateScript = preload("res://scripts/vehicle_state.gd")
 const VehicleDynamicsScript = preload("res://scripts/vehicle_dynamics.gd")
 
+var _dynamics = VehicleDynamicsScript.new()
+
 func _init() -> void:
 	var forward = VehicleStateScript.new()
 	_step(forward, 1.0, 0.0, 0.0, 1.0)
@@ -44,7 +46,7 @@ func _init() -> void:
 	quit(0)
 
 func _step(state, throttle: float, brake: float, steering: float, delta_s: float) -> void:
-	VehicleDynamicsScript.step(state, throttle, brake, steering, delta_s, 4.5, 36.1, 3.0, 7.0, 5.0, 32.0)
+	_dynamics.step(state, throttle, brake, steering, delta_s, 4.5, 36.1, 3.0, 7.0, 5.0, 32.0)
 
 func _approx(a: float, b: float) -> bool:
 	return absf(a - b) < 0.00001
