@@ -26,7 +26,7 @@ status=$?
 set -e
 printf '%s\n' "$output"
 
-if [[ $status -ne 0 ]] || grep -Eq 'SCRIPT ERROR:|Parse Error:|Failed to load script' <<<"$output"; then
+if [[ $status -ne 0 ]] || grep -Eq 'SCRIPT ERROR:|Parse Error:|Failed to load script|(^|[[:space:]])ERROR:' <<<"$output"; then
   echo "music Godot tests: FAILED ($SCRIPT)" >&2
   exit 1
 fi
