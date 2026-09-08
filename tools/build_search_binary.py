@@ -4,8 +4,9 @@
 Dependencies:
 - Reads world_data/search_index.jsonl produced by build_search_index.py.
 - Writes pointer-free little-endian BSI2 consumed by native/gps_search_index.h.
-- Appends an optional BSA1 trigram accelerator so production queries do not scan
-  every Sweden record. The base BSI2 record/string layout remains unchanged.
+- Appends BSA1 trigram postings for full searchable text plus tagged display-only
+  postings so broad locality terms can resolve high-ranking visible-name matches
+  without scanning every record that merely contains the locality in a subtitle.
 - No runtime/Godot dependency.
 """
 
@@ -25,6 +26,7 @@ HEADER = struct.Struct("<4sIIIQQ")
 RECORD = struct.Struct("<" + "II" * 6 + "II" + "dd")
 ACCEL_ENTRY = struct.Struct("<III")
 ACCEL_FOOTER = struct.Struct("<4sIIIQQQ")
+DISPLAY_TRIGRAM_FLAG = 0x80000000
 assert HEADER.size == 32
 assert RECORD.size == 72
 assert ACCEL_ENTRY.size == 12
@@ -42,11 +44,8 @@ def _trigram_key(value: str) -> int:
     return encoded[0] | (encoded[1] << 8) | (encoded[2] << 16)
 
 
-def _record_trigrams(display: str, search_text: str) -> set[int]:
-    # Index word-local trigrams. Every existing ranking tier either contains the
-    # query literally or requires each query token to prefix a word, so any
-    # matching token of length >=3 must contain these trigrams.
-    normalized = normalize_search_text(f"{display} {search_text}")
+def _text_trigrams(value: str) -> set[int]:
+    normalized = normalize_search_text(value)
     keys: set[int] = set()
     for word in normalized.split():
         if len(word) < 3:
@@ -54,6 +53,10 @@ def _record_trigrams(display: str, search_text: str) -> set[int]:
         for offset in range(len(word) - 2):
             keys.add(_trigram_key(word[offset : offset + 3]))
     return keys
+
+
+def _record_trigrams(display: str, search_text: str) -> set[int]:
+    return _text_trigrams(f"{display} {search_text}")
 
 
 def _write_accelerator(out, postings_by_key: dict[int, array]) -> tuple[int, int]:
@@ -68,8 +71,6 @@ def _write_accelerator(out, postings_by_key: dict[int, array]) -> tuple[int, int
     postings_offset = out.tell()
     for key in ordered_keys:
         postings = postings_by_key[key]
-        # array('I') is native-endian. macOS build machines are little-endian,
-        # but keep the on-disk contract explicit for other build hosts.
         if struct.pack("=I", 1) != struct.pack("<I", 1):
             postings = array("I", postings)
             postings.byteswap()
@@ -152,6 +153,8 @@ def build_search_binary(source: Path, output: Path) -> Path:
 
                 for key in _record_trigrams(display, search_text):
                     postings_by_key.setdefault(key, array("I")).append(actual)
+                for key in _text_trigrams(display):
+                    postings_by_key.setdefault(key | DISPLAY_TRIGRAM_FLAG, array("I")).append(actual)
 
                 actual += 1
                 if actual % 250_000 == 0:
@@ -172,7 +175,7 @@ def build_search_binary(source: Path, output: Path) -> Path:
 
     print(
         f"[search-binary] output: {output} ({output.stat().st_size:,} bytes) | "
-        f"records={actual:,} | trigrams={trigram_count:,} | postings={posting_count:,} | "
+        f"records={actual:,} | trigram entries={trigram_count:,} | postings={posting_count:,} | "
         f"{time.monotonic() - started:.1f}s",
         flush=True,
     )
