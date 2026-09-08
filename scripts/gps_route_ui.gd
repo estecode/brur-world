@@ -47,11 +47,14 @@ func preference_label(preference: String) -> String:
 	var index: int = ROUTING_PREFERENCE_IDS.find(preference)
 	return ROUTING_PREFERENCE_LABELS[index] if index >= 0 else preference
 
-func set_waypoints(points: Array[Vector2]) -> void:
+func set_waypoints(points: Array) -> void:
 	_ensure_ui()
 	_waypoint_list.clear()
 	for index in range(points.size()):
-		var point: Vector2 = points[index]
+		var value: Variant = points[index]
+		if typeof(value) != TYPE_VECTOR2:
+			continue
+		var point: Vector2 = value
 		_waypoint_list.add_item("%d  %.0f, %.0f" % [index + 1, point.x, point.y])
 	_remove_waypoint_button.disabled = points.is_empty()
 	_clear_waypoints_button.disabled = points.is_empty()
