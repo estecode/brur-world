@@ -29,20 +29,30 @@ if [[ ! -x "$GODOT_BIN" ]]; then
   exit 2
 fi
 
-set +e
-GODOT_OUTPUT="$($GODOT_BIN --headless --path "$ROOT" --script tests/godot/test_gps_route_model.gd 2>&1)"
-GODOT_STATUS=$?
-set -e
-printf '%s\n' "$GODOT_OUTPUT"
+run_godot_contract() {
+  local script="$1"
+  local marker="$2"
+  local output
+  local status
 
-if [[ $GODOT_STATUS -ne 0 ]] || grep -Eq 'SCRIPT ERROR:|Parse Error:|Failed to load script' <<<"$GODOT_OUTPUT"; then
-  echo "issue #4 Godot GPS tests: FAILED" >&2
-  exit 1
-fi
+  set +e
+  output="$($GODOT_BIN --headless --path "$ROOT" --script "$script" 2>&1)"
+  status=$?
+  set -e
+  printf '%s\n' "$output"
 
-if ! grep -Fq 'godot gps route-model tests: OK' <<<"$GODOT_OUTPUT"; then
-  echo "issue #4 Godot GPS tests did not reach the success marker" >&2
-  exit 1
-fi
+  if [[ $status -ne 0 ]] || grep -Eq 'SCRIPT ERROR:|Parse Error:|Failed to load script' <<<"$output"; then
+    echo "issue #4 Godot GPS tests: FAILED ($script)" >&2
+    exit 1
+  fi
+
+  if ! grep -Fq "$marker" <<<"$output"; then
+    echo "issue #4 Godot GPS tests did not reach success marker: $marker" >&2
+    exit 1
+  fi
+}
+
+run_godot_contract tests/godot/test_gps_route_model.gd "godot gps route-model tests: OK"
+run_godot_contract tests/godot/test_gps_search_index.gd "godot gps search-index tests: OK"
 
 echo "issue #4 automated GPS tests: OK"
