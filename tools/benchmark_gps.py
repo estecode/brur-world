@@ -3,7 +3,8 @@
 
 Dependencies:
 - routing_graph_view.py memory-maps BRG1 without expanding Sweden into Python objects.
-- gps_routing.py performs snap indexing and route search.
+- gps_snap_index.py memory-maps the offline BRS1 snap index.
+- gps_routing.py performs route search and cost policy.
 - This is a measurement tool only; it does not affect runtime behavior.
 """
 
@@ -13,7 +14,8 @@ import argparse
 import time
 from pathlib import Path
 
-from gps_routing import EdgeCostPolicy, GraphRouter, RoadSnapIndex, RoutingPreference
+from gps_routing import EdgeCostPolicy, GraphRouter, RoutingPreference
+from gps_snap_index import PersistentRoadSnapIndex
 from routing_graph import RoutingProfile
 from routing_graph_view import RoutingGraphView
 
@@ -43,38 +45,48 @@ def _sample_pairs(node_count: int) -> tuple[tuple[str, int, int], ...]:
     )
 
 
-def benchmark(path: Path, max_snap_distance_m: float = 5000.0) -> int:
+def benchmark(path: Path, snap_path: Path, max_snap_distance_m: float = 5000.0) -> int:
     graph, _ = _timed("map BRG1", lambda: RoutingGraphView(path))
     try:
         print(f"[gps-bench] graph: {len(graph.nodes):,} nodes, {len(graph.edges):,} directed edges", flush=True)
-        snap_index, _ = _timed("build snap index", lambda: RoadSnapIndex(graph, RoutingProfile.NORMAL))
-        router = GraphRouter(graph, RoutingProfile.NORMAL)
+        snap_index, _ = _timed(
+            "map BRS1 snap index",
+            lambda: PersistentRoadSnapIndex(graph, snap_path, RoutingProfile.NORMAL),
+        )
+        try:
+            print(
+                f"[gps-bench] snap index: {snap_index.cell_count:,} cells, {snap_index.ref_count:,} refs",
+                flush=True,
+            )
+            router = GraphRouter(graph, RoutingProfile.NORMAL)
 
-        successful = 0
-        for name, start_node, target_node in _sample_pairs(len(graph.nodes)):
-            sx, sy = _node_world(graph, start_node)
-            tx, ty = _node_world(graph, target_node)
-            start, _ = _timed(f"{name} start snap", lambda sx=sx, sy=sy: snap_index.snap(sx, sy, max_snap_distance_m))
-            target, _ = _timed(f"{name} target snap", lambda tx=tx, ty=ty: snap_index.snap(tx, ty, max_snap_distance_m))
-            if start is None or target is None:
-                print(f"[gps-bench] {name}: snap failed", flush=True)
-                continue
-            for preference in RoutingPreference:
-                result, elapsed = _timed(
-                    f"{name} {preference.value}",
-                    lambda preference=preference: router.route_snaps(start, target, EdgeCostPolicy(preference)),
-                )
-                if result.success:
-                    successful += 1
-                    print(
-                        f"[gps-bench]   {result.distance_m / 1000.0:.1f} km | "
-                        f"{result.travel_time_s / 60.0:.1f} min | {len(result.steps):,} steps | "
-                        f"{elapsed * 1000.0:.2f} ms",
-                        flush=True,
+            successful = 0
+            for name, start_node, target_node in _sample_pairs(len(graph.nodes)):
+                sx, sy = _node_world(graph, start_node)
+                tx, ty = _node_world(graph, target_node)
+                start, _ = _timed(f"{name} start snap", lambda sx=sx, sy=sy: snap_index.snap(sx, sy, max_snap_distance_m))
+                target, _ = _timed(f"{name} target snap", lambda tx=tx, ty=ty: snap_index.snap(tx, ty, max_snap_distance_m))
+                if start is None or target is None:
+                    print(f"[gps-bench] {name}: snap failed", flush=True)
+                    continue
+                for preference in RoutingPreference:
+                    result, elapsed = _timed(
+                        f"{name} {preference.value}",
+                        lambda preference=preference: router.route_snaps(start, target, EdgeCostPolicy(preference)),
                     )
-                else:
-                    print(f"[gps-bench]   failed: {result.failure_reason}", flush=True)
-        return successful
+                    if result.success:
+                        successful += 1
+                        print(
+                            f"[gps-bench]   {result.distance_m / 1000.0:.1f} km | "
+                            f"{result.travel_time_s / 60.0:.1f} min | {len(result.steps):,} steps | "
+                            f"{elapsed * 1000.0:.2f} ms",
+                            flush=True,
+                        )
+                    else:
+                        print(f"[gps-bench]   failed: {result.failure_reason}", flush=True)
+            return successful
+        finally:
+            snap_index.close()
     finally:
         graph.close()
 
@@ -82,9 +94,14 @@ def benchmark(path: Path, max_snap_distance_m: float = 5000.0) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("graph", type=Path, nargs="?", default=Path("world_data/routing.brg"))
+    parser.add_argument("--snap-index", type=Path, default=Path("world_data/routing_snap.brs"))
     parser.add_argument("--max-snap-distance", type=float, default=5000.0)
     args = parser.parse_args()
-    successes = benchmark(args.graph, args.max_snap_distance)
+    if not args.snap_index.is_file():
+        raise SystemExit(
+            f"Snap index not found: {args.snap_index}. Run: python tools/build_snap_index.py {args.graph}"
+        )
+    successes = benchmark(args.graph, args.snap_index, args.max_snap_distance)
     print(f"[gps-bench] successful route/preference samples: {successes}", flush=True)
 
 
