@@ -67,6 +67,7 @@ func _read_time_snapshot() -> Dictionary:
 		var supplied: Variant = _time_source.call()
 		if supplied is Dictionary:
 			return supplied as Dictionary
+	# Temporary bridge until #31 supplies authoritative game time.
 	var local_time: Dictionary = Time.get_datetime_dict_from_system()
 	var time_zone: Dictionary = Time.get_time_zone_from_system()
 	return {
