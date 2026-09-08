@@ -42,6 +42,21 @@ The final report must include the issue number, active branch name, delivery com
 
 The dedicated issue branch and PR delivery workflow are the default for issue implementation work and do not need to be requested separately.
 
+## Dependency graph execution
+
+Treat the project roadmap as a dependency graph rather than a mandatory linear queue.
+
+For non-trivial tracked work:
+
+- Read the issue's `## Dependencies` section before starting.
+- An issue may be implemented when its real implementation dependencies are satisfied, regardless of its linear roadmap position.
+- Do not introduce artificial blockers merely because another issue is listed earlier.
+- `Independent` means no real implementation blocker; it does not override product priority or an explicit defer note.
+- `Blocked` means do not implement until the listed dependency is satisfied.
+- `Integration-sensitive` means implementation may proceed, but shared contracts/consumers and listed conflicts must be handled explicitly.
+- Treat `Can run in parallel with` as evidence-based. Do not claim parallel safety unless the relevant scopes/contracts have actually been assessed.
+- Keep parallel issue work isolated on separate branches and PRs.
+
 ## User-facing CLI commands
 
 When asking the user to run project commands manually:
