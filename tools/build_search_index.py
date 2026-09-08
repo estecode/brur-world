@@ -4,7 +4,7 @@
 Dependencies:
 - Reads world_data/pois.jsonl produced by build_features.py.
 - Reads the source PBF offline only to collect address positions; runtime never parses PBF.
-- Writes portable BSI1 JSONL consumed by gps_search.py.
+- Writes portable BSI1 JSONL consumed by gps_search.py and the BSI2 binary compiler.
 """
 
 from __future__ import annotations
@@ -22,14 +22,25 @@ from world_common import ensure_pbf, project
 PROGRESS_INTERVAL = 5_000_000
 
 
+def _join_unique(*values: str | None) -> str:
+    parts: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in parts:
+            parts.append(text)
+    return " ".join(parts)
+
+
 def _address_display(tags: osmium.osm.TagList) -> tuple[str, str] | None:
     number = tags.get("addr:housenumber")
     street = tags.get("addr:street") or tags.get("addr:place")
     if not number or not street:
         return None
-    locality = tags.get("addr:city") or tags.get("addr:suburb") or tags.get("addr:postcode") or ""
+    postcode = tags.get("addr:postcode")
+    locality = tags.get("addr:city") or tags.get("addr:suburb") or tags.get("addr:place")
     display = f"{street} {number}".strip()
-    return display, locality
+    subtitle = _join_unique(postcode, locality)
+    return display, subtitle
 
 
 class AddressHandler(osmium.SimpleHandler):
@@ -122,7 +133,12 @@ def load_named_pois(path: Path) -> list[SearchRecord]:
             osm_type = str(item.get("osm_type", "unknown"))
             osm_id = int(item["osm_id"])
             kind = _poi_kind(tags)
-            subtitle = tags.get("addr:city") or tags.get("addr:street") or kind.replace("_", " ")
+            postcode = tags.get("addr:postcode")
+            locality = tags.get("addr:city") or tags.get("addr:suburb")
+            street = tags.get("addr:street")
+            subtitle = _join_unique(postcode, locality, street)
+            if not subtitle:
+                subtitle = kind.replace("_", " ")
             records.append(
                 SearchRecord(
                     f"poi:{osm_type}:{osm_id}",
