@@ -38,6 +38,12 @@ func _init() -> void:
 	_assert(not AdapterScript._apply_destination(null, Vector2.ZERO), "null route layer is rejected")
 	_assert(not AdapterScript._apply_waypoint(route_layer, Vector2(INF, INF)), "invalid coordinate is rejected")
 
+	# These test doubles are Nodes but are never added to the SceneTree, so SceneTree
+	# shutdown will not own/free them for us. Free them explicitly to keep the
+	# headless contract leak-free and make ObjectDB warnings meaningful.
+	empty_route_layer.free()
+	route_layer.free()
+
 	print("godot gps search-route adapter tests: OK")
 	quit(0)
 
