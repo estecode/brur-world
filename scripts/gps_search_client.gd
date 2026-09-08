@@ -8,7 +8,7 @@ extends Node
 ## - Emits plain response dictionaries; owns no search UI, routing or rendering.
 
 signal ready_changed(ready: bool)
-signal response_received(response: Dictionary)
+signal response_received(query: String, response: Dictionary)
 signal status_changed(text: String)
 
 const SearchIndexScript = preload("res://scripts/gps_search_index.gd")
@@ -23,7 +23,9 @@ var server_peer: StreamPeerTCP
 var receive_buffer: String = ""
 var connect_retry_left: float = 0.0
 var in_flight: bool = false
+var in_flight_query: String = ""
 var queued_query: String = ""
+var queued_normalized: String = ""
 var queued_limit: int = 8
 var _ready_state: bool = false
 
@@ -44,11 +46,13 @@ func is_ready() -> bool:
 
 func request(query: String, limit: int = 8) -> void:
 	var normalized: String = SearchIndexScript.normalize_search_text(query)
-	queued_query = normalized
+	queued_query = query
+	queued_normalized = normalized
 	queued_limit = clampi(limit, 1, 32)
 	if normalized.is_empty():
 		queued_query = ""
-		response_received.emit({"success": true, "query_ms": 0.0, "count": 0, "results": []})
+		queued_normalized = ""
+		response_received.emit(query, {"success": true, "query_ms": 0.0, "count": 0, "results": []})
 		return
 	_try_send_queued()
 
@@ -57,7 +61,7 @@ func _start() -> void:
 		status_changed.emit("Native search server missing — run bash tools/build_native_gps.sh")
 		return
 	if not FileAccess.file_exists(INDEX_PATH):
-		status_changed.emit("Search index missing — build world_data/search_index.bsi")
+		status_changed.emit("Search index missing — run python tools/build_search_binary.py")
 		return
 	var server_path: String = ProjectSettings.globalize_path(SERVER_BINARY)
 	var index_path: String = ProjectSettings.globalize_path(INDEX_PATH)
@@ -99,20 +103,24 @@ func _try_connect() -> void:
 		connect_retry_left = CONNECT_RETRY_SECONDS
 
 func _try_send_queued() -> void:
-	if in_flight or queued_query.is_empty() or server_peer == null:
+	if in_flight or queued_normalized.is_empty() or server_peer == null:
 		return
 	if server_peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
 		return
 	var query: String = queued_query
+	var normalized: String = queued_normalized
 	var limit: int = queued_limit
 	queued_query = ""
-	var payload: String = "search %d %s\n" % [limit, query]
+	queued_normalized = ""
+	var payload: String = "search %d %s\n" % [limit, normalized]
 	var error: Error = server_peer.put_data(payload.to_utf8_buffer())
 	if error != OK:
 		status_changed.emit("Native search send failed")
 		queued_query = query
+		queued_normalized = normalized
 		return
 	in_flight = true
+	in_flight_query = query
 
 func _read_responses() -> void:
 	var available: int = server_peer.get_available_bytes()
@@ -127,12 +135,14 @@ func _read_responses() -> void:
 		receive_buffer = receive_buffer.substr(newline + 1)
 		if line.is_empty():
 			continue
+		var query: String = in_flight_query
 		in_flight = false
+		in_flight_query = ""
 		var value: Variant = JSON.parse_string(line)
 		if typeof(value) == TYPE_DICTIONARY:
-			response_received.emit(value as Dictionary)
+			response_received.emit(query, value as Dictionary)
 		else:
-			response_received.emit({"success": false, "adapter_error": "invalid_json"})
+			response_received.emit(query, {"success": false, "adapter_error": "invalid_json"})
 		_try_send_queued()
 
 func _set_ready(value: bool) -> void:
