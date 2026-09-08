@@ -10,6 +10,7 @@ from build_background import build_background
 from build_features import build_buildings, build_pois
 from build_roads import build_roads
 from build_routing import build_routing
+from build_search_binary import build_search_binary
 from build_search_index import build_search_index
 from world_common import ensure_pbf
 
@@ -43,7 +44,11 @@ def main() -> None:
 
     print()
     print("=== BUILD GPS SEARCH INDEX ===")
-    build_search_index(args.pbf, args.output)
+    search_jsonl = build_search_index(args.pbf, args.output)
+
+    print()
+    print("=== BUILD NATIVE GPS SEARCH INDEX ===")
+    build_search_binary(search_jsonl, args.output / "search_index.bsi")
 
     print()
     print(f"Done: {args.output / 'manifest.json'}")
