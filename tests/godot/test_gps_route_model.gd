@@ -1,7 +1,7 @@
 extends SceneTree
 
-## Headless input -> expected-output tests for the isolated Godot GPS route model.
-## Dependencies: scripts/gps_route_model.gd only; no world data, rendering or native server.
+## Headless input -> expected-output tests for isolated Godot GPS route state/protocol.
+## Dependencies: scripts/gps_route_model.gd and scripts/gps_protocol.gd only.
 
 func _init() -> void:
 	var model := GpsRouteModel.new()
@@ -20,6 +20,11 @@ func _init() -> void:
 	model.set_destination(Vector2(40.0, 40.0))
 	var stops := model.ordered_stops(Vector2(10.0, 10.0))
 	_assert(stops == [Vector2(10.0, 10.0), Vector2(20.0, 20.0), Vector2(30.0, 30.0), Vector2(40.0, 40.0)], "ordered stops are start -> waypoints -> destination")
+	_assert(
+		GpsProtocol.encode_plan(stops, "fastest") == "plan fastest 4 10.000000000 10.000000000 20.000000000 20.000000000 30.000000000 30.000000000 40.000000000 40.000000000\n",
+		"protocol is exact and deterministic"
+	)
+	_assert(GpsProtocol.encode_plan([Vector2(1.0, 2.0)], "fastest").is_empty(), "protocol rejects missing destination")
 
 	model.clear_waypoints()
 	_assert(model.ordered_stops(Vector2(10.0, 10.0)) == [Vector2(10.0, 10.0), Vector2(40.0, 40.0)], "clearing waypoints leaves direct route")
