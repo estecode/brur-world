@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build all Sweden world data: roads, routing, background, POIs and buildings."""
+"""Build all Sweden world data: roads, routing, background, POIs, search and buildings."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from build_background import build_background
 from build_features import build_buildings, build_pois
 from build_roads import build_roads
 from build_routing import build_routing
+from build_search_index import build_search_index
 from world_common import ensure_pbf
 
 
@@ -39,6 +40,10 @@ def main() -> None:
     print()
     print("=== BUILD BUILDINGS / RELATION POIS (HEAVY) ===")
     build_buildings(args.pbf, args.output)
+
+    print()
+    print("=== BUILD GPS SEARCH INDEX ===")
+    build_search_index(args.pbf, args.output)
 
     print()
     print(f"Done: {args.output / 'manifest.json'}")
