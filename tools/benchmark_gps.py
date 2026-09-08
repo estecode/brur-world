@@ -3,8 +3,8 @@
 
 Dependencies:
 - routing_graph_view.py memory-maps BRG1 without expanding Sweden into Python objects.
-- gps_snap_index.py memory-maps the offline BRS1 snap index.
-- gps_routing.py performs route search and cost policy.
+- gps_snap_index.py memory-maps the offline BRS2 snap index.
+- gps_astar.py performs large-graph A* route search.
 - This is a measurement tool only; it does not affect runtime behavior.
 """
 
@@ -14,7 +14,8 @@ import argparse
 import time
 from pathlib import Path
 
-from gps_routing import EdgeCostPolicy, GraphRouter, RoutingPreference
+from gps_astar import AStarGraphRouter
+from gps_routing import EdgeCostPolicy, RoutingPreference
 from gps_snap_index import PersistentRoadSnapIndex
 from routing_graph import RoutingProfile
 from routing_graph_view import RoutingGraphView
@@ -50,15 +51,20 @@ def benchmark(path: Path, snap_path: Path, max_snap_distance_m: float = 5000.0) 
     try:
         print(f"[gps-bench] graph: {len(graph.nodes):,} nodes, {len(graph.edges):,} directed edges", flush=True)
         snap_index, _ = _timed(
-            "map BRS1 snap index",
+            "map BRS2 snap index",
             lambda: PersistentRoadSnapIndex(graph, snap_path, RoutingProfile.NORMAL),
         )
         try:
             print(
-                f"[gps-bench] snap index: {snap_index.cell_count:,} cells, {snap_index.ref_count:,} refs",
+                f"[gps-bench] snap index: {snap_index.cell_count:,} cells, {snap_index.ref_count:,} refs, "
+                f"max legal {snap_index.max_legal_speed_kmh:.1f} km/h",
                 flush=True,
             )
-            router = GraphRouter(graph, RoutingProfile.NORMAL)
+            router = AStarGraphRouter(
+                graph,
+                RoutingProfile.NORMAL,
+                snap_index.max_legal_speed_kmh,
+            )
 
             successful = 0
             for name, start_node, target_node in _sample_pairs(len(graph.nodes)):
@@ -101,7 +107,14 @@ def main() -> None:
         raise SystemExit(
             f"Snap index not found: {args.snap_index}. Run: python tools/build_snap_index.py {args.graph}"
         )
-    successes = benchmark(args.graph, args.snap_index, args.max_snap_distance)
+    try:
+        successes = benchmark(args.graph, args.snap_index, args.max_snap_distance)
+    except ValueError as exc:
+        if "BRS2" in str(exc) or "snap index magic" in str(exc):
+            raise SystemExit(
+                f"{exc}\nRebuild the snap index: python tools/build_snap_index.py {args.graph}"
+            ) from exc
+        raise
     print(f"[gps-bench] successful route/preference samples: {successes}", flush=True)
 
 
