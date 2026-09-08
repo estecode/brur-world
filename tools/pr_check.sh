@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Validates an exact PR revision against local production data before launching Godot for any remaining human check.
-# Dependencies: git, Python 3, a local Godot executable, a C++20 compiler, ignored world_data, and Sweden PBF for stale routing rebuilds.
+# Dependencies: git, Python 3, a local Godot executable, a C++20 compiler, ignored world_data, and Sweden PBF for stale/invalid routing rebuilds.
 set -euo pipefail
 
 PR="${1:-}"
@@ -100,10 +100,21 @@ resolve_sweden_pbf() {
   data_dir="$(cd "$ROOT/.." && pwd)/data"
   candidate="$(find "$data_dir" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n 1)"
   if [[ -z "$candidate" ]]; then
-    printf 'PR_CHECK=FAIL routing dataset is stale and no Sweden PBF was found; set BRUR_WORLD_PBF\n' >&2
+    printf 'PR_CHECK=FAIL routing dataset is stale/invalid and no Sweden PBF was found; set BRUR_WORLD_PBF\n' >&2
     return 1
   fi
   printf '%s\n' "$candidate"
+}
+
+rebuild_routing_dataset() {
+  [[ -f "$TMP/tools/build_routing_dataset.py" ]] || {
+    printf 'PR_CHECK=FAIL PR has no routing dataset builder\n' >&2
+    return 1
+  }
+  local pbf
+  pbf="$(resolve_sweden_pbf)"
+  printf 'PR_CHECK=BUILD_ROUTING_DATASET pr=%s source=%s\n' "$PR" "$(basename "$pbf")"
+  "$PYTHON_BIN" "$TMP/tools/build_routing_dataset.py" "$pbf" --output "$WORLD_DATA"
 }
 
 printf 'PR_CHECK=PREPARE pr=%s\n' "$PR"
@@ -113,9 +124,7 @@ git -C "$ROOT" worktree add --quiet --detach "$TMP" FETCH_HEAD
 ADDED=1
 
 if [[ -f "$TMP/tools/build_routing_dataset.py" ]] && ! routing_dataset_ready; then
-  PBF="$(resolve_sweden_pbf)"
-  printf 'PR_CHECK=BUILD_ROUTING_DATASET pr=%s source=%s\n' "$PR" "$(basename "$PBF")"
-  "$PYTHON_BIN" "$TMP/tools/build_routing_dataset.py" "$PBF" --output "$WORLD_DATA"
+  rebuild_routing_dataset
 fi
 
 rm -rf "$TMP/world_data"
@@ -128,7 +137,12 @@ fi
 
 if [[ -f "$TMP/tools/check_route_geometry_dataset.py" ]]; then
   printf 'PR_CHECK=CHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
-  "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"
+  if ! "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"; then
+    printf 'PR_CHECK=ROUTE_GEOMETRY_INVALID pr=%s rebuilding source-aligned routing dataset\n' "$PR"
+    rebuild_routing_dataset
+    printf 'PR_CHECK=RECHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
+    "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"
+  fi
 fi
 
 printf 'PR_CHECK=RUN pr=%s revision=%s\n' "$PR" "$(git -C "$TMP" rev-parse --short HEAD)"
