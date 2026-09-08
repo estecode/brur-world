@@ -8,6 +8,8 @@ extends Node3D
 ## - GpsRouteRenderer/GpsRouteUi own GPS presentation; the player vehicle owns motion state/dynamics.
 ## - Main exposes WorldCoordinates; CameraRig receives the player as an explicit follow target.
 
+signal teleport_state_changed(armed: bool)
+
 const GpsClientScript = preload("res://scripts/gps_client.gd")
 const GpsInputAdapterScript = preload("res://scripts/gps_input_adapter.gd")
 const GpsProtocolScript = preload("res://scripts/gps_protocol.gd")
@@ -34,6 +36,7 @@ var _camera: Camera3D
 var _player_controller: Node
 var _route_follower: Node
 var _follow_enabled: bool = false
+var _teleport_armed: bool = false
 var _setup_started: bool = false
 
 var perf_queries: int = 0
@@ -77,12 +80,20 @@ func _input(event: InputEvent) -> void:
 	if not (event is InputEventMouseButton):
 		return
 	var mouse_event := event as InputEventMouseButton
-	if mouse_event.button_index != MOUSE_BUTTON_LEFT or not mouse_event.pressed or not mouse_event.shift_pressed:
+	if mouse_event.button_index != MOUSE_BUTTON_LEFT or not mouse_event.pressed:
 		return
 	if get_viewport().gui_get_hovered_control() != null:
 		return
 	var hit: Vector3 = _screen_to_ground(mouse_event.position)
 	if not hit.is_finite():
+		return
+	if _teleport_armed:
+		if teleport_player_to_world(hit):
+			set_teleport_armed(false)
+			_set_status("Player vehicle teleported")
+			get_viewport().set_input_as_handled()
+		return
+	if not mouse_event.shift_pressed:
 		return
 	var command: Dictionary = GpsInputAdapterScript.command_from_mouse(event, false, _world_to_absolute(hit))
 	if command.is_empty():
@@ -99,6 +110,27 @@ func _input(event: InputEvent) -> void:
 func _exit_tree() -> void:
 	if gps_client != null:
 		gps_client.call("stop")
+
+func get_player_vehicle() -> Node3D:
+	return player
+
+func set_teleport_armed(armed: bool) -> void:
+	if _teleport_armed == armed:
+		return
+	_teleport_armed = armed
+	teleport_state_changed.emit(armed)
+
+func is_teleport_armed() -> bool:
+	return _teleport_armed
+
+func teleport_player_to_world(world_position: Vector3) -> bool:
+	if player == null or not world_position.is_finite():
+		return false
+	var target := Vector3(world_position.x, player.global_position.y, world_position.z)
+	player.call("set_world_position", target)
+	player.call("stop")
+	_update_visual_height()
+	return true
 
 func set_destination(point: Vector2) -> bool:
 	if not point.is_finite():
