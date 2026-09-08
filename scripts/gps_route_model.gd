@@ -1,15 +1,23 @@
 class_name GpsRouteModel
 extends RefCounted
 
-## Owns GPS waypoint/destination state without UI, rendering or transport.
+## Owns GPS destination, waypoint and routing-preference state.
 ##
 ## Dependencies:
-## - Uses only projected Vector2 coordinates.
-## - GpsRouteLayer supplies the current start position and sends ordered_stops() to native GPS.
+## - Uses projected Vector2 coordinates and plain strings only.
+## - Has no UI, rendering, transport, search or SceneTree dependency.
+
+const ROUTING_PREFERENCES: Array[String] = [
+	"fastest",
+	"shortest",
+	"avoid_small_roads",
+	"avoid_major_roads",
+]
 
 var _waypoints: Array[Vector2] = []
 var _destination: Vector2 = Vector2.ZERO
 var _has_destination: bool = false
+var _preference: String = "fastest"
 
 func waypoint_count() -> int:
 	return _waypoints.size()
@@ -47,6 +55,15 @@ func has_destination() -> bool:
 
 func destination() -> Vector2:
 	return _destination
+
+func set_preference(value: String) -> bool:
+	if not value in ROUTING_PREFERENCES:
+		return false
+	_preference = value
+	return true
+
+func preference() -> String:
+	return _preference
 
 func ordered_stops(start: Vector2) -> Array[Vector2]:
 	var result: Array[Vector2] = [start]
