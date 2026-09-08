@@ -14,17 +14,82 @@
 //
 // Dependencies:
 // - gps_runtime.cpp owns BRG1/BRS2 loading, snapping, legality and A* primitives.
-// - Godot sends one projected-coordinate request per line over localhost TCP.
+// - Godot sends projected coordinates plus one routing preference over localhost TCP.
 //
 // The graph, snap index and routing context are created once and stay resident.
 // File-backed routing pages are also touched before the server announces ready,
 // so the first gameplay route does not pay Sweden-scale mmap page faults.
 
 namespace {
+enum class RoutingPreference : uint8_t {
+    Fastest,
+    Shortest,
+    AvoidSmallRoads,
+    AvoidMajorRoads,
+};
+
+constexpr double AVOID_PENALTY = 4.0;
+
 struct RoutePolylineResult {
     RouteResult metrics;
     std::vector<std::pair<double, double>> points;
 };
+
+RoutingPreference parse_preference(const std::string &value) {
+    if (value.empty() || value == "fastest") return RoutingPreference::Fastest;
+    if (value == "shortest") return RoutingPreference::Shortest;
+    if (value == "avoid_small_roads") return RoutingPreference::AvoidSmallRoads;
+    if (value == "avoid_major_roads") return RoutingPreference::AvoidMajorRoads;
+    throw std::runtime_error("unknown routing preference: " + value);
+}
+
+const char *preference_name(RoutingPreference preference) {
+    switch (preference) {
+        case RoutingPreference::Fastest: return "fastest";
+        case RoutingPreference::Shortest: return "shortest";
+        case RoutingPreference::AvoidSmallRoads: return "avoid_small_roads";
+        case RoutingPreference::AvoidMajorRoads: return "avoid_major_roads";
+    }
+    return "fastest";
+}
+
+double travel_time_s(const Edge &edge) {
+    return edge.length_m / (edge.speed_kmh / 3.6);
+}
+
+bool is_small_road(uint8_t road_class) {
+    // unclassified, residential, living_street, service, road, track
+    return road_class >= 10 && road_class <= 15;
+}
+
+bool is_major_road(uint8_t road_class) {
+    // motorway/link, trunk/link, primary/link
+    return road_class <= 5;
+}
+
+double route_edge_cost(const Edge &edge, RoutingPreference preference) {
+    if (preference == RoutingPreference::Shortest) return edge.length_m;
+    double cost = travel_time_s(edge);
+    if (preference == RoutingPreference::AvoidSmallRoads && is_small_road(edge.road_class))
+        cost *= AVOID_PENALTY;
+    else if (preference == RoutingPreference::AvoidMajorRoads && is_major_road(edge.road_class))
+        cost *= AVOID_PENALTY;
+    return cost;
+}
+
+double route_heuristic(const Router &router, uint32_t node_index,
+                       const std::vector<uint32_t> &targets, RoutingPreference preference) {
+    const Node node = router.graph.node(node_index);
+    double best = std::numeric_limits<double>::infinity();
+    for (uint32_t target_index : targets) {
+        const Node target = router.graph.node(target_index);
+        const double projected = std::hypot(static_cast<double>(node.x) - target.x,
+                                            static_cast<double>(node.y) - target.y);
+        best = std::min(best, projected * router.mercator_lower_bound_scale);
+    }
+    if (preference == RoutingPreference::Shortest) return best;
+    return best / router.max_speed_mps;
+}
 
 void append_point(std::vector<std::pair<double, double>> &points, double x, double y) {
     if (!points.empty()) {
@@ -34,7 +99,8 @@ void append_point(std::vector<std::pair<double, double>> &points, double x, doub
     points.emplace_back(x, y);
 }
 
-RoutePolylineResult route_with_polyline(Router &router, const Snap &start, const Snap &target) {
+RoutePolylineResult route_with_polyline(Router &router, const Snap &start, const Snap &target,
+                                        RoutingPreference preference) {
     RoutePolylineResult output;
     RouteResult &result = output.metrics;
     if (!start.ok || !target.ok) return output;
@@ -53,12 +119,12 @@ RoutePolylineResult route_with_polyline(Router &router, const Snap &start, const
             if (from.edge_index != to.edge_index || to.fraction + 1e-12 < from.fraction) continue;
             const Edge edge = router.graph.edge(from.edge_index);
             const double fraction = std::max(0.0, to.fraction - from.fraction);
-            const double cost = router.edge_cost(edge) * fraction;
+            const double cost = route_edge_cost(edge, preference) * fraction;
             if (!have_direct || cost < direct_cost) {
                 have_direct = true;
                 direct_cost = cost;
                 direct_distance = edge.length_m * fraction;
-                direct_time = router.edge_cost(edge) * fraction;
+                direct_time = travel_time_s(edge) * fraction;
             }
         }
     }
@@ -73,7 +139,8 @@ RoutePolylineResult route_with_polyline(Router &router, const Snap &start, const
     std::vector<uint32_t> target_nodes;
     for (const DirectedSnap &snap : target.directions) {
         const Edge edge = router.graph.edge(snap.edge_index);
-        terminals.push_back({edge.source, snap.edge_index, router.edge_cost(edge) * snap.fraction, snap.fraction});
+        terminals.push_back({edge.source, snap.edge_index,
+                             route_edge_cost(edge, preference) * snap.fraction, snap.fraction});
         target_nodes.push_back(edge.source);
     }
     std::sort(target_nodes.begin(), target_nodes.end());
@@ -82,7 +149,7 @@ RoutePolylineResult route_with_polyline(Router &router, const Snap &start, const
     std::priority_queue<QueueItem, std::vector<QueueItem>, QueueCompare> queue;
     for (const DirectedSnap &snap : start.directions) {
         const Edge edge = router.graph.edge(snap.edge_index);
-        const double cost = router.edge_cost(edge) * (1.0 - snap.fraction);
+        const double cost = route_edge_cost(edge, preference) * (1.0 - snap.fraction);
         const uint32_t node = edge.target;
         if (router.epoch[node] != router.current_epoch || cost < router.distance[node]) {
             router.epoch[node] = router.current_epoch;
@@ -90,7 +157,7 @@ RoutePolylineResult route_with_polyline(Router &router, const Snap &start, const
             router.parent_node[node] = UINT32_MAX;
             router.parent_edge[node] = UINT32_MAX;
             router.seed_edge[node] = snap.edge_index;
-            queue.push({cost + router.heuristic(node, target_nodes), cost, node});
+            queue.push({cost + route_heuristic(router, node, target_nodes, preference), cost, node});
         }
     }
     result.queue_peak = queue.size();
@@ -121,14 +188,14 @@ RoutePolylineResult route_with_polyline(Router &router, const Snap &start, const
             const Edge edge = router.graph.edge(edge_index);
             if (!edge_allowed(edge)) continue;
             ++result.relaxed;
-            const double candidate = item.cost + router.edge_cost(edge);
+            const double candidate = item.cost + route_edge_cost(edge, preference);
             if (router.epoch[edge.target] != router.current_epoch || candidate < router.distance[edge.target] - 1e-12) {
                 router.epoch[edge.target] = router.current_epoch;
                 router.distance[edge.target] = candidate;
                 router.parent_node[edge.target] = item.node;
                 router.parent_edge[edge.target] = edge_index;
                 router.seed_edge[edge.target] = router.seed_edge[item.node];
-                const double estimate = candidate + router.heuristic(edge.target, target_nodes);
+                const double estimate = candidate + route_heuristic(router, edge.target, target_nodes, preference);
                 if (estimate < best_total - 1e-12) {
                     queue.push({estimate, candidate, edge.target});
                     result.queue_peak = std::max(result.queue_peak, queue.size());
@@ -166,7 +233,7 @@ RoutePolylineResult route_with_polyline(Router &router, const Snap &start, const
     const Edge start_edge = router.graph.edge(start_edge_index);
     const double start_part = 1.0 - start_fraction;
     result.distance_m += start_edge.length_m * start_part;
-    result.travel_time_s += router.edge_cost(start_edge) * start_part;
+    result.travel_time_s += travel_time_s(start_edge) * start_part;
     if (start_part > 1e-12) ++result.steps;
 
     append_point(output.points, start.x, start.y);
@@ -178,7 +245,7 @@ RoutePolylineResult route_with_polyline(Router &router, const Snap &start, const
     for (uint32_t edge_index : middle_edges) {
         const Edge edge = router.graph.edge(edge_index);
         result.distance_m += edge.length_m;
-        result.travel_time_s += router.edge_cost(edge);
+        result.travel_time_s += travel_time_s(edge);
         ++result.steps;
         const Node node = router.graph.node(edge.target);
         append_point(output.points, node.x, node.y);
@@ -189,17 +256,19 @@ RoutePolylineResult route_with_polyline(Router &router, const Snap &start, const
         if (snap.edge_index == best_target_edge) target_fraction = snap.fraction;
     const Edge target_edge = router.graph.edge(best_target_edge);
     result.distance_m += target_edge.length_m * target_fraction;
-    result.travel_time_s += router.edge_cost(target_edge) * target_fraction;
+    result.travel_time_s += travel_time_s(target_edge) * target_fraction;
     if (target_fraction > 1e-12) ++result.steps;
     append_point(output.points, target.x, target.y);
     return output;
 }
 
 std::string route_json(const Snap &start, const Snap &target, const RoutePolylineResult &route,
-                       double start_snap_ms, double target_snap_ms, double route_ms) {
+                       RoutingPreference preference, double start_snap_ms,
+                       double target_snap_ms, double route_ms) {
     std::ostringstream out;
     out << std::setprecision(12);
     out << "{\"success\":" << (route.metrics.ok ? "true" : "false")
+        << ",\"preference\":\"" << preference_name(preference) << "\""
         << ",\"start_snap_ms\":" << start_snap_ms
         << ",\"target_snap_ms\":" << target_snap_ms
         << ",\"route_ms\":" << route_ms
@@ -238,18 +307,22 @@ std::string handle_query(const std::string &line, SnapIndex &snap_index, Router 
     double start_y = 0.0;
     double target_x = 0.0;
     double target_y = 0.0;
+    std::string preference_text = "fastest";
     if (!(input >> start_x >> start_y >> target_x >> target_y)) {
         return "{\"success\":false,\"adapter_error\":\"bad_request\"}\n";
     }
+    input >> preference_text;
+    const RoutingPreference preference = parse_preference(preference_text);
 
     const auto a = std::chrono::steady_clock::now();
     const Snap start = snap_index.snap(start_x, start_y);
     const auto b = std::chrono::steady_clock::now();
     const Snap target = snap_index.snap(target_x, target_y);
     const auto c = std::chrono::steady_clock::now();
-    const RoutePolylineResult route = route_with_polyline(router, start, target);
+    const RoutePolylineResult route = route_with_polyline(router, start, target, preference);
     const auto d = std::chrono::steady_clock::now();
-    return route_json(start, target, route, elapsed_ms(a, b), elapsed_ms(b, c), elapsed_ms(c, d));
+    return route_json(start, target, route, preference,
+                      elapsed_ms(a, b), elapsed_ms(b, c), elapsed_ms(c, d));
 }
 
 uint64_t warm_mapped_file(const MappedFile &file) {
@@ -330,9 +403,18 @@ int main(int argc, char **argv) {
                     const std::string line = pending.substr(0, newline);
                     pending.erase(0, newline + 1);
                     if (line.empty()) continue;
-                    if (!send_all(client_fd, handle_query(line, snap_index, router))) {
-                        connected = false;
-                        break;
+                    try {
+                        if (!send_all(client_fd, handle_query(line, snap_index, router))) {
+                            connected = false;
+                            break;
+                        }
+                    } catch (const std::exception &error) {
+                        std::ostringstream response;
+                        response << "{\"success\":false,\"adapter_error\":\"" << error.what() << "\"}\n";
+                        if (!send_all(client_fd, response.str())) {
+                            connected = false;
+                            break;
+                        }
                     }
                 }
             }
