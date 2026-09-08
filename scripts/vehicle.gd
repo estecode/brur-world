@@ -4,7 +4,7 @@ class_name Vehicle
 ## Adapts portable vehicle state/dynamics to a Godot Node3D vehicle instance.
 ##
 ## Dependencies:
-## - Owns VehicleState and delegates deterministic motion to VehicleDynamics.
+## - Owns portable vehicle state and delegates deterministic motion to VehicleDynamics.
 ## - Accepts generic controls from exactly one explicit control owner at a time.
 ## - Has no dependency on player input, GPS routing policy, traffic AI, police AI, or camera code.
 
@@ -42,10 +42,10 @@ enum ControlOwner {
 
 var emergency_lights_active: bool = false
 
-var _state: VehicleState = VehicleStateScript.new()
-var _dynamics: VehicleDynamics = VehicleDynamicsScript.new()
+var _state = VehicleStateScript.new()
+var _dynamics = VehicleDynamicsScript.new()
 var _state_initialized: bool = false
-var _control_owner: ControlOwner = ControlOwner.PLAYER
+var _control_owner: int = ControlOwner.PLAYER
 var _throttle_input: float = 0.0
 var _brake_input: float = 0.0
 var _steering_input: float = 0.0
@@ -54,7 +54,8 @@ func _physics_process(delta: float) -> void:
 	if not active:
 		return
 	_ensure_state_from_transform()
-	_dynamics.step(
+	_dynamics.call(
+		"step",
 		_state,
 		_throttle_input,
 		_brake_input,
@@ -73,16 +74,16 @@ func configure(new_kind: Kind) -> void:
 	kind = new_kind
 	_apply_default_profile()
 
-func set_control_owner(owner: ControlOwner) -> void:
+func set_control_owner(owner: int) -> void:
 	if _control_owner == owner:
 		return
 	_control_owner = owner
 	_clear_inputs_unchecked()
 
-func control_owner() -> ControlOwner:
+func control_owner() -> int:
 	return _control_owner
 
-func set_control_inputs(owner: ControlOwner, throttle: float, brake: float, steering: float) -> bool:
+func set_control_inputs(owner: int, throttle: float, brake: float, steering: float) -> bool:
 	if owner != _control_owner:
 		return false
 	_throttle_input = clampf(throttle, -1.0, 1.0)
@@ -90,7 +91,7 @@ func set_control_inputs(owner: ControlOwner, throttle: float, brake: float, stee
 	_steering_input = clampf(steering, -1.0, 1.0)
 	return true
 
-func clear_control_inputs(owner: ControlOwner) -> bool:
+func clear_control_inputs(owner: int) -> bool:
 	if owner != _control_owner:
 		return false
 	_clear_inputs_unchecked()
@@ -107,10 +108,10 @@ func set_heading_rad(new_heading_rad: float) -> void:
 	_state_initialized = true
 	rotation.y = _state.heading_rad
 
-func set_motion_state(new_speed_mps: float, new_heading_rad: float = NAN) -> void:
+func set_motion_state(new_speed_mps: float, new_heading_rad: float = INF) -> void:
 	_ensure_state_from_transform()
 	_state.speed_mps = clampf(new_speed_mps, -max_reverse_speed_mps, max_speed_mps)
-	if not is_nan(new_heading_rad):
+	if is_finite(new_heading_rad):
 		_state.heading_rad = wrapf(new_heading_rad, -PI, PI)
 	_apply_state_to_transform()
 
@@ -128,7 +129,7 @@ func speed_kmh() -> float:
 func heading_rad() -> float:
 	return _state.heading_rad
 
-func state_snapshot() -> VehicleState:
+func state_snapshot():
 	_ensure_state_from_transform()
 	return _state.duplicate_state()
 
