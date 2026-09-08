@@ -44,6 +44,37 @@ class AStarGpsTests(unittest.TestCase):
                 baseline.route_nodes(start, target, policy),
             )
 
+    def test_snapped_astar_matches_baseline_and_uses_one_search(self) -> None:
+        graph, _ = build_graph(
+            [
+                way(10, [1, 2, 4], [(13.0, 55.0), (13.001, 55.001), (13.003, 55.0)], highway="primary", maxspeed="100"),
+                way(20, [1, 3, 4], [(13.0, 55.0), (13.0015, 55.0), (13.003, 55.0)], highway="residential", maxspeed="40"),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            graph_path = Path(temp) / "routing.brg"
+            snap_path = Path(temp) / "routing_snap.brs"
+            write_brg1(graph, graph_path)
+            with RoutingGraphView(graph_path) as view:
+                build_snap_index(view, snap_path, cell_size_m=100.0)
+                with PersistentRoadSnapIndex(view, snap_path, RoutingProfile.NORMAL) as snap_index:
+                    edge_a = view.edges[0]
+                    edge_b = view.edges[len(view.edges) - 1]
+                    a0 = view.nodes[edge_a.source_index]
+                    a1 = view.nodes[edge_a.target_index]
+                    b0 = view.nodes[edge_b.source_index]
+                    b1 = view.nodes[edge_b.target_index]
+                    start = snap_index.snap((a0.x + a1.x) * 0.5, (a0.y + a1.y) * 0.5, 100.0)
+                    target = snap_index.snap((b0.x + b1.x) * 0.5, (b0.y + b1.y) * 0.5, 100.0)
+                    self.assertIsNotNone(start)
+                    self.assertIsNotNone(target)
+                    baseline = GraphRouter(view, RoutingProfile.NORMAL)
+                    astar = AStarGraphRouter(view, RoutingProfile.NORMAL, snap_index.max_legal_speed_kmh)
+                    for preference in RoutingPreference:
+                        policy = EdgeCostPolicy(preference)
+                        self.assertEqual(astar.route_snaps(start, target, policy), baseline.route_snaps(start, target, policy))
+                        self.assertEqual(astar.last_stats["searches"], 1)
+
     def test_brs2_stores_maximum_normal_profile_speed(self) -> None:
         graph, _ = build_graph(
             [
