@@ -38,7 +38,8 @@ func _test_library() -> void:
 	_assert(str(library.track("one")["title"]) == "One", "returned metadata cannot mutate library")
 
 func _test_empty_library_playback() -> void:
-	var state = MusicPlaybackStateScript.new(MusicLibraryScript.new(), 7)
+	var library = MusicLibraryScript.new()
+	var state = MusicPlaybackStateScript.new(library, 7)
 	_assert(not state.play(), "empty library cannot start playback")
 	_assert(not state.next(), "empty library next fails cleanly")
 	_assert(not state.previous(), "empty library previous fails cleanly")
