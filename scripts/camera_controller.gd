@@ -1,10 +1,10 @@
 extends Node3D
 
-## Drives the map camera from an explicit real-world altitude and exposes read-only view state.
+## Drives the map camera from an explicit real-world altitude and can follow an explicitly supplied world target.
 ##
 ## Dependencies:
 ## - camera_altitude_model.gd owns deterministic altitude state and readout formatting.
-## - Camera3D presents framing; explicitly wired presentation consumers may read focus/distance/position.
+## - Camera3D presents framing; an explicitly wired generic Node3D may be followed at driving altitude.
 
 signal view_changed(focus_world: Vector3, distance_m: float, camera_world_position: Vector3)
 
@@ -31,6 +31,7 @@ var focus: Vector3 = Vector3.ZERO
 var dragging: bool = false
 var last_mouse: Vector2 = Vector2.ZERO
 var altitude_model = null
+var _follow_target: Node3D = null
 
 @onready var camera: Camera3D = $Camera3D
 
@@ -39,6 +40,12 @@ func _ready() -> void:
 	_apply_camera()
 
 func _process(delta: float) -> void:
+	if is_driving_view() and _follow_target != null and is_instance_valid(_follow_target):
+		var target_position: Vector3 = _follow_target.global_position
+		focus = Vector3(target_position.x, 0.0, target_position.z)
+		_apply_camera()
+		return
+
 	var input: Vector2 = Vector2(
 		Input.get_axis("ui_left", "ui_right"),
 		Input.get_axis("ui_up", "ui_down")
@@ -210,6 +217,15 @@ func set_view_altitude(new_focus: Vector3, new_altitude_m: float) -> void:
 func set_altitude(new_altitude_m: float) -> void:
 	altitude_model.set_altitude(new_altitude_m)
 	_apply_camera()
+
+func set_follow_target(target: Node3D) -> void:
+	_follow_target = target
+
+func clear_follow_target() -> void:
+	_follow_target = null
+
+func is_driving_view() -> bool:
+	return get_altitude() < gameplay_blend_start_altitude_m
 
 func get_focus_world() -> Vector3:
 	return focus

@@ -12,6 +12,8 @@ signal preference_selected(preference: String)
 signal remove_waypoint_requested(index: int)
 signal clear_waypoints_requested
 signal follow_changed(enabled: bool)
+signal follow_changed(enabled: bool)
+signal follow_changed(enabled: bool)
 
 const OverlayLayoutScript = preload("res://scripts/overlay_layout.gd")
 const OverlayWindowHeaderScript = preload("res://scripts/overlay_window_header.gd")
@@ -30,6 +32,8 @@ const ROUTING_PREFERENCE_LABELS: Array[String] = [
 
 var _status_label: Label
 var _preference_select: OptionButton
+var _follow_toggle: CheckButton
+var _follow_toggle: CheckButton
 var _follow_toggle: CheckButton
 var _waypoint_list: ItemList
 var _remove_waypoint_button: Button
@@ -51,6 +55,26 @@ func set_preference(preference: String) -> void:
 func preference_label(preference: String) -> String:
 	var index: int = ROUTING_PREFERENCE_IDS.find(preference)
 	return ROUTING_PREFERENCE_LABELS[index] if index >= 0 else preference
+
+func set_follow_available(available: bool) -> void:
+	_ensure_ui()
+	_follow_toggle.disabled = not available
+	if not available:
+		_follow_toggle.set_pressed_no_signal(false)
+
+func set_follow_enabled(enabled: bool) -> void:
+	_ensure_ui()
+	_follow_toggle.set_pressed_no_signal(enabled)
+
+func set_follow_available(available: bool) -> void:
+	_ensure_ui()
+	_follow_toggle.disabled = not available
+	if not available:
+		_follow_toggle.set_pressed_no_signal(false)
+
+func set_follow_enabled(enabled: bool) -> void:
+	_ensure_ui()
+	_follow_toggle.set_pressed_no_signal(enabled)
 
 func set_follow_available(available: bool) -> void:
 	_ensure_ui()
@@ -140,6 +164,12 @@ func _ensure_ui() -> void:
 func _on_preference_selected(index: int) -> void:
 	if index >= 0 and index < ROUTING_PREFERENCE_IDS.size():
 		preference_selected.emit(ROUTING_PREFERENCE_IDS[index])
+
+func _on_follow_toggled(enabled: bool) -> void:
+	follow_changed.emit(enabled)
+
+func _on_follow_toggled(enabled: bool) -> void:
+	follow_changed.emit(enabled)
 
 func _on_follow_toggled(enabled: bool) -> void:
 	follow_changed.emit(enabled)
