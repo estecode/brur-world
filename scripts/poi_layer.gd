@@ -5,6 +5,7 @@ extends Node3D
 ## Dependencies:
 ## - world_coordinates.gd owns projected/world/tile coordinate conversion.
 ## - CameraRig supplies visible world bounds and Camera3D supplies hover projection.
+## - Presentation visibility affects markers/hover only; searchable POI data is owned elsewhere.
 
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 const WORLD_DIR: String = "res://world_data"
@@ -32,6 +33,7 @@ var hover_accum: float = 0.0
 var last_min_tile: Vector2i = Vector2i(999999, 999999)
 var last_max_tile: Vector2i = Vector2i(-999999, -999999)
 var last_marker_distance: float = -1.0
+var _presentation_enabled: bool = true
 
 var hover_layer: CanvasLayer = null
 var hover_panel: PanelContainer = null
@@ -42,6 +44,16 @@ func _ready() -> void:
 	_create_hover_ui()
 	_load_manifest()
 	_refresh(true)
+
+func set_presentation_enabled(enabled: bool) -> void:
+	_presentation_enabled = enabled
+	if marker_instance != null:
+		marker_instance.visible = enabled
+	if not enabled:
+		_hide_hover()
+
+func is_presentation_enabled() -> bool:
+	return _presentation_enabled
 
 func _process(delta: float) -> void:
 	if manifest.is_empty():
@@ -55,10 +67,11 @@ func _process(delta: float) -> void:
 		refresh_accum = 0.0
 		_refresh(false)
 
-	hover_accum += delta
-	if hover_accum >= HOVER_INTERVAL:
-		hover_accum = 0.0
-		_update_hover()
+	if _presentation_enabled:
+		hover_accum += delta
+		if hover_accum >= HOVER_INTERVAL:
+			hover_accum = 0.0
+			_update_hover()
 
 	if hover_panel != null and hover_panel.visible:
 		var pulse: float = 0.88 + 0.12 * sin(float(Time.get_ticks_msec()) * 0.008)
@@ -199,6 +212,7 @@ func _rebuild_markers() -> void:
 
 	marker_instance = MultiMeshInstance3D.new()
 	marker_instance.multimesh = multimesh
+	marker_instance.visible = _presentation_enabled
 	add_child(marker_instance)
 
 func _update_marker_scale(distance: float, force: bool = false) -> void:
@@ -226,7 +240,7 @@ func _poi_world_position(poi: Dictionary) -> Vector3:
 	) as Vector3
 
 func _update_hover() -> void:
-	if active_pois.is_empty() or camera == null:
+	if not _presentation_enabled or active_pois.is_empty() or camera == null:
 		_hide_hover()
 		return
 
