@@ -6,7 +6,7 @@ extends Node3D
 ## - gps_route_model.gd owns waypoint/destination state without UI or transport.
 ## - gps_protocol.gd owns request encoding.
 ## - bin/brur-gps-server owns snapping, cost policy and route search in resident native C++.
-## - Main owns world origin coordinates; CameraRig supplies the current screen ray.
+## - Main exposes the configured WorldCoordinates API; CameraRig supplies the current screen ray.
 
 const GpsRouteModelScript = preload("res://scripts/gps_route_model.gd")
 const GpsProtocolScript = preload("res://scripts/gps_protocol.gd")
@@ -513,18 +513,14 @@ func _project_lonlat(lon: float, lat: float) -> Vector2:
 	var y: float = EARTH_RADIUS * log(tan(PI / 4.0 + lat_radians / 2.0))
 	return Vector2(x, y)
 
+func _world_coordinates():
+	return main.call("get_world_coordinates")
+
 func _world_to_absolute(world_position: Vector3) -> Vector2:
-	return Vector2(
-		world_position.x + float(main.get("origin_x")),
-		-world_position.z + float(main.get("origin_y"))
-	)
+	return _world_coordinates().world_to_absolute(world_position)
 
 func _absolute_to_world(x: float, y: float) -> Vector3:
-	return Vector3(
-		x - float(main.get("origin_x")),
-		0.0,
-		-(y - float(main.get("origin_y")))
-	)
+	return _world_coordinates().absolute_to_world(Vector2(x, y))
 
 func _set_status(text: String) -> void:
 	if status_label != null:
