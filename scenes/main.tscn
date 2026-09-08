@@ -1,4 +1,4 @@
-[gd_scene load_steps=8 format=3]
+[gd_scene load_steps=9 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -7,6 +7,7 @@
 [ext_resource path="res://scripts/gps_route_layer.gd" type="Script" id="5_gps"]
 [ext_resource path="res://scripts/gps_search_ui.gd" type="Script" id="6_search_ui"]
 [ext_resource path="res://scripts/gps_search_route_adapter.gd" type="Script" id="7_search_adapter"]
+[ext_resource path="res://scripts/cloud_field_renderer.gd" type="Script" id="8_clouds"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -21,6 +22,9 @@ current = true
 fov = 40.0
 near = 10.0
 far = 2000000.0
+
+[node name="CloudField" type="MultiMeshInstance3D" parent="."]
+script = ExtResource("8_clouds")
 
 [node name="PoiLayer" type="Node3D" parent="."]
 script = ExtResource("4_poi")
