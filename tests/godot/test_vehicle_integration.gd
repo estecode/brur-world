@@ -7,6 +7,9 @@ const PLAYER_OWNER: int = 0
 const GPS_OWNER: int = 1
 
 func _init() -> void:
+	call_deferred("_run")
+
+func _run() -> void:
 	var player_scene := load("res://scenes/player_vehicle.tscn") as PackedScene
 	_assert(player_scene != null, "player vehicle scene loads")
 	var player: Node3D = player_scene.instantiate() as Node3D
