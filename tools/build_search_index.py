@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import osmium
@@ -31,24 +32,64 @@ def _join_unique(*values: str | None) -> str:
     return " ".join(parts)
 
 
-def _address_display(tags: osmium.osm.TagList) -> tuple[str, str] | None:
-    number = tags.get("addr:housenumber")
-    street = tags.get("addr:street") or tags.get("addr:place")
+def _clean(value: str | None) -> str:
+    return str(value or "").strip()
+
+
+def _address_parts(tags: osmium.osm.TagList) -> tuple[str, str, str, str] | None:
+    number = _clean(tags.get("addr:housenumber"))
+    street = _clean(tags.get("addr:street") or tags.get("addr:place"))
     if not number or not street:
         return None
-    postcode = tags.get("addr:postcode")
-    locality = tags.get("addr:city") or tags.get("addr:suburb") or tags.get("addr:place")
+    postcode = _clean(tags.get("addr:postcode"))
+    locality = _clean(tags.get("addr:city") or tags.get("addr:suburb") or tags.get("addr:place"))
     display = f"{street} {number}".strip()
-    subtitle = _join_unique(postcode, locality)
-    return display, subtitle
+    return display, street, postcode, locality
+
+
+def _postcode_key(street: str, locality: str) -> tuple[str, str] | None:
+    street_key = normalize_search_text(street)
+    locality_key = normalize_search_text(locality)
+    if not street_key or not locality_key:
+        return None
+    return street_key, locality_key
+
+
+@dataclass(frozen=True)
+class AddressFact:
+    osm_type: str
+    osm_id: int
+    display: str
+    street: str
+    postcode: str
+    locality: str
+    x: float
+    y: float
+
+
+def infer_postcode(
+    street: str,
+    locality: str,
+    known_postcodes: dict[tuple[str, str], set[str]],
+) -> str:
+    """Infer only unambiguous postcodes already observed on the same street/locality."""
+    key = _postcode_key(street, locality)
+    if key is None:
+        return ""
+    values = known_postcodes.get(key, set())
+    if len(values) != 1:
+        return ""
+    return next(iter(values))
 
 
 class AddressHandler(osmium.SimpleHandler):
-    """Collect address nodes/ways without retaining unrelated source objects."""
+    """Collect address facts, then deterministically enrich safe missing postcodes."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.records: list[SearchRecord] = []
+        self.facts: list[AddressFact] = []
+        self.known_postcodes: dict[tuple[str, str], set[str]] = {}
+        self.inferred_postcodes = 0
         self.scanned_nodes = 0
         self.scanned_ways = 0
         self.started = time.monotonic()
@@ -60,27 +101,41 @@ class AddressHandler(osmium.SimpleHandler):
             return
         elapsed = max(0.001, time.monotonic() - self.started)
         print(
-            f"[search] scanned {processed:,} OSM objects | addresses {len(self.records):,} | "
+            f"[search] scanned {processed:,} OSM objects | addresses {len(self.facts):,} | "
             f"{elapsed:.1f}s | {processed / elapsed:,.0f}/s",
             flush=True,
         )
         self._next_progress += PROGRESS_INTERVAL
 
+    def _append_fact(
+        self,
+        osm_type: str,
+        osm_id: int,
+        parts: tuple[str, str, str, str],
+        x: float,
+        y: float,
+    ) -> None:
+        display, street, postcode, locality = parts
+        self.facts.append(AddressFact(osm_type, osm_id, display, street, postcode, locality, x, y))
+        if postcode:
+            key = _postcode_key(street, locality)
+            if key is not None:
+                self.known_postcodes.setdefault(key, set()).add(postcode)
+
     def node(self, node: osmium.osm.Node) -> None:
         self.scanned_nodes += 1
         self._progress()
-        address = _address_display(node.tags)
-        if address is None or not node.location.valid():
+        parts = _address_parts(node.tags)
+        if parts is None or not node.location.valid():
             return
-        display, subtitle = address
         x, y = project(node.lon, node.lat)
-        self.records.append(_record("address", "node", int(node.id), display, subtitle, x, y))
+        self._append_fact("node", int(node.id), parts, x, y)
 
     def way(self, way: osmium.osm.Way) -> None:
         self.scanned_ways += 1
         self._progress()
-        address = _address_display(way.tags)
-        if address is None:
+        parts = _address_parts(way.tags)
+        if parts is None:
             return
         points: list[tuple[float, float]] = []
         try:
@@ -93,8 +148,23 @@ class AddressHandler(osmium.SimpleHandler):
             return
         x = sum(point[0] for point in points) / len(points)
         y = sum(point[1] for point in points) / len(points)
-        display, subtitle = address
-        self.records.append(_record("address", "way", int(way.id), display, subtitle, x, y))
+        self._append_fact("way", int(way.id), parts, x, y)
+
+    def build_records(self) -> list[SearchRecord]:
+        records: list[SearchRecord] = []
+        inferred = 0
+        for fact in self.facts:
+            postcode = fact.postcode
+            if not postcode:
+                postcode = infer_postcode(fact.street, fact.locality, self.known_postcodes)
+                if postcode:
+                    inferred += 1
+            subtitle = _join_unique(postcode, fact.locality)
+            records.append(
+                _record("address", fact.osm_type, fact.osm_id, fact.display, subtitle, fact.x, fact.y)
+            )
+        self.inferred_postcodes = inferred
+        return records
 
 
 def _record(kind: str, osm_type: str, osm_id: int, display: str, subtitle: str, x: float, y: float) -> SearchRecord:
@@ -162,10 +232,12 @@ def build_search_index(pbf: Path, output: Path) -> Path:
     print(f"[search] reading addresses from {pbf} ...", flush=True)
     handler = AddressHandler()
     handler.apply_file(str(pbf), locations=True)
-    records = poi_records + handler.records
+    address_records = handler.build_records()
+    records = poi_records + address_records
     path = output / "search_index.jsonl"
     write_search_index(records, path)
-    print(f"[search] addresses: {len(handler.records):,}", flush=True)
+    print(f"[search] addresses: {len(address_records):,}", flush=True)
+    print(f"[search] inferred missing postcodes: {handler.inferred_postcodes:,}", flush=True)
     print(f"[search] total searchable records: {len(records):,}", flush=True)
     print(f"[search] output: {path} ({path.stat().st_size:,} bytes)", flush=True)
     print(f"[search] build time: {time.monotonic() - started:.1f}s", flush=True)
