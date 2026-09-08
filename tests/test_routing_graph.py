@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from build_routing import build_routing
+from compressed_routing import build_compressed_graph
 from routing_graph import (
     AccessClass,
     AccessReason,
@@ -23,6 +24,7 @@ from routing_graph import (
     WayInput,
     build_graph,
     classify_access,
+    geodesic_distance_m,
     is_edge_allowed,
     load_brg1,
     parse_maxspeed,
@@ -165,6 +167,43 @@ class GraphConstructionTests(unittest.TestCase):
         self.assertEqual([e.flags for e in graph.edges], [e.flags for e in loaded.edges])
 
 
+class CompressedTopologyTests(unittest.TestCase):
+    def test_shape_nodes_are_collapsed_and_length_is_preserved(self) -> None:
+        source = way(
+            60,
+            [1, 2, 3, 4],
+            [(13.0, 55.0), (13.001, 55.0), (13.002, 55.001), (13.003, 55.001)],
+            highway="residential",
+            maxspeed="40",
+        )
+        graph, _ = build_compressed_graph([source])
+        self.assertEqual([node.osm_id for node in graph.nodes], [1, 4])
+        self.assertEqual(len(graph.edges), 2)
+        expected = sum(geodesic_distance_m(a, b) for a, b in zip(source.coordinates, source.coordinates[1:]))
+        self.assertAlmostEqual(graph.edges[0].length_m, expected, places=3)
+
+    def test_shared_node_remains_a_routing_breakpoint(self) -> None:
+        graph, _ = build_compressed_graph(
+            [
+                way(61, [1, 2, 3], [(13.0, 55.0), (13.001, 55.0), (13.002, 55.0)], highway="residential"),
+                way(62, [4, 2, 5], [(13.001, 54.999), (13.001, 55.0), (13.001, 55.001)], highway="service"),
+            ]
+        )
+        self.assertIn(2, [node.osm_id for node in graph.nodes])
+        node2_index = next(i for i, node in enumerate(graph.nodes) if node.osm_id == 2)
+        outgoing = graph.edges[
+            graph.nodes[node2_index].adjacency_offset : graph.nodes[node2_index].adjacency_offset + graph.nodes[node2_index].adjacency_count
+        ]
+        self.assertEqual(len(outgoing), 4)
+
+    def test_closed_way_keeps_two_breakpoints(self) -> None:
+        graph, _ = build_compressed_graph(
+            [way(63, [1, 2, 3, 4, 1], [(13.0, 55.0), (13.001, 55.0), (13.001, 55.001), (13.0, 55.001), (13.0, 55.0)], highway="residential")]
+        )
+        self.assertGreaterEqual(len(graph.nodes), 2)
+        self.assertGreaterEqual(len(graph.edges), 4)
+
+
 class EndToEndBuildTests(unittest.TestCase):
     def test_osm_fixture_to_brg1_to_loader(self) -> None:
         fixture = ROOT / "tests" / "fixtures" / "routing_minimal.osm"
@@ -175,6 +214,7 @@ class EndToEndBuildTests(unittest.TestCase):
             disk_report = json.loads((output / "routing_stats.json").read_text(encoding="utf-8"))
 
         self.assertEqual(report["format"], "BRG1")
+        self.assertTrue(report["topology_compressed"])
         self.assertEqual(report, disk_report)
         self.assertGreater(len(graph.nodes), 0)
         self.assertGreater(len(graph.edges), 0)
@@ -189,7 +229,7 @@ class EndToEndBuildTests(unittest.TestCase):
             graph_path = output / "routing.brg"
             graph_path.write_bytes(b"known-good-routing")
 
-            with patch("build_routing.write_brg1", side_effect=KeyboardInterrupt):
+            with patch("build_routing._write_graph", side_effect=KeyboardInterrupt):
                 with self.assertRaises(KeyboardInterrupt):
                     build_routing(fixture, output)
 
