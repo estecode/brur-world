@@ -4,9 +4,9 @@ extends Node3D
 ##
 ## Dependencies:
 ## - Owns Camera3D framing/input only.
-## - Emits focus/distance changes for explicitly wired presentation consumers.
+## - Emits focus, distance, and camera-position changes for explicitly wired presentation consumers.
 
-signal view_changed(focus_world: Vector3, distance_m: float)
+signal view_changed(focus_world: Vector3, distance_m: float, camera_world_position: Vector3)
 
 @export var min_distance: float = 1500.0
 @export var max_distance: float = 1400000.0
@@ -140,7 +140,7 @@ func _apply_camera() -> void:
 	camera.near = clampf(distance * 0.0025, 5.0, 2500.0)
 	var normal_far: float = maxf(25000.0, distance * 3.5)
 	camera.far = maxf(normal_far, _required_ground_far() * 1.12)
-	view_changed.emit(focus, distance)
+	view_changed.emit(focus, distance, camera.global_position)
 
 func _required_ground_far() -> float:
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
