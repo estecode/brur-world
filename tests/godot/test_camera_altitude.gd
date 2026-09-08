@@ -40,7 +40,7 @@ func _test_altitude_ui_structure() -> void:
 	var panel: Control = scene.get_node("CameraAltitudeUi/Panel") as Control
 	var label: Label = scene.get_node("CameraAltitudeUi/Panel/Label") as Label
 	_assert(altitude_ui != null, "altitude UI exists in the production scene")
-	_assert(altitude_ui.layer > 0, "altitude readout renders above normal HUD layers")
+	_assert(altitude_ui.layer >= 20, "altitude readout renders above the normal HUD")
 	_assert(panel != null and is_equal_approx(panel.anchor_left, 0.5) and is_equal_approx(panel.anchor_right, 0.5), "altitude readout is anchored at top centre, away from left debug overlay")
 	_assert(panel.offset_top >= 0.0 and panel.offset_bottom > panel.offset_top, "altitude readout has a visible vertical extent")
 	_assert(label != null and label.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "altitude text is centred in its compact panel")
