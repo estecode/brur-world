@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
 
-from tools.build_search_index import infer_postcode
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+
+from build_search_index import infer_postcode
 
 
 class SearchPostcodeEnrichmentTests(unittest.TestCase):
