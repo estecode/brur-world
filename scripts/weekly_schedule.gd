@@ -7,7 +7,7 @@
 ##
 extends RefCounted
 
-class_name WeeklySchedule
+const WorldClockScript = preload("res://scripts/world_clock.gd")
 
 var _windows: Array[Dictionary] = []
 
@@ -25,7 +25,7 @@ func add_window(days: Array, start_minute: int, end_minute: int) -> void:
 	var normalized_days: Array[int] = []
 	for day in days:
 		var weekday := int(day)
-		assert(weekday >= WorldClock.WEEKDAY_MONDAY and weekday <= WorldClock.WEEKDAY_SUNDAY)
+		assert(weekday >= WorldClockScript.WEEKDAY_MONDAY and weekday <= WorldClockScript.WEEKDAY_SUNDAY)
 		if not normalized_days.has(weekday):
 			normalized_days.append(weekday)
 
@@ -37,7 +37,7 @@ func add_window(days: Array, start_minute: int, end_minute: int) -> void:
 	})
 
 
-func is_active(clock: WorldClock) -> bool:
+func is_active(clock) -> bool:
 	var weekday := clock.get_weekday()
 	var seconds_of_day := clock.get_seconds_of_day()
 	for window in _windows:
@@ -57,6 +57,6 @@ func _window_is_active(window: Dictionary, weekday: int, seconds_of_day: float) 
 	if days.has(weekday) and seconds_of_day >= start_second:
 		return true
 	var previous_weekday := weekday - 1
-	if previous_weekday < WorldClock.WEEKDAY_MONDAY:
-		previous_weekday = WorldClock.WEEKDAY_SUNDAY
+	if previous_weekday < WorldClockScript.WEEKDAY_MONDAY:
+		previous_weekday = WorldClockScript.WEEKDAY_SUNDAY
 	return days.has(previous_weekday) and seconds_of_day < end_second
