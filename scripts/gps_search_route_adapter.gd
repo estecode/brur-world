@@ -3,11 +3,18 @@ extends Node
 ## Adapts offline search selections into explicit GPS destination/waypoint commands.
 ##
 ## Dependencies:
-## - Main supplies GpsSearchUi and GpsRouteLayer through setup().
+## - Game/harness composition supplies GpsSearchUi and GpsRouteLayer through exported NodePaths or setup().
 ## - Calls only GpsRouteLayer's public destination/waypoint API; owns no route state or search logic.
+
+@export var search_ui_path: NodePath
+@export var route_layer_path: NodePath
 
 var _search_ui: Node
 var _route_layer: Node
+
+func _ready() -> void:
+	if not search_ui_path.is_empty() and not route_layer_path.is_empty():
+		setup(get_node(search_ui_path), get_node(route_layer_path))
 
 func setup(search_ui: Node, route_layer: Node) -> void:
 	_search_ui = search_ui
