@@ -1,0 +1,17 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/main.tscn" id="1_main"]
+
+[node name="DrivingHarness" instance=ExtResource("1_main")]
+
+[node name="DrivingHelp" type="CanvasLayer" parent="."]
+layer = 60
+
+[node name="Panel" type="PanelContainer" parent="DrivingHelp"]
+offset_left = 14.0
+offset_top = 174.0
+offset_right = 430.0
+offset_bottom = 242.0
+
+[node name="Label" type="Label" parent="DrivingHelp/Panel"]
+text = "DRIVING HARNESS\nZoom in: W/S/A/D + Space · GPS: Follow route on/off"
