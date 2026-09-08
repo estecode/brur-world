@@ -98,7 +98,7 @@ func _start_current_track() -> bool:
 	if asset_path.is_empty():
 		_state.stop()
 		return false
-	var stream := load(asset_path) as AudioStream
+	var stream := ResourceLoader.load(asset_path, "", ResourceLoader.CACHE_MODE_IGNORE) as AudioStream
 	if stream == null:
 		_state.stop()
 		push_warning("MusicPlayer could not load track: %s" % asset_path)
