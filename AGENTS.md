@@ -60,16 +60,19 @@ Every tracked issue PR and final chat report must contain these decision fields:
 <remaining risks, untested areas, known gaps>
 
 **Merge recommendation**
-READY | READY WITH MANUAL CHECK | NOT READY
+MERGE | CHECK THEN MERGE | DO NOT MERGE
+
+**Next action**
+<required when recommendation is CHECK THEN MERGE or DO NOT MERGE; one short concrete instruction>
 ```
 
 Evaluate the recommendation strictly:
 
-- `READY` — All relevant available validation for the touched scope passed. No known merge blocker remains.
-- `READY WITH MANUAL CHECK` — Automated/relevant validation passed, but one meaningful runtime, visual, hardware, production-data, or environment-specific check could not be performed by the agent and should be done before merge.
-- `NOT READY` — A relevant check fails, a material requirement is unresolved, or a known risk is too large to recommend merge.
+- `MERGE` — All relevant available validation for the touched scope passed. No known merge blocker remains. No further relevant check is required before merge.
+- `CHECK THEN MERGE` — Relevant automated/agent-executable validation passed, but one meaningful runtime, visual, hardware, production-data, environment-specific, or other human-executable check remains. State exactly what to do in `Next action`.
+- `DO NOT MERGE` — A relevant check fails, a material requirement is unresolved, or a known risk is too large to recommend merge. State exactly what must be fixed or resolved in `Next action`.
 
-Do not downgrade work to `READY WITH MANUAL CHECK` merely because this is a Godot project. The missing runtime/manual check must be materially relevant to the touched scope. For runtime or presentation changes, explicitly state any concrete Godot scene/harness check the user should perform before merge when the agent could not perform it.
+Do not use `CHECK THEN MERGE` merely because this is a Godot project. The remaining check must be materially relevant to the touched scope. For runtime or presentation changes, state the concrete Godot scene/harness check when that is the remaining action. Never use vague `manual check` wording when a specific action can be named.
 
 The final report must also include the issue number, active branch name, delivery commit hash, tests/validation actually performed and their results, PR link or ID, confirmation that the issue was updated with validation evidence, and anything still outstanding.
 
