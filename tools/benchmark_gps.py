@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Benchmark deterministic GPS routing on BRG1 with persistent accelerators.
+"""Benchmark deterministic GPS routing on a BRG1 graph.
 
 Dependencies:
 - routing_graph_view.py memory-maps BRG1 without expanding Sweden into Python objects.
 - gps_snap_index.py memory-maps the offline BRS2 snap index.
-- gps_incoming_index.py memory-maps BRI1 reverse adjacency.
-- gps_bidirectional.py performs exact large-graph bidirectional path search.
+- gps_bidirectional.py performs exact large-graph bidirectional routing.
+- gps_incoming_index.py supplies reverse adjacency for the bidirectional search.
 - This is a measurement tool only; it does not affect runtime behavior.
 """
 
@@ -59,21 +59,26 @@ def benchmark(path: Path, snap_path: Path, incoming_path: Path, max_snap_distanc
         try:
             print(
                 f"[gps-bench] snap index: {snap_index.cell_count:,} cells, {snap_index.ref_count:,} refs, "
-                f"max legal {snap_index.max_legal_speed_kmh:.1f} km/h",
+                f"cell {snap_index.cell_size_m:.0f} m, max legal {snap_index.max_legal_speed_kmh:.1f} km/h",
                 flush=True,
             )
-            incoming, _ = _timed(
-                "map BRI1 incoming index",
-                lambda: IncomingEdgeIndex(incoming_path, len(graph.nodes), len(graph.edges)),
-            )
+            incoming_index, _ = _timed("map BRI1 incoming index", lambda: IncomingEdgeIndex(incoming_path))
             try:
-                router = BidirectionalGraphRouter(graph, RoutingProfile.NORMAL, incoming)
+                router = BidirectionalGraphRouter(graph, RoutingProfile.NORMAL, incoming_index)
                 successful = 0
                 for name, start_node, target_node in _sample_pairs(len(graph.nodes)):
                     sx, sy = _node_world(graph, start_node)
                     tx, ty = _node_world(graph, target_node)
-                    start, _ = _timed(f"{name} start snap", lambda sx=sx, sy=sy: snap_index.snap(sx, sy, max_snap_distance_m))
-                    target, _ = _timed(f"{name} target snap", lambda tx=tx, ty=ty: snap_index.snap(tx, ty, max_snap_distance_m))
+                    (start, start_candidates), _ = _timed(
+                        f"{name} start snap",
+                        lambda sx=sx, sy=sy: snap_index.snap_with_stats(sx, sy, max_snap_distance_m),
+                    )
+                    print(f"[gps-bench]   start candidates: {start_candidates:,}", flush=True)
+                    (target, target_candidates), _ = _timed(
+                        f"{name} target snap",
+                        lambda tx=tx, ty=ty: snap_index.snap_with_stats(tx, ty, max_snap_distance_m),
+                    )
+                    print(f"[gps-bench]   target candidates: {target_candidates:,}", flush=True)
                     if start is None or target is None:
                         print(f"[gps-bench] {name}: snap failed", flush=True)
                         continue
@@ -94,7 +99,7 @@ def benchmark(path: Path, snap_path: Path, incoming_path: Path, max_snap_distanc
                             print(f"[gps-bench]   failed: {result.failure_reason}", flush=True)
                 return successful
             finally:
-                incoming.close()
+                incoming_index.close()
         finally:
             snap_index.close()
     finally:
@@ -116,18 +121,7 @@ def main() -> None:
         raise SystemExit(
             f"Incoming index not found: {args.incoming_index}. Run: python tools/build_incoming_index.py {args.graph}"
         )
-    try:
-        successes = benchmark(args.graph, args.snap_index, args.incoming_index, args.max_snap_distance)
-    except ValueError as exc:
-        if "BRS2" in str(exc) or "snap index magic" in str(exc):
-            raise SystemExit(
-                f"{exc}\nRebuild the snap index: python tools/build_snap_index.py {args.graph}"
-            ) from exc
-        if "BRI1" in str(exc) or "incoming index" in str(exc):
-            raise SystemExit(
-                f"{exc}\nRebuild the incoming index: python tools/build_incoming_index.py {args.graph}"
-            ) from exc
-        raise
+    successes = benchmark(args.graph, args.snap_index, args.incoming_index, args.max_snap_distance)
     print(f"[gps-bench] successful route/preference samples: {successes}", flush=True)
 
 
