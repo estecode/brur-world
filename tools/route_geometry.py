@@ -27,7 +27,7 @@ class RouteGeometryEntry:
 
 
 class RouteGeometryView:
-    """Small in-memory reader used by deterministic tests and offline validation."""
+    """Small in-memory reader used by deterministic tests."""
 
     def __init__(self, data: bytes) -> None:
         if len(data) < HEADER.size:
@@ -65,8 +65,20 @@ class RouteGeometryView:
         return tuple(points)
 
 
-def validate_route_geometry(path: Path, edge_count: int) -> RouteGeometryView:
-    view = RouteGeometryView.load(path)
-    if view.edge_count != edge_count:
-        raise ValueError(f"BRH1 edge count mismatch: expected {edge_count}, got {view.edge_count}")
-    return view
+def validate_route_geometry(path: Path, edge_count: int) -> tuple[int, int]:
+    """Validate a potentially huge BRH1 file using only its header and file size."""
+    path = Path(path)
+    with path.open("rb") as handle:
+        raw_header = handle.read(HEADER.size)
+    if len(raw_header) != HEADER.size:
+        raise ValueError("BRH1 header is truncated")
+    magic, written_edges, point_count = HEADER.unpack(raw_header)
+    if magic != MAGIC:
+        raise ValueError(f"Unsupported route geometry magic: {magic!r}")
+    if written_edges != edge_count:
+        raise ValueError(f"BRH1 edge count mismatch: expected {edge_count}, got {written_edges}")
+    expected = HEADER.size + written_edges * EDGE_RECORD.size + point_count * POINT_RECORD.size
+    actual = path.stat().st_size
+    if actual != expected:
+        raise ValueError(f"BRH1 file size mismatch: expected {expected}, got {actual}")
+    return written_edges, point_count
