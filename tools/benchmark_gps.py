@@ -5,6 +5,7 @@ Dependencies:
 - routing_graph_view.py memory-maps BRG1 without expanding Sweden into Python objects.
 - gps_snap_index.py memory-maps the offline BRS2 snap index.
 - gps_astar.py performs one admissible multi-source/multi-target A* search for snapped routes.
+- world_common.py projects stable geographic benchmark points into world coordinates.
 - This is a measurement tool only; it does not affect runtime behavior.
 """
 
@@ -19,6 +20,16 @@ from gps_routing import EdgeCostPolicy, RoutingPreference
 from gps_snap_index import PersistentRoadSnapIndex
 from routing_graph import RoutingProfile
 from routing_graph_view import RoutingGraphView
+from world_common import project
+
+
+# Real geographic pairs avoid the previous array-index sampling problem where a
+# nominal "short" case could accidentally be 360 km or land on a non-routable edge.
+BENCHMARK_CASES = (
+    ("city", (18.0686, 59.3293), (18.0009, 59.3600)),          # Stockholm -> Solna
+    ("regional", (18.0686, 59.3293), (17.6389, 59.8586)),      # Stockholm -> Uppsala
+    ("long", (18.0686, 59.3293), (11.9746, 57.7089)),          # Stockholm -> Gothenburg
+)
 
 
 def _timed(label: str, fn):
@@ -29,24 +40,30 @@ def _timed(label: str, fn):
     return result, elapsed
 
 
-def _node_world(graph, index: int) -> tuple[float, float]:
-    node = graph.nodes[index]
-    return node.x, node.y
+def _parse_preferences(value: str) -> tuple[RoutingPreference, ...]:
+    if value == "all":
+        return tuple(RoutingPreference)
+    wanted = []
+    for item in value.split(","):
+        text = item.strip()
+        if not text:
+            continue
+        try:
+            wanted.append(RoutingPreference(text))
+        except ValueError as exc:
+            choices = ", ".join(preference.value for preference in RoutingPreference)
+            raise argparse.ArgumentTypeError(f"unknown preference {text!r}; use all or one of: {choices}") from exc
+    if not wanted:
+        raise argparse.ArgumentTypeError("at least one routing preference is required")
+    return tuple(wanted)
 
 
-def _sample_pairs(node_count: int) -> tuple[tuple[str, int, int], ...]:
-    if node_count < 2:
-        return ()
-    anchors = [0, node_count // 8, node_count // 3, node_count // 2, (node_count * 3) // 4, node_count - 1]
-    anchors = [max(0, min(node_count - 1, value)) for value in anchors]
-    return (
-        ("short", anchors[1], anchors[2]),
-        ("medium", anchors[1], anchors[4]),
-        ("long", anchors[0], anchors[-1]),
-    )
-
-
-def benchmark(path: Path, snap_path: Path, max_snap_distance_m: float = 250.0) -> int:
+def benchmark(
+    path: Path,
+    snap_path: Path,
+    max_snap_distance_m: float = 250.0,
+    preferences: tuple[RoutingPreference, ...] = (RoutingPreference.FASTEST,),
+) -> int:
     graph, _ = _timed("map BRG1", lambda: RoutingGraphView(path))
     try:
         print(f"[gps-bench] graph: {len(graph.nodes):,} nodes, {len(graph.edges):,} directed edges", flush=True)
@@ -72,9 +89,9 @@ def benchmark(path: Path, snap_path: Path, max_snap_distance_m: float = 250.0) -
                 snap_index.max_legal_speed_kmh,
             )
             successful = 0
-            for name, start_node, target_node in _sample_pairs(len(graph.nodes)):
-                sx, sy = _node_world(graph, start_node)
-                tx, ty = _node_world(graph, target_node)
+            for name, start_lonlat, target_lonlat in BENCHMARK_CASES:
+                sx, sy = project(*start_lonlat)
+                tx, ty = project(*target_lonlat)
                 (start, start_candidates), _ = _timed(
                     f"{name} start snap",
                     lambda sx=sx, sy=sy: snap_index.snap_with_stats(sx, sy, max_snap_distance_m),
@@ -88,7 +105,10 @@ def benchmark(path: Path, snap_path: Path, max_snap_distance_m: float = 250.0) -
                 if start is None or target is None:
                     print(f"[gps-bench] {name}: snap failed", flush=True)
                     continue
-                for preference in RoutingPreference:
+                if not start.directions or not target.directions:
+                    raise RuntimeError("BRS2 returned a snapped physical segment without a legal NORMAL direction")
+                for preference in preferences:
+                    router.last_stats = {}
                     result, elapsed = _timed(
                         f"{name} {preference.value}",
                         lambda preference=preference: router.route_snaps(start, target, EdgeCostPolicy(preference)),
@@ -122,12 +142,18 @@ def main() -> None:
     parser.add_argument("graph", type=Path, nargs="?", default=Path("world_data/routing.brg"))
     parser.add_argument("--snap-index", type=Path, default=Path("world_data/routing_snap.brs"))
     parser.add_argument("--max-snap-distance", type=float, default=250.0)
+    parser.add_argument(
+        "--preferences",
+        type=_parse_preferences,
+        default=(RoutingPreference.FASTEST,),
+        help="comma-separated routing preferences or 'all' (default: fastest)",
+    )
     args = parser.parse_args()
     if not args.snap_index.is_file():
         raise SystemExit(
             f"Snap index not found: {args.snap_index}. Run: python tools/build_snap_index.py {args.graph}"
         )
-    successes = benchmark(args.graph, args.snap_index, args.max_snap_distance)
+    successes = benchmark(args.graph, args.snap_index, args.max_snap_distance, args.preferences)
     print(f"[gps-bench] successful route/preference samples: {successes}", flush=True)
 
 
