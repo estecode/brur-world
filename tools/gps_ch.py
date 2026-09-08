@@ -260,11 +260,6 @@ class CHGraphRouter(GraphRouter):
                             backward_next[edge.source_index] = (node_index, edge_index)
                             heapq.heappush(backward_queue, (candidate, edge.source_index))
 
-            forward_min = forward_queue[0][0] if forward_queue else math.inf
-            backward_min = backward_queue[0][0] if backward_queue else math.inf
-            if meeting is not None and forward_min + backward_min >= best_path - 1e-12:
-                break
-
         if meeting is None:
             return RouteResult(False, failure_reason="unreachable")
 
