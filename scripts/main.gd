@@ -1,7 +1,13 @@
 extends Node3D
 
-# Streams portable BRT1 road tiles and renders the BRM2 Sweden background map.
+## Streams portable BRT1 road tiles and renders the BRM2 Sweden background map.
+##
+## Dependencies:
+## - world_coordinates.gd owns projected/world/tile coordinate conversion.
+## - CameraRig supplies visible world bounds and zoom distance.
+## - world_data manifest, BRT1 tiles, and BRM2 background provide runtime map data.
 
+const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 const WORLD_DIR: String = "res://world_data"
 const ROAD_MAGIC: String = "BRT1"
 const MAP_MAGIC: String = "BRM2"
@@ -23,6 +29,7 @@ var manifest: Dictionary = {}
 var tile_size: float = 32000.0
 var origin_x: float = 0.0
 var origin_y: float = 0.0
+var world_coordinates = WorldCoordinatesScript.new(Vector2.ZERO, 32000.0)
 
 var loaded: Dictionary = {}
 var mesh_cache: Dictionary = {}
@@ -83,7 +90,11 @@ func _load_manifest() -> bool:
 	tile_size = float(manifest.get("tile_size", 32000.0))
 	origin_x = float(manifest.get("origin_x", 0.0))
 	origin_y = float(manifest.get("origin_y", 0.0))
+	world_coordinates = WorldCoordinatesScript.new(Vector2(origin_x, origin_y), tile_size)
 	return true
+
+func get_world_coordinates():
+	return world_coordinates
 
 func _setup_lighting() -> void:
 	sun.rotation_degrees = Vector3(-48.0, -32.0, 0.0)
@@ -168,14 +179,11 @@ func _visible_tile_bounds() -> Array[Vector2i]:
 	var focus: Vector3 = camera_rig.get_focus_world()
 	points.append(focus)
 	for point in points:
-		var abs_x: float = point.x + origin_x
-		var abs_y: float = -point.z + origin_y
-		var tx: int = floori(abs_x / tile_size)
-		var ty: int = floori(abs_y / tile_size)
-		min_tx = mini(min_tx, tx)
-		min_ty = mini(min_ty, ty)
-		max_tx = maxi(max_tx, tx)
-		max_ty = maxi(max_ty, ty)
+		var tile: Vector2i = world_coordinates.world_to_tile(point)
+		min_tx = mini(min_tx, tile.x)
+		min_ty = mini(min_ty, tile.y)
+		max_tx = maxi(max_tx, tile.x)
+		max_ty = maxi(max_ty, tile.y)
 	var margin: int = 2
 	return [Vector2i(min_tx - margin, min_ty - margin), Vector2i(max_tx + margin, max_ty + margin)]
 
@@ -266,7 +274,7 @@ func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 		return null
 	var instance: MeshInstance3D = MeshInstance3D.new()
 	instance.mesh = mesh
-	instance.position = Vector3(tx * tile_size - origin_x, _road_height(), -(ty * tile_size - origin_y))
+	instance.position = world_coordinates.tile_origin_world(Vector2i(tx, ty), _road_height())
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -358,21 +366,18 @@ func _load_background() -> void:
 	var accepted: int = 0
 	for _triangle_index in range(triangle_count):
 		var kind: int = file.get_8()
-		var x1: float = file.get_float() - origin_x
-		var y1: float = file.get_float() - origin_y
-		var x2: float = file.get_float() - origin_x
-		var y2: float = file.get_float() - origin_y
-		var x3: float = file.get_float() - origin_x
-		var y3: float = file.get_float() - origin_y
+		var p1: Vector3 = world_coordinates.absolute_to_world(Vector2(file.get_float(), file.get_float()))
+		var p2: Vector3 = world_coordinates.absolute_to_world(Vector2(file.get_float(), file.get_float()))
+		var p3: Vector3 = world_coordinates.absolute_to_world(Vector2(file.get_float(), file.get_float()))
 		if kind < 0 or kind >= tools.size():
 			continue
 		var st: SurfaceTool = tools[kind]
 		st.set_normal(Vector3.UP)
-		st.add_vertex(Vector3(x1, 0.0, -y1))
+		st.add_vertex(p1)
 		st.set_normal(Vector3.UP)
-		st.add_vertex(Vector3(x2, 0.0, -y2))
+		st.add_vertex(p2)
 		st.set_normal(Vector3.UP)
-		st.add_vertex(Vector3(x3, 0.0, -y3))
+		st.add_vertex(p3)
 		accepted += 1
 	for kind in range(tools.size()):
 		var mesh: ArrayMesh = tools[kind].commit()
@@ -426,13 +431,13 @@ func _create_ground() -> void:
 	var width: float = max_x - min_x
 	var depth: float = max_y - min_y
 	var margin: float = maxf(80000.0, maxf(width, depth) * 0.12)
-	var center_x: float = ((min_x + max_x) * 0.5) - origin_x
-	var center_y: float = ((min_y + max_y) * 0.5) - origin_y
+	var center_absolute := Vector2((min_x + max_x) * 0.5, (min_y + max_y) * 0.5)
+	var center_world: Vector3 = world_coordinates.absolute_to_world(center_absolute)
 	var ground: MeshInstance3D = MeshInstance3D.new()
 	var plane: PlaneMesh = PlaneMesh.new()
 	plane.size = Vector2(width + margin * 2.0, depth + margin * 2.0)
 	ground.mesh = plane
-	ground.position = Vector3(center_x, 0.0, -center_y)
+	ground.position = center_world
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.albedo_color = _map_color(MAP_WATER)
 	mat.roughness = 1.0
