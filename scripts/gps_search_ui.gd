@@ -14,7 +14,7 @@ signal waypoint_selected(point: Vector2)
 const GpsSearchClientScript = preload("res://scripts/gps_search_client.gd")
 const RESULT_LIMIT: int = 8
 
-var search_client: Node
+var search_client = null
 var search_field: LineEdit
 var result_list: ItemList
 var status_label: Label
@@ -116,7 +116,8 @@ func _on_native_response(query: String, response: Dictionary) -> void:
 	current_results.clear()
 	var values: Variant = response.get("results", [])
 	if typeof(values) == TYPE_ARRAY:
-		for value in values as Array:
+		var result_values: Array = values as Array
+		for value in result_values:
 			if typeof(value) == TYPE_DICTIONARY:
 				current_results.append(value as Dictionary)
 	_refresh_result_list()
