@@ -2,6 +2,8 @@
 #include "gps_runtime.cpp"
 #undef main
 
+#include "gps_route_plan.h"
+
 #include <arpa/inet.h>
 #include <cerrno>
 #include <iomanip>
@@ -14,7 +16,8 @@
 //
 // Dependencies:
 // - gps_runtime.cpp owns BRG1/BRS2 loading, snapping, legality and A* primitives.
-// - Godot sends projected coordinates plus one routing preference over localhost TCP.
+// - gps_route_plan.h owns ordered multi-leg route-plan aggregation and is platform-neutral.
+// - This file owns only the localhost transport, request parsing and JSON serialization.
 //
 // The graph, snap index and routing context are created once and stay resident.
 // File-backed routing pages are also touched before the server announces ready,
@@ -29,10 +32,16 @@ enum class RoutingPreference : uint8_t {
 };
 
 constexpr double AVOID_PENALTY = 4.0;
+constexpr std::size_t MAX_PLAN_STOPS = 32;
 
 struct RoutePolylineResult {
     RouteResult metrics;
     std::vector<std::pair<double, double>> points;
+};
+
+struct SnappedPlanStop {
+    Snap snap;
+    double snap_ms = 0.0;
 };
 
 RoutingPreference parse_preference(const std::string &value) {
@@ -58,12 +67,10 @@ double travel_time_s(const Edge &edge) {
 }
 
 bool is_small_road(uint8_t road_class) {
-    // unclassified, residential, living_street, service, road, track
     return road_class >= 10 && road_class <= 15;
 }
 
 bool is_major_road(uint8_t road_class) {
-    // motorway/link, trunk/link, primary/link
     return road_class <= 5;
 }
 
@@ -262,6 +269,22 @@ RoutePolylineResult route_with_polyline(Router &router, const Snap &start, const
     return output;
 }
 
+brur::gps::RoutePlanLegOutput to_plan_leg(const RoutePolylineResult &route) {
+    brur::gps::RoutePlanLegOutput output;
+    output.success = route.metrics.ok;
+    if (!output.success) output.failure_reason = "unreachable";
+    output.cost = route.metrics.cost;
+    output.distance_m = route.metrics.distance_m;
+    output.travel_time_s = route.metrics.travel_time_s;
+    output.settled = route.metrics.settled;
+    output.relaxed = route.metrics.relaxed;
+    output.queue_peak = route.metrics.queue_peak;
+    output.steps = route.metrics.steps;
+    output.points.reserve(route.points.size());
+    for (const auto &point : route.points) output.points.push_back({point.first, point.second});
+    return output;
+}
+
 std::string route_json(const Snap &start, const Snap &target, const RoutePolylineResult &route,
                        RoutingPreference preference, double start_snap_ms,
                        double target_snap_ms, double route_ms) {
@@ -271,6 +294,7 @@ std::string route_json(const Snap &start, const Snap &target, const RoutePolylin
         << ",\"preference\":\"" << preference_name(preference) << "\""
         << ",\"start_snap_ms\":" << start_snap_ms
         << ",\"target_snap_ms\":" << target_snap_ms
+        << ",\"snap_ms\":" << (start_snap_ms + target_snap_ms)
         << ",\"route_ms\":" << route_ms
         << ",\"start_candidates\":" << start.candidates
         << ",\"target_candidates\":" << target.candidates
@@ -280,14 +304,103 @@ std::string route_json(const Snap &start, const Snap &target, const RoutePolylin
         << ",\"distance_m\":" << route.metrics.distance_m
         << ",\"travel_time_s\":" << route.metrics.travel_time_s
         << ",\"steps\":" << route.metrics.steps
+        << ",\"failed_leg_index\":null"
         << ",\"start_snap\":[" << start.x << ',' << start.y << ']'
         << ",\"target_snap\":[" << target.x << ',' << target.y << ']'
+        << ",\"snaps\":[[" << start.x << ',' << start.y << "],[" << target.x << ',' << target.y << "]]"
+        << ",\"legs\":[{\"index\":0,\"from_stop_index\":0,\"to_stop_index\":1"
+        << ",\"success\":" << (route.metrics.ok ? "true" : "false")
+        << ",\"distance_m\":" << route.metrics.distance_m
+        << ",\"travel_time_s\":" << route.metrics.travel_time_s
+        << ",\"settled\":" << route.metrics.settled
+        << ",\"relaxed\":" << route.metrics.relaxed
+        << ",\"queue_peak\":" << route.metrics.queue_peak
+        << ",\"steps\":" << route.metrics.steps << "}]"
         << ",\"points\":[";
     for (size_t i = 0; i < route.points.size(); ++i) {
         if (i) out << ',';
         out << '[' << route.points[i].first << ',' << route.points[i].second << ']';
     }
     out << "]}\n";
+    return out.str();
+}
+
+std::string plan_json(const std::vector<SnappedPlanStop> &stops,
+                      const brur::gps::RoutePlanResult &plan,
+                      RoutingPreference preference, double snap_ms, double route_ms) {
+    std::ostringstream out;
+    out << std::setprecision(12);
+    out << "{\"success\":" << (plan.success ? "true" : "false")
+        << ",\"preference\":\"" << preference_name(preference) << "\""
+        << ",\"snap_ms\":" << snap_ms
+        << ",\"route_ms\":" << route_ms
+        << ",\"settled\":" << plan.settled
+        << ",\"relaxed\":" << plan.relaxed
+        << ",\"queue_peak\":" << plan.queue_peak
+        << ",\"distance_m\":" << plan.distance_m
+        << ",\"travel_time_s\":" << plan.travel_time_s
+        << ",\"steps\":" << plan.steps;
+    if (plan.success) out << ",\"failed_leg_index\":null";
+    else out << ",\"failed_leg_index\":" << plan.failed_leg_index;
+    if (!plan.failure_reason.empty()) out << ",\"failure_reason\":\"" << plan.failure_reason << "\"";
+
+    if (!stops.empty()) {
+        out << ",\"start_snap\":[" << stops.front().snap.x << ',' << stops.front().snap.y << ']'
+            << ",\"target_snap\":[" << stops.back().snap.x << ',' << stops.back().snap.y << ']';
+    }
+
+    out << ",\"snaps\":[";
+    for (std::size_t i = 0; i < stops.size(); ++i) {
+        if (i) out << ',';
+        out << '[' << stops[i].snap.x << ',' << stops[i].snap.y << ']';
+    }
+    out << "]";
+
+    out << ",\"legs\":[";
+    for (std::size_t i = 0; i < plan.legs.size(); ++i) {
+        if (i) out << ',';
+        const auto &leg = plan.legs[i];
+        out << "{\"index\":" << leg.leg_index
+            << ",\"from_stop_index\":" << leg.from_stop_index
+            << ",\"to_stop_index\":" << leg.to_stop_index
+            << ",\"success\":" << (leg.route.success ? "true" : "false")
+            << ",\"distance_m\":" << leg.route.distance_m
+            << ",\"travel_time_s\":" << leg.route.travel_time_s
+            << ",\"settled\":" << leg.route.settled
+            << ",\"relaxed\":" << leg.route.relaxed
+            << ",\"queue_peak\":" << leg.route.queue_peak
+            << ",\"steps\":" << leg.route.steps
+            << ",\"point_start_index\":" << leg.point_start_index
+            << ",\"point_end_index\":" << leg.point_end_index;
+        if (!leg.route.failure_reason.empty())
+            out << ",\"failure_reason\":\"" << leg.route.failure_reason << "\"";
+        out << '}';
+    }
+    out << "]";
+
+    out << ",\"points\":[";
+    for (std::size_t i = 0; i < plan.points.size(); ++i) {
+        if (i) out << ',';
+        out << '[' << plan.points[i].x << ',' << plan.points[i].y << ']';
+    }
+    out << "]}\n";
+    return out.str();
+}
+
+std::string plan_snap_failure_json(std::size_t failed_stop_index, RoutingPreference preference,
+                                   double snap_ms) {
+    const std::size_t failed_leg = failed_stop_index == 0 ? 0 : failed_stop_index - 1;
+    std::ostringstream out;
+    out << std::setprecision(12)
+        << "{\"success\":false"
+        << ",\"preference\":\"" << preference_name(preference) << "\""
+        << ",\"adapter_error\":\"snap_failed\""
+        << ",\"failure_reason\":\"snap_failed\""
+        << ",\"failed_stop_index\":" << failed_stop_index
+        << ",\"failed_leg_index\":" << failed_leg
+        << ",\"snap_ms\":" << snap_ms
+        << ",\"route_ms\":0"
+        << ",\"points\":[],\"legs\":[]}\n";
     return out.str();
 }
 
@@ -301,16 +414,65 @@ bool send_all(int fd, const std::string &payload) {
     return true;
 }
 
+std::string handle_plan_query(std::istringstream &input, SnapIndex &snap_index, Router &router) {
+    std::string preference_text;
+    std::size_t stop_count = 0;
+    if (!(input >> preference_text >> stop_count) || stop_count < 2 || stop_count > MAX_PLAN_STOPS)
+        return "{\"success\":false,\"adapter_error\":\"bad_plan\"}\n";
+    const RoutingPreference preference = parse_preference(preference_text);
+
+    std::vector<std::pair<double, double>> coordinates;
+    coordinates.reserve(stop_count);
+    for (std::size_t i = 0; i < stop_count; ++i) {
+        double x = 0.0;
+        double y = 0.0;
+        if (!(input >> x >> y))
+            return "{\"success\":false,\"adapter_error\":\"bad_plan\"}\n";
+        coordinates.emplace_back(x, y);
+    }
+
+    std::vector<SnappedPlanStop> stops;
+    stops.reserve(stop_count);
+    double total_snap_ms = 0.0;
+    for (std::size_t i = 0; i < coordinates.size(); ++i) {
+        const auto started = std::chrono::steady_clock::now();
+        const Snap snap = snap_index.snap(coordinates[i].first, coordinates[i].second);
+        const auto finished = std::chrono::steady_clock::now();
+        const double snap_ms = elapsed_ms(started, finished);
+        total_snap_ms += snap_ms;
+        if (!snap.ok) return plan_snap_failure_json(i, preference, total_snap_ms);
+        stops.push_back({snap, snap_ms});
+    }
+
+    const auto route_started = std::chrono::steady_clock::now();
+    const auto plan = brur::gps::execute_route_plan(
+        stops,
+        [&router, preference](const SnappedPlanStop &from, const SnappedPlanStop &to, std::size_t) {
+            return to_plan_leg(route_with_polyline(router, from.snap, to.snap, preference));
+        });
+    const auto route_finished = std::chrono::steady_clock::now();
+    return plan_json(stops, plan, preference, total_snap_ms,
+                     elapsed_ms(route_started, route_finished));
+}
+
 std::string handle_query(const std::string &line, SnapIndex &snap_index, Router &router) {
     std::istringstream input(line);
+    std::string first;
+    if (!(input >> first)) return "{\"success\":false,\"adapter_error\":\"bad_request\"}\n";
+    if (first == "plan") return handle_plan_query(input, snap_index, router);
+
     double start_x = 0.0;
+    try {
+        start_x = std::stod(first);
+    } catch (...) {
+        return "{\"success\":false,\"adapter_error\":\"bad_request\"}\n";
+    }
     double start_y = 0.0;
     double target_x = 0.0;
     double target_y = 0.0;
     std::string preference_text = "fastest";
-    if (!(input >> start_x >> start_y >> target_x >> target_y)) {
+    if (!(input >> start_y >> target_x >> target_y))
         return "{\"success\":false,\"adapter_error\":\"bad_request\"}\n";
-    }
     input >> preference_text;
     const RoutingPreference preference = parse_preference(preference_text);
 
@@ -331,17 +493,14 @@ uint64_t warm_mapped_file(const MappedFile &file) {
     const long configured_page_size = sysconf(_SC_PAGESIZE);
     const size_t page_size = configured_page_size > 0 ? static_cast<size_t>(configured_page_size) : 4096u;
     uint64_t checksum = 0;
-    for (size_t offset = 0; offset < file.size; offset += page_size) {
-        checksum += file.data[offset];
-    }
+    for (size_t offset = 0; offset < file.size; offset += page_size) checksum += file.data[offset];
     checksum += file.data[file.size - 1];
     return checksum;
 }
 
 void lower_background_priority() {
-    if (setpriority(PRIO_PROCESS, 0, 8) != 0) {
+    if (setpriority(PRIO_PROCESS, 0, 8) != 0)
         std::cerr << "[native-gps-server] warning: could not lower process priority\n";
-    }
 }
 } // namespace
 
