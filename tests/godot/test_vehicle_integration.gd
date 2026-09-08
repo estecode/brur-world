@@ -56,8 +56,13 @@ func _run() -> void:
 	var harness_scene := load("res://harness/driving/driving_harness.tscn") as PackedScene
 	_assert(harness_scene != null, "driving harness scene loads")
 	var harness: Node = harness_scene.instantiate()
-	_assert(harness.get_node_or_null("GpsRouteLayer") != null, "driving harness reuses production game composition")
-	harness.free()
+	get_root().add_child(harness)
+	await process_frame
+	_assert(harness.get_node_or_null("PlayerVehicle") != null, "driving harness instantiates the production player vehicle")
+	_assert(harness.get_node_or_null("CameraRig") != null, "driving harness reuses the production camera adapter")
+	_assert(harness.get_node_or_null("Roads") != null and harness.get_node("Roads").get_child_count() >= 8, "driving harness provides a connected meter-scale road grid")
+	_assert(harness.get_node_or_null("GpsRouteLayer") == null, "driving harness does not require the full world/GPS composition")
+	harness.queue_free()
 
 	root.queue_free()
 	print("godot vehicle-integration tests: OK")
