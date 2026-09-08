@@ -1,12 +1,12 @@
 extends Node3D
 
-## Composes the Godot GPS client, route state, rendering, input and UI boundaries.
+## Composes GPS route state/rendering with the single player vehicle and its manual/GPS control ownership.
 ##
 ## Dependencies:
 ## - GpsClient owns native process/TCP lifecycle and response delivery.
 ## - GpsRouteModel owns destination/waypoint/preference state.
-## - GpsRouteRenderer owns route/target visuals; GpsRouteUi owns controls/status.
-## - Main exposes the configured WorldCoordinates API; CameraRig supplies camera dependencies explicitly.
+## - GpsRouteRenderer/GpsRouteUi own GPS presentation; the player vehicle owns motion state/dynamics.
+## - Main exposes WorldCoordinates; CameraRig receives the player as an explicit follow target.
 
 const GpsClientScript = preload("res://scripts/gps_client.gd")
 const GpsInputAdapterScript = preload("res://scripts/gps_input_adapter.gd")
@@ -31,6 +31,9 @@ var route_ui: CanvasLayer
 var _main: Node3D
 var _camera_rig: Node3D
 var _camera: Camera3D
+var _player_controller: Node
+var _route_follower: Node
+var _follow_enabled: bool = false
 var _setup_started: bool = false
 
 var perf_queries: int = 0
@@ -65,6 +68,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if gps_client != null:
 		gps_client.call("poll", delta)
+	_update_driving_input_mode()
 	_update_visual_height()
 
 func _input(event: InputEvent) -> void:
@@ -137,6 +141,25 @@ func request_current_plan() -> bool:
 	])
 	return true
 
+func set_follow_enabled(enabled: bool) -> bool:
+	if _route_follower == null:
+		return false
+	if not bool(_route_follower.call("set_follow_enabled", enabled)):
+		if enabled:
+			_set_status("No drivable GPS route is active")
+		return false
+	_follow_enabled = enabled
+	if route_ui != null:
+		route_ui.call("set_follow_enabled", enabled)
+	if enabled:
+		_set_status("GPS follow ON — press W/A/S/D or Space to take manual control")
+	else:
+		_set_status("GPS follow OFF — manual driving")
+	return true
+
+func is_follow_enabled() -> bool:
+	return _follow_enabled
+
 # Compatibility bridge for existing callers while the public API lands.
 func _request_current_plan() -> void:
 	request_current_plan()
@@ -163,7 +186,9 @@ func _create_modules() -> void:
 	route_ui.connect("preference_selected", _on_preference_selected)
 	route_ui.connect("remove_waypoint_requested", _on_remove_waypoint_requested)
 	route_ui.connect("clear_waypoints_requested", _on_clear_waypoints_requested)
+	route_ui.connect("follow_changed", _on_follow_changed)
 	route_ui.call("set_preference", route_model.preference())
+	route_ui.call("set_follow_available", false)
 	_refresh_waypoint_ui()
 
 func _finish_setup() -> void:
@@ -199,6 +224,14 @@ func _on_clear_waypoints_requested() -> void:
 	if route_model.has_destination():
 		request_current_plan()
 
+func _on_follow_changed(enabled: bool) -> void:
+	if not set_follow_enabled(enabled) and route_ui != null:
+		route_ui.call("set_follow_enabled", false)
+
+func _on_manual_vehicle_input() -> void:
+	if _follow_enabled:
+		set_follow_enabled(false)
+
 func _refresh_waypoint_ui() -> void:
 	if route_ui != null:
 		route_ui.call("set_waypoints", route_model.waypoints())
@@ -221,6 +254,7 @@ func _apply_route_response(response: Dictionary) -> void:
 		perf_last_failed_leg = int(response.get("failed_leg_index", -1))
 		perf_failures += 1
 		route_renderer.call("clear")
+		_clear_follow_route()
 		if perf_last_failed_leg >= 0:
 			_set_status("GPS leg %d failed: %s" % [perf_last_failed_leg + 1, perf_last_failure_reason])
 		else:
@@ -229,11 +263,12 @@ func _apply_route_response(response: Dictionary) -> void:
 		return
 
 	if not bool(route_renderer.call("apply_response", response)):
+		_clear_follow_route()
 		_set_status("GPS returned an invalid polyline")
 		perf_apply_ms += float(Time.get_ticks_usec() - apply_started) / 1000.0
 		return
 	perf_points += int(route_renderer.call("rendered_point_count"))
-	_apply_start_snap(response)
+	_install_follow_route(response)
 	var legs_value: Variant = response.get("legs", [])
 	var leg_count: int = (legs_value as Array).size() if typeof(legs_value) == TYPE_ARRAY else 1
 	_set_status("GPS %s · %d leg(s) · %.1f km · %.0f min · %.1f ms" % [
@@ -255,27 +290,51 @@ func _apply_route_response(response: Dictionary) -> void:
 		int(route_renderer.call("rendered_point_count")),
 	])
 
-func _apply_start_snap(response: Dictionary) -> void:
-	var start_value: Variant = response.get("start_snap", [])
-	if typeof(start_value) != TYPE_ARRAY or player == null:
+func _install_follow_route(response: Dictionary) -> void:
+	if _route_follower == null:
 		return
-	var snap: Array = start_value as Array
-	if snap.size() < 2:
+	var points_value: Variant = response.get("points", [])
+	if typeof(points_value) != TYPE_ARRAY:
+		_clear_follow_route()
 		return
-	var snapped_start: Vector3 = _absolute_to_world(float(snap[0]), float(snap[1]))
-	player.position.x = snapped_start.x
-	player.position.z = snapped_start.z
+	var world_points := PackedVector3Array()
+	for value in points_value as Array:
+		if typeof(value) != TYPE_ARRAY:
+			continue
+		var pair: Array = value as Array
+		if pair.size() < 2:
+			continue
+		var world_point: Vector3 = _absolute_to_world(float(pair[0]), float(pair[1]))
+		if world_point.is_finite():
+			world_points.append(world_point)
+	_route_follower.call("set_route", world_points)
+	var available: bool = world_points.size() >= 2
+	route_ui.call("set_follow_available", available)
+	if _follow_enabled:
+		if not bool(_route_follower.call("set_follow_enabled", true)):
+			_follow_enabled = false
+			route_ui.call("set_follow_enabled", false)
+
+func _clear_follow_route() -> void:
+	_follow_enabled = false
+	if _route_follower != null:
+		_route_follower.call("set_follow_enabled", false)
+		_route_follower.call("clear_route")
+	if route_ui != null:
+		route_ui.call("set_follow_available", false)
+		route_ui.call("set_follow_enabled", false)
 
 func _on_protocol_error(error: String) -> void:
 	perf_failures += 1
 	perf_last_success = false
 	perf_last_failure_reason = error
 	perf_last_failed_leg = -1
+	_clear_follow_route()
 	_set_status("GPS server returned invalid response")
 
 func _on_client_ready_changed(ready: bool) -> void:
 	if ready:
-		_set_status("GPS ready — Shift+click destination · Cmd/Ctrl+Shift+click waypoint")
+		_set_status("GPS ready — zoom in to drive · Shift+click destination · Cmd/Ctrl+Shift+click waypoint")
 
 func consume_perf_metrics() -> Dictionary:
 	var client_metrics: Dictionary = {}
@@ -309,17 +368,28 @@ func consume_perf_metrics() -> Dictionary:
 	return result
 
 func _spawn_player() -> void:
-	var scene := load("res://scenes/vehicle.tscn") as PackedScene
+	var scene := load("res://scenes/player_vehicle.tscn") as PackedScene
 	if scene == null:
 		push_error("Could not load player vehicle scene")
 		return
 	player = scene.instantiate() as Node3D
-	player.set("vehicle_id", &"player")
-	player.set("active", false)
 	add_child(player)
 	var projected: Vector2 = _project_lonlat(START_LON, START_LAT)
-	player.position = _absolute_to_world(projected.x, projected.y)
+	var spawn_position: Vector3 = _absolute_to_world(projected.x, projected.y)
+	player.call("set_world_position", spawn_position)
+	_player_controller = player.get_node_or_null("PlayerVehicleController")
+	_route_follower = player.get_node_or_null("VehicleRouteFollower")
+	if _player_controller != null:
+		_player_controller.connect("manual_input_detected", _on_manual_vehicle_input)
+	if _camera_rig.has_method("set_follow_target"):
+		_camera_rig.call("set_follow_target", player)
 	_update_visual_height()
+
+func _update_driving_input_mode() -> void:
+	if _player_controller == null or _camera_rig == null:
+		return
+	var driving_view: bool = bool(_camera_rig.call("is_driving_view")) if _camera_rig.has_method("is_driving_view") else true
+	_player_controller.set("enabled", driving_view)
 
 func _update_visual_height() -> void:
 	if _camera_rig == null or route_renderer == null:
