@@ -89,19 +89,31 @@ def _match_score(
     display_text: str,
     record_id: str,
 ) -> tuple[int, int, int, str] | None:
-    if query == haystack:
+    """Rank visible-name matches first and use record identity as the final tie-break.
+
+    Subtitle/disambiguation text remains searchable, but it must not reorder two
+    records with the same visible name merely because one subtitle is shorter.
+    """
+    display = normalize_search_text(display_text)
+    display_words = display.split()
+    all_words = haystack.split()
+
+    if query == display:
         tier = 0
-    elif haystack.startswith(query):
+    elif display.startswith(query):
         tier = 1
+    elif query_tokens and all(any(word.startswith(token) for word in display_words) for token in query_tokens):
+        tier = 2
+    elif query in display:
+        tier = 3
+    elif query_tokens and all(any(word.startswith(token) for word in all_words) for token in query_tokens):
+        tier = 4
+    elif query in haystack:
+        tier = 5
     else:
-        words = haystack.split()
-        if query_tokens and all(any(word.startswith(token) for word in words) for token in query_tokens):
-            tier = 2
-        elif query in haystack:
-            tier = 3
-        else:
-            return None
-    return (tier, max(0, len(haystack) - len(query)), len(display_text), record_id)
+        return None
+
+    return (tier, max(0, len(display) - len(query)), len(display_text), record_id)
 
 
 def write_search_index(records: Iterable[SearchRecord], path: Path) -> None:
