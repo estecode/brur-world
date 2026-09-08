@@ -42,6 +42,9 @@ jobs:
           chmod +x "$GODOT_BIN"
           echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
 
+      - name: Validate playtest launcher
+        run: bash tests/test_playtest_launcher.sh
+
       - name: Run objective GPS regression suite
         env:
           CXX: g++
