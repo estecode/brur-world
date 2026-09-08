@@ -79,14 +79,18 @@ Final delivery reporting must include issue, branch, delivery commit, actual val
 
 ## Safe Command Links
 
-This project supports `estecode/safe-command-links` for human-executable PR checks.
+This project supports `estecode/safe-command-links` for human-executable PR checks and current-checkout playtests.
 
 ```text
 Safe Command Links: supported
 Repository: estecode/brur-world
 PR check command: pr-check
 Parameters: pr:positive-int
+Playtest command: playtest
+Parameters: target:enum=game,gps
 ```
+
+`playtest` targets are limited to real supported targets. Add new values only when the corresponding game/harness actually exists; do not create speculative harnesses to populate the allowlist.
 
 When a PR is `CHECK THEN MERGE` and its remaining check can be launched by the project-owned PR-check command, the PR must include a normal clickable localhost HTTP link:
 
@@ -96,9 +100,9 @@ RUN: [▶ Run safe check](http://127.0.0.1:17384/safecommand/project?repo=esteco
 
 GitHub does not reliably make the custom `safecommand://` scheme clickable, so PRs must use the localhost HTTP form above. Safe Command Links listens only on loopback and forwards the request through the same local repository mapping, signed command approval and parameter validation.
 
-Never put a developer's absolute checkout path in a PR. Safe Command Links maps `estecode/brur-world` to the local checkout on each Mac, then verifies the locally signed `pr-check` approval and validated PR number.
+Never put a developer's absolute checkout path in a PR. Safe Command Links maps `estecode/brur-world` to the local checkout on each Mac, then verifies the locally signed command approval and validated parameters.
 
-`brur-world` owns what `pr-check` actually does, including selecting the exact PR revision, preparing isolated runtime state, launching the relevant Godot check, reusing required local runtime data safely, and cleaning temporary state after Godot exits. Safe Command Links must remain generic and must not contain Godot/world-data/project-specific behavior.
+`brur-world` owns what `pr-check` and `playtest` actually do. `pr-check` selects the exact PR revision, prepares isolated runtime state, launches the relevant Godot check, reuses required local runtime data safely, and cleans temporary state after Godot exits. `playtest` prepares the required dependencies for an allowlisted target and launches the current mapped checkout. Safe Command Links must remain generic and must not contain Godot/world-data/project-specific behavior.
 
 If the local Safe Command installation/mapping/approval is missing, the link may fail locally; agents must not infer installation state from GitHub. Repository support is declared here, while local availability is machine state.
 
