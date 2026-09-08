@@ -1,6 +1,10 @@
 extends CanvasLayer
 
 # On-screen runtime/performance readout with a persistent one-second metrics log.
+#
+# Dependencies:
+# - Reads one-second metrics from Main and GpsRouteLayer.
+# - Writes presentation/debug data only; it owns no routing or world behavior.
 
 const PERF_LOG_PATH: String = "user://brur_performance.log"
 const LUND_FOCUS: Vector3 = Vector3(-489086.0, 0.0, 1582123.0)
@@ -34,6 +38,9 @@ var shown_gps_relaxed: int = 0
 var shown_gps_parse_ms: float = 0.0
 var shown_gps_apply_ms: float = 0.0
 var shown_gps_points: int = 0
+var shown_gps_failures: int = 0
+var shown_gps_failure_reason: String = ""
+var shown_gps_failed_leg: int = -1
 var shown_gps_busy: bool = false
 
 func _ready() -> void:
@@ -75,7 +82,7 @@ func _open_perf_log() -> void:
 		return
 	perf_log.store_line("")
 	perf_log.store_line("=== BRUR PERFORMANCE SESSION %s | build=%s ===" % [Time.get_datetime_string_from_system(), build_id])
-	perf_log.store_line("time,build,fps,avg_frame_ms,worst_1s_ms,distance_m,lod,road_tiles,road_cache,pois,poi_tile_cache,draw_calls,objects,nodes,camera_near,camera_far,fov,road_build_ms,road_build_max_ms,road_tiles_built,road_pending,road_refresh_ms,cache_hits,cache_misses,gps_queries,gps_route_ms,gps_route_max_ms,gps_settled,gps_relaxed,gps_parse_ms,gps_apply_ms,gps_points,gps_busy")
+	perf_log.store_line("time,build,fps,avg_frame_ms,worst_1s_ms,distance_m,lod,road_tiles,road_cache,pois,poi_tile_cache,draw_calls,objects,nodes,camera_near,camera_far,fov,road_build_ms,road_build_max_ms,road_tiles_built,road_pending,road_refresh_ms,cache_hits,cache_misses,gps_queries,gps_route_ms,gps_route_max_ms,gps_settled,gps_relaxed,gps_parse_ms,gps_apply_ms,gps_points,gps_failures,gps_failure_reason,gps_failed_leg,gps_busy")
 	perf_log.flush()
 	print("Performance log: ", ProjectSettings.globalize_path(PERF_LOG_PATH), " | build: ", build_id)
 
@@ -114,6 +121,9 @@ func _process(delta: float) -> void:
 			shown_gps_parse_ms = float(gps_metrics.get("gps_parse_ms", 0.0))
 			shown_gps_apply_ms = float(gps_metrics.get("gps_apply_ms", 0.0))
 			shown_gps_points = int(gps_metrics.get("gps_points", 0))
+			shown_gps_failures = int(gps_metrics.get("gps_failures", 0))
+			shown_gps_failure_reason = str(gps_metrics.get("gps_failure_reason", ""))
+			shown_gps_failed_leg = int(gps_metrics.get("gps_failed_leg", -1))
 			shown_gps_busy = bool(gps_metrics.get("gps_busy", false))
 
 	var distance: float = float(camera_rig.call("get_distance"))
@@ -151,6 +161,9 @@ func _process(delta: float) -> void:
 	if write_sample:
 		_write_perf_sample(fps, distance, lod, loaded_count, mesh_cache_count, poi_count, poi_cache_count, draw_calls, objects, nodes)
 
+	var failure_text: String = ""
+	if shown_gps_failures > 0:
+		failure_text = "   failures %d leg %d %s" % [shown_gps_failures, shown_gps_failed_leg + 1, shown_gps_failure_reason]
 	label.text = (
 		"BRUR WORLD DEBUG   build: %s\n" % build_id
 		+ "FPS: %.0f   frame avg: %.2f ms   worst 1s: %.2f ms\n" % [fps, shown_avg_ms, shown_worst_ms]
@@ -158,7 +171,7 @@ func _process(delta: float) -> void:
 		+ "distance: %.0f m   lod: %d   road tiles: %d   road cache: %d\n" % [distance, lod, loaded_count, mesh_cache_count]
 		+ "road build: %.1f ms total / %.1f ms max   built: %d   pending: %d\n" % [shown_road_build_ms, shown_road_build_max_ms, shown_road_tiles_built, shown_road_pending]
 		+ "road refresh: %.1f ms   cache hit/miss: %d/%d\n" % [shown_road_refresh_ms, shown_cache_hits, shown_cache_misses]
-		+ "GPS: q %d route %.1f/%.1f ms parse %.1f apply %.1f points %d busy %s\n" % [shown_gps_queries, shown_gps_route_ms, shown_gps_route_max_ms, shown_gps_parse_ms, shown_gps_apply_ms, shown_gps_points, str(shown_gps_busy)]
+		+ "GPS: q %d route %.1f/%.1f ms parse %.1f apply %.1f points %d busy %s%s\n" % [shown_gps_queries, shown_gps_route_ms, shown_gps_route_max_ms, shown_gps_parse_ms, shown_gps_apply_ms, shown_gps_points, str(shown_gps_busy), failure_text]
 		+ "GPS search: settled %d   relaxed %d\n" % [shown_gps_settled, shown_gps_relaxed]
 		+ "POIs: %d   POI tile cache: %d\n" % [poi_count, poi_cache_count]
 		+ "camera near/far: %.1f / %.0f   fov: %.1f\n" % [camera.near, camera.far, camera.fov]
@@ -167,6 +180,9 @@ func _process(delta: float) -> void:
 		+ "ground corner hits: %d / 4   layer spacing: %.1f m\n" % [ground_hits.size(), spacing]
 		+ "perf log: user://brur_performance.log"
 	)
+
+func _csv_safe(value: String) -> String:
+	return value.replace(",", ";").replace("\n", " ").replace("\r", " ")
 
 func _write_perf_sample(
 	fps: float,
@@ -182,19 +198,21 @@ func _write_perf_sample(
 ) -> void:
 	if perf_log == null:
 		return
-	var line: String = "%s,%s,%.0f,%.3f,%.3f,%.0f,%d,%d,%d,%d,%d,%d,%d,%d,%.2f,%.0f,%.2f,%.3f,%.3f,%d,%d,%.3f,%d,%d,%d,%.3f,%.3f,%d,%d,%.3f,%.3f,%d,%s" % [
+	var line: String = "%s,%s,%.0f,%.3f,%.3f,%.0f,%d,%d,%d,%d,%d,%d,%d,%d,%.2f,%.0f,%.2f,%.3f,%.3f,%d,%d,%.3f,%d,%d,%d,%.3f,%.3f,%d,%d,%.3f,%.3f,%d,%d,%s,%d,%s" % [
 		Time.get_datetime_string_from_system(), build_id, fps, shown_avg_ms, shown_worst_ms, distance, lod,
 		road_tiles, road_cache, poi_count, poi_cache, draw_calls, objects, nodes,
 		camera.near, camera.far, camera.fov,
 		shown_road_build_ms, shown_road_build_max_ms, shown_road_tiles_built, shown_road_pending,
 		shown_road_refresh_ms, shown_cache_hits, shown_cache_misses,
 		shown_gps_queries, shown_gps_route_ms, shown_gps_route_max_ms, shown_gps_settled, shown_gps_relaxed,
-		shown_gps_parse_ms, shown_gps_apply_ms, shown_gps_points, str(shown_gps_busy),
+		shown_gps_parse_ms, shown_gps_apply_ms, shown_gps_points, shown_gps_failures,
+		_csv_safe(shown_gps_failure_reason), shown_gps_failed_leg, str(shown_gps_busy),
 	]
 	perf_log.store_line(line)
 	if shown_worst_ms >= 33.3:
-		perf_log.store_line("PERF SPIKE,%s,build=%s,worst_frame_ms=%.3f,distance=%.0f,lod=%d,pois=%d,road_tiles=%d,road_build_max_ms=%.3f,road_pending=%d,gps_queries=%d,gps_route_max_ms=%.3f,gps_parse_ms=%.3f,gps_apply_ms=%.3f,gps_points=%d,gps_busy=%s" % [
+		perf_log.store_line("PERF SPIKE,%s,build=%s,worst_frame_ms=%.3f,distance=%.0f,lod=%d,pois=%d,road_tiles=%d,road_build_max_ms=%.3f,road_pending=%d,gps_queries=%d,gps_route_max_ms=%.3f,gps_parse_ms=%.3f,gps_apply_ms=%.3f,gps_points=%d,gps_failures=%d,gps_failure_reason=%s,gps_failed_leg=%d,gps_busy=%s" % [
 			Time.get_datetime_string_from_system(), build_id, shown_worst_ms, distance, lod, poi_count, road_tiles, shown_road_build_max_ms, shown_road_pending,
-			shown_gps_queries, shown_gps_route_max_ms, shown_gps_parse_ms, shown_gps_apply_ms, shown_gps_points, str(shown_gps_busy)
+			shown_gps_queries, shown_gps_route_max_ms, shown_gps_parse_ms, shown_gps_apply_ms, shown_gps_points,
+			shown_gps_failures, _csv_safe(shown_gps_failure_reason), shown_gps_failed_leg, str(shown_gps_busy)
 		])
 	perf_log.flush()
