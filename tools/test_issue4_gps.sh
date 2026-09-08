@@ -29,6 +29,20 @@ if [[ ! -x "$GODOT_BIN" ]]; then
   exit 2
 fi
 
-"$GODOT_BIN" --headless --path "$ROOT" --script tests/godot/test_gps_route_model.gd
+set +e
+GODOT_OUTPUT="$($GODOT_BIN --headless --path "$ROOT" --script tests/godot/test_gps_route_model.gd 2>&1)"
+GODOT_STATUS=$?
+set -e
+printf '%s\n' "$GODOT_OUTPUT"
+
+if [[ $GODOT_STATUS -ne 0 ]] || grep -Eq 'SCRIPT ERROR:|Parse Error:|Failed to load script' <<<"$GODOT_OUTPUT"; then
+  echo "issue #4 Godot GPS tests: FAILED" >&2
+  exit 1
+fi
+
+if ! grep -Fq 'godot gps route-model tests: OK' <<<"$GODOT_OUTPUT"; then
+  echo "issue #4 Godot GPS tests did not reach the success marker" >&2
+  exit 1
+fi
 
 echo "issue #4 automated GPS tests: OK"
