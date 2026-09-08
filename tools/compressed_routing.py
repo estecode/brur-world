@@ -2,19 +2,26 @@
 
 Dependencies:
 - Uses routing_graph.py for routing policy/data types and BRG1 record definitions.
-- Used only by the offline routing compiler; Godot/runtime still consumes BRG1.
+- Uses route_geometry.py for the BRH1 per-edge shape sidecar written by the offline compiler.
+- Used only by the offline routing compiler; Godot/runtime consumes generated routing data.
 
 Shape nodes that only describe road geometry are not routing nodes. Ways are split at
 endpoints, shared OSM nodes and the extra breakpoint needed to preserve closed ways.
-Metric length is accumulated over every original OSM segment between breakpoints.
+Metric length and detailed road geometry are preserved between those breakpoints.
 """
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from route_geometry import EDGE_RECORD as GEOMETRY_EDGE_RECORD
+from route_geometry import HEADER as GEOMETRY_HEADER
+from route_geometry import MAGIC as GEOMETRY_MAGIC
+from route_geometry import POINT_RECORD as GEOMETRY_POINT_RECORD
 from routing_graph import (
     EDGE_RECORD,
     HEADER,
@@ -127,15 +134,21 @@ class _PendingEdge:
     speed_source: int
     layer: int
     access_reason: int
+    geometry_offset: int
+    geometry_count: int
+    geometry_reversed: bool
 
 
 class CompressedGraphAccumulator:
-    """Emit edges only between routing breakpoints while retaining true way length."""
+    """Emit routing edges while spooling detailed shape points outside Python heap."""
 
     def __init__(self, breakpoints: set[int]) -> None:
         self.breakpoints = breakpoints
         self._nodes: dict[int, _PendingNode] = {}
         self._edges: list[_PendingEdge] = []
+        self._geometry_spool = tempfile.TemporaryFile(mode="w+b")
+        self._geometry_point_count = 0
+        self._grouped_geometry: list[tuple[int, int, bool]] | None = None
         self.stats = GraphBuildStats()
         self.original_shape_segments = 0
 
@@ -146,6 +159,10 @@ class CompressedGraphAccumulator:
     @property
     def pending_edge_count(self) -> int:
         return len(self._edges)
+
+    @property
+    def geometry_point_count(self) -> int:
+        return self._geometry_point_count
 
     def add_way(self, way: WayInput) -> None:
         highway = str(way.tags.get("highway", "")).strip()
@@ -187,6 +204,7 @@ class CompressedGraphAccumulator:
             if accumulated_length > 0.0:
                 self._remember_node(source_id, way.coordinates[start_index])
                 self._remember_node(target_id, way.coordinates[index])
+                geometry_offset, geometry_count = self._store_geometry(way.coordinates[start_index:index + 1])
                 self._append_edge(
                     way,
                     start_index,
@@ -198,6 +216,9 @@ class CompressedGraphAccumulator:
                     access.reason,
                     flags | (FLAG_AGAINST_ONEWAY if oneway == -1 else 0),
                     layer,
+                    geometry_offset,
+                    geometry_count,
+                    False,
                 )
                 self._append_edge(
                     way,
@@ -210,10 +231,23 @@ class CompressedGraphAccumulator:
                     access.reason,
                     flags | (FLAG_AGAINST_ONEWAY if oneway == 1 else 0),
                     layer,
+                    geometry_offset,
+                    geometry_count,
+                    True,
                 )
 
             start_index = index
             accumulated_length = 0.0
+
+    def _store_geometry(self, coordinates: Iterable[tuple[float, float]]) -> tuple[int, int]:
+        offset = self._geometry_point_count
+        count = 0
+        for lon, lat in coordinates:
+            x, y = project(float(lon), float(lat))
+            self._geometry_spool.write(GEOMETRY_POINT_RECORD.pack(x, y))
+            self._geometry_point_count += 1
+            count += 1
+        return offset, count
 
     def _remember_node(self, osm_id: int, coord: tuple[float, float]) -> None:
         if osm_id not in self._nodes:
@@ -231,6 +265,9 @@ class CompressedGraphAccumulator:
         access_reason: int,
         flags: int,
         layer: int,
+        geometry_offset: int,
+        geometry_count: int,
+        geometry_reversed: bool,
     ) -> None:
         highway = str(way.tags["highway"])
         self._edges.append(
@@ -247,6 +284,9 @@ class CompressedGraphAccumulator:
                 speed_source=int(speed.source),
                 layer=layer,
                 access_reason=int(access_reason),
+                geometry_offset=geometry_offset,
+                geometry_count=geometry_count,
+                geometry_reversed=geometry_reversed,
             )
         )
         if speed.source == SpeedSource.OSM:
@@ -298,6 +338,7 @@ class CompressedGraphAccumulator:
                 progress("projecting nodes", index + 1, f"{len(ordered_nodes):,} nodes total")
 
         edges: list[GraphEdge] = []
+        grouped_geometry: list[tuple[int, int, bool]] = []
         for processed, pending in enumerate(grouped, start=1):
             if pending is None:
                 raise RuntimeError("Internal routing adjacency grouping hole")
@@ -317,10 +358,31 @@ class CompressedGraphAccumulator:
                     pending.access_reason,
                 )
             )
+            grouped_geometry.append((pending.geometry_offset, pending.geometry_count, pending.geometry_reversed))
             if progress and processed % 100_000 == 0:
                 progress("materializing edges", processed, f"{len(grouped):,} edges total")
 
+        self._grouped_geometry = grouped_geometry
         return RoutingGraph(tuple(nodes), tuple(edges))
+
+    def write_route_geometry(self, path: Path, progress: ProgressCallback | None = None) -> None:
+        """Write BRH1 records aligned exactly with the finalized BRG1 edge order."""
+        if self._grouped_geometry is None:
+            raise RuntimeError("finish() must run before route geometry can be written")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as handle:
+            handle.write(GEOMETRY_HEADER.pack(
+                GEOMETRY_MAGIC,
+                len(self._grouped_geometry),
+                self._geometry_point_count,
+            ))
+            for processed, (offset, count, reversed_flag) in enumerate(self._grouped_geometry, start=1):
+                handle.write(GEOMETRY_EDGE_RECORD.pack(offset, count, int(reversed_flag)))
+                if progress and processed % 100_000 == 0:
+                    progress("writing route geometry index", processed, f"{len(self._grouped_geometry):,} edges total")
+            self._geometry_spool.flush()
+            self._geometry_spool.seek(0)
+            shutil.copyfileobj(self._geometry_spool, handle, length=1024 * 1024)
 
 
 def build_compressed_graph(ways: Iterable[WayInput]) -> tuple[RoutingGraph, GraphBuildStats]:
