@@ -3,11 +3,13 @@ extends Node3D
 ## Thin Godot adapter for click-to-road GPS routing.
 ##
 ## Dependencies:
-## - GpsRouteModel owns waypoint/destination state without UI or transport.
-## - GpsProtocol owns request encoding.
+## - gps_route_model.gd owns waypoint/destination state without UI or transport.
+## - gps_protocol.gd owns request encoding.
 ## - bin/brur-gps-server owns snapping, cost policy and route search in resident native C++.
 ## - Main owns world origin coordinates; CameraRig supplies the current screen ray.
 
+const GpsRouteModelScript = preload("res://scripts/gps_route_model.gd")
+const GpsProtocolScript = preload("res://scripts/gps_protocol.gd")
 const EARTH_RADIUS: float = 6378137.0
 const START_LON: float = 18.0686
 const START_LAT: float = 59.3293
@@ -34,7 +36,7 @@ const ROUTING_PREFERENCE_LABELS: Array[String] = [
 @onready var camera_rig: Node3D = get_node("../CameraRig")
 @onready var camera: Camera3D = get_node("../CameraRig/Camera3D")
 
-var route_model: GpsRouteModel = GpsRouteModel.new()
+var route_model = GpsRouteModelScript.new()
 var player: Node3D
 var route_mesh_instance: MeshInstance3D
 var route_material: StandardMaterial3D
@@ -252,7 +254,7 @@ func _create_status_ui() -> void:
 	preference_select.item_selected.connect(_on_preference_selected)
 	content.add_child(preference_select)
 
-	var help := Label.new()
+	var help: Label = Label.new()
 	help.text = "Shift+click destination · Cmd/Ctrl+Shift+click waypoint"
 	content.add_child(help)
 
@@ -261,7 +263,7 @@ func _create_status_ui() -> void:
 	waypoint_list.select_mode = ItemList.SELECT_SINGLE
 	content.add_child(waypoint_list)
 
-	var buttons := HBoxContainer.new()
+	var buttons: HBoxContainer = HBoxContainer.new()
 	content.add_child(buttons)
 	remove_waypoint_button = Button.new()
 	remove_waypoint_button.text = "Remove selected"
@@ -291,7 +293,7 @@ func _request_current_plan() -> void:
 	var start_abs: Vector2 = _world_to_absolute(player.global_position)
 	var stops: Array[Vector2] = route_model.ordered_stops(start_abs)
 	var preference: String = _selected_preference()
-	var request: String = GpsProtocol.encode_plan(stops, preference)
+	var request: String = GpsProtocolScript.encode_plan(stops, preference)
 	if request.is_empty():
 		_set_status("GPS route plan has no destination")
 		return
