@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <netinet/in.h>
 #include <sstream>
+#include <sys/resource.h>
 #include <sys/socket.h>
 
 // Resident localhost adapter for Godot GPS queries.
@@ -15,8 +16,9 @@
 // - gps_runtime.cpp owns BRG1/BRS2 loading, snapping, legality and A* primitives.
 // - Godot sends one projected-coordinate request per line over localhost TCP.
 //
-// The graph, snap index and routing context are created once and stay resident,
-// avoiding a process launch plus graph/context setup for every gameplay query.
+// The graph, snap index and routing context are created once and stay resident.
+// File-backed routing pages are also touched before the server announces ready,
+// so the first gameplay route does not pay Sweden-scale mmap page faults.
 
 namespace {
 struct RoutePolylineResult {
@@ -249,6 +251,25 @@ std::string handle_query(const std::string &line, SnapIndex &snap_index, Router 
     const auto d = std::chrono::steady_clock::now();
     return route_json(start, target, route, elapsed_ms(a, b), elapsed_ms(b, c), elapsed_ms(c, d));
 }
+
+uint64_t warm_mapped_file(const MappedFile &file) {
+    if (file.data == nullptr || file.size == 0) return 0;
+    (void)madvise(const_cast<uint8_t *>(file.data), file.size, MADV_WILLNEED);
+    const long configured_page_size = sysconf(_SC_PAGESIZE);
+    const size_t page_size = configured_page_size > 0 ? static_cast<size_t>(configured_page_size) : 4096u;
+    uint64_t checksum = 0;
+    for (size_t offset = 0; offset < file.size; offset += page_size) {
+        checksum += file.data[offset];
+    }
+    checksum += file.data[file.size - 1];
+    return checksum;
+}
+
+void lower_background_priority() {
+    if (setpriority(PRIO_PROCESS, 0, 8) != 0) {
+        std::cerr << "[native-gps-server] warning: could not lower process priority\n";
+    }
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -257,10 +278,15 @@ int main(int argc, char **argv) {
         const std::string snap_path = argc > 2 ? argv[2] : "world_data/routing_snap.brs";
         const int port = argc > 3 ? std::stoi(argv[3]) : 47741;
 
+        lower_background_priority();
         const auto started = std::chrono::steady_clock::now();
         Graph graph(graph_path);
         SnapIndex snap_index(graph, snap_path);
         Router router(graph, snap_index.max_legal_speed_kmh);
+
+        const auto warm_started = std::chrono::steady_clock::now();
+        const uint64_t warm_checksum = warm_mapped_file(graph.file) ^ warm_mapped_file(snap_index.file);
+        const auto warm_finished = std::chrono::steady_clock::now();
 
         const int server_fd = socket(AF_INET, SOCK_STREAM, 0);
         if (server_fd < 0) throw std::runtime_error("socket failed");
@@ -281,7 +307,9 @@ int main(int argc, char **argv) {
         }
 
         std::cerr << "[native-gps-server] ready on 127.0.0.1:" << port
-                  << " | startup " << elapsed_ms(started, std::chrono::steady_clock::now()) << " ms\n";
+                  << " | startup " << elapsed_ms(started, std::chrono::steady_clock::now()) << " ms"
+                  << " | page warm " << elapsed_ms(warm_started, warm_finished) << " ms"
+                  << " | checksum " << warm_checksum << "\n";
 
         while (true) {
             const int client_fd = accept(server_fd, nullptr, nullptr);
