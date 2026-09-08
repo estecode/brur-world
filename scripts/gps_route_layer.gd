@@ -23,6 +23,7 @@ const CONNECT_RETRY_SECONDS: float = 0.15
 
 var player: Node3D
 var route_mesh_instance: MeshInstance3D
+var route_material: StandardMaterial3D
 var target_marker: MeshInstance3D
 var status_label: Label
 
@@ -40,6 +41,9 @@ var perf_route_ms: float = 0.0
 var perf_route_max_ms: float = 0.0
 var perf_settled: int = 0
 var perf_relaxed: int = 0
+var perf_parse_ms: float = 0.0
+var perf_apply_ms: float = 0.0
+var perf_points: int = 0
 var perf_last_success: bool = false
 
 func _ready() -> void:
@@ -149,7 +153,9 @@ func _read_server_responses() -> void:
 		receive_buffer = receive_buffer.substr(newline + 1)
 		if line.is_empty():
 			continue
+		var parse_started: int = Time.get_ticks_usec()
 		var parsed: Variant = JSON.parse_string(line)
+		perf_parse_ms += float(Time.get_ticks_usec() - parse_started) / 1000.0
 		gps_busy = false
 		if typeof(parsed) == TYPE_DICTIONARY:
 			_apply_route_response(parsed as Dictionary)
@@ -172,6 +178,11 @@ func _spawn_player() -> void:
 func _create_route_visuals() -> void:
 	route_mesh_instance = MeshInstance3D.new()
 	route_mesh_instance.name = "GpsRoute"
+	route_material = StandardMaterial3D.new()
+	route_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	route_material.albedo_color = Color(0.05, 0.75, 1.0)
+	route_material.no_depth_test = true
+	route_mesh_instance.material_override = route_material
 	add_child(route_mesh_instance)
 
 	target_marker = MeshInstance3D.new()
@@ -219,6 +230,7 @@ func _request_route(target_world: Vector3) -> void:
 	_set_status("Calculating GPS route…")
 
 func _apply_route_response(response: Dictionary) -> void:
+	var apply_started: int = Time.get_ticks_usec()
 	perf_queries += 1
 	var route_ms: float = float(response.get("route_ms", 0.0))
 	perf_route_ms += route_ms
@@ -230,15 +242,19 @@ func _apply_route_response(response: Dictionary) -> void:
 	if not perf_last_success:
 		_set_status("No drivable route found")
 		_clear_route_visual()
+		perf_apply_ms += float(Time.get_ticks_usec() - apply_started) / 1000.0
 		return
 
 	var points_value: Variant = response.get("points", [])
 	if typeof(points_value) != TYPE_ARRAY:
 		_set_status("GPS returned an invalid polyline")
+		perf_apply_ms += float(Time.get_ticks_usec() - apply_started) / 1000.0
 		return
 	var points: Array = points_value as Array
+	perf_points += points.size()
 	if points.size() < 2:
 		_set_status("GPS route has no drawable geometry")
+		perf_apply_ms += float(Time.get_ticks_usec() - apply_started) / 1000.0
 		return
 
 	_draw_route(points)
@@ -258,13 +274,15 @@ func _apply_route_response(response: Dictionary) -> void:
 	var distance_km: float = float(response.get("distance_m", 0.0)) / 1000.0
 	var minutes: float = float(response.get("travel_time_s", 0.0)) / 60.0
 	_set_status("GPS %.1f km · %.0f min · %.1f ms" % [distance_km, minutes, route_ms])
+	perf_apply_ms += float(Time.get_ticks_usec() - apply_started) / 1000.0
 	print(
-		"GPS route | %.1f km | %.1f min | %.2f ms | settled %d | relaxed %d" % [
+		"GPS route | %.1f km | %.1f min | %.2f ms | settled %d | relaxed %d | points %d" % [
 			distance_km,
 			minutes,
 			route_ms,
 			int(response.get("settled", 0)),
 			int(response.get("relaxed", 0)),
+			points.size(),
 		]
 	)
 
@@ -275,6 +293,9 @@ func consume_perf_metrics() -> Dictionary:
 		"gps_route_max_ms": perf_route_max_ms,
 		"gps_settled": perf_settled,
 		"gps_relaxed": perf_relaxed,
+		"gps_parse_ms": perf_parse_ms,
+		"gps_apply_ms": perf_apply_ms,
+		"gps_points": perf_points,
 		"gps_last_success": perf_last_success,
 		"gps_busy": gps_busy,
 	}
@@ -283,15 +304,15 @@ func consume_perf_metrics() -> Dictionary:
 	perf_route_max_ms = 0.0
 	perf_settled = 0
 	perf_relaxed = 0
+	perf_parse_ms = 0.0
+	perf_apply_ms = 0.0
+	perf_points = 0
 	return result
 
 func _draw_route(points: Array) -> void:
-	var route_mesh: ImmediateMesh = ImmediateMesh.new()
-	var material: StandardMaterial3D = StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_color = Color(0.05, 0.75, 1.0)
-	material.no_depth_test = true
-	route_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP, material)
+	var vertices: PackedVector3Array = PackedVector3Array()
+	vertices.resize(points.size())
+	var count: int = 0
 	for value in points:
 		if typeof(value) != TYPE_ARRAY:
 			continue
@@ -299,8 +320,17 @@ func _draw_route(points: Array) -> void:
 		if pair.size() < 2:
 			continue
 		var local: Vector3 = _absolute_to_world(float(pair[0]), float(pair[1]))
-		route_mesh.surface_add_vertex(Vector3(local.x, 0.0, local.z))
-	route_mesh.surface_end()
+		vertices[count] = Vector3(local.x, 0.0, local.z)
+		count += 1
+	vertices.resize(count)
+	if count < 2:
+		route_mesh_instance.mesh = null
+		return
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	var route_mesh: ArrayMesh = ArrayMesh.new()
+	route_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_LINE_STRIP, arrays)
 	route_mesh_instance.mesh = route_mesh
 
 func _clear_route_visual() -> void:
