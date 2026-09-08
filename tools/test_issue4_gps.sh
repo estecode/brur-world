@@ -54,5 +54,6 @@ run_godot_contract() {
 
 run_godot_contract tests/godot/test_gps_route_model.gd "godot gps route-model tests: OK"
 run_godot_contract tests/godot/test_gps_search_index.gd "godot gps search-index tests: OK"
+run_godot_contract tests/godot/test_gps_search_route_adapter.gd "godot gps search-route adapter tests: OK"
 
 echo "issue #4 automated GPS tests: OK"
