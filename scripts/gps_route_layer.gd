@@ -6,7 +6,7 @@ extends Node3D
 ## - GpsClient owns native process/TCP lifecycle and response delivery.
 ## - GpsRouteModel owns destination/waypoint/preference state.
 ## - GpsRouteRenderer owns route/target visuals; GpsRouteUi owns controls/status.
-## - Game/harness composition supplies world origin and camera dependencies explicitly.
+## - Main exposes the configured WorldCoordinates API; CameraRig supplies camera dependencies explicitly.
 
 const GpsClientScript = preload("res://scripts/gps_client.gd")
 const GpsInputAdapterScript = preload("res://scripts/gps_input_adapter.gd")
@@ -348,22 +348,22 @@ func _project_lonlat(lon: float, lat: float) -> Vector2:
 		EARTH_RADIUS * log(tan(PI / 4.0 + lat_radians / 2.0))
 	)
 
-func _world_to_absolute(world_position: Vector3) -> Vector2:
+func _world_coordinates():
 	if _main == null:
+		return null
+	return _main.call("get_world_coordinates")
+
+func _world_to_absolute(world_position: Vector3) -> Vector2:
+	var coordinates = _world_coordinates()
+	if coordinates == null:
 		return Vector2(INF, INF)
-	return Vector2(
-		world_position.x + float(_main.get("origin_x")),
-		-world_position.z + float(_main.get("origin_y"))
-	)
+	return coordinates.world_to_absolute(world_position)
 
 func _absolute_to_world(x: float, y: float) -> Vector3:
-	if _main == null:
+	var coordinates = _world_coordinates()
+	if coordinates == null:
 		return Vector3(INF, INF, INF)
-	return Vector3(
-		x - float(_main.get("origin_x")),
-		0.0,
-		-(y - float(_main.get("origin_y")))
-	)
+	return coordinates.absolute_to_world(Vector2(x, y))
 
 func _set_status(text: String) -> void:
 	if route_ui != null:
