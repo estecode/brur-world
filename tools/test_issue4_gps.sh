@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs the issue #4 GPS correctness contracts plus native-core regression coverage.
+# Runs the issue #4 GPS correctness contracts plus native-core and Godot adapter regression coverage.
 # Dependencies: Python 3, a C++20 compiler, and Godot (GODOT_BIN can override macOS default).
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -56,6 +56,7 @@ run_godot_contract() {
 }
 
 run_godot_contract tests/godot/test_gps_route_model.gd "godot gps route-model tests: OK"
+run_godot_contract tests/godot/test_gps_adapter_split.gd "godot gps adapter-split tests: OK"
 run_godot_contract tests/godot/test_gps_search_index.gd "godot gps search-index tests: OK"
 run_godot_contract tests/godot/test_gps_search_route_adapter.gd "godot gps search-route adapter tests: OK"
 run_godot_contract tests/godot/test_gps_search_native_adapter.gd "godot gps native-search adapter tests: OK"
