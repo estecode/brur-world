@@ -3,16 +3,19 @@ extends Node3D
 ## Thin Godot adapter for click-to-road GPS routing.
 ##
 ## Dependencies:
-## - bin/brur-gps-route owns snapping and route search in native C++.
+## - bin/brur-gps-server owns snapping and route search in resident native C++.
 ## - Main owns world origin coordinates; CameraRig supplies the current screen ray.
-## - Godot only launches the native query on a worker thread and renders its polyline.
+## - Godot only sends projected coordinates over localhost TCP and renders the returned polyline.
 
 const EARTH_RADIUS: float = 6378137.0
 const START_LON: float = 18.0686
 const START_LAT: float = 59.3293
-const ROUTE_BINARY: String = "res://bin/brur-gps-route"
+const SERVER_BINARY: String = "res://bin/brur-gps-server"
 const GRAPH_PATH: String = "res://world_data/routing.brg"
 const SNAP_PATH: String = "res://world_data/routing_snap.brs"
+const SERVER_HOST: String = "127.0.0.1"
+const SERVER_PORT: int = 47741
+const CONNECT_RETRY_SECONDS: float = 0.15
 
 @onready var main: Node3D = get_parent()
 @onready var camera_rig: Node3D = get_node("../CameraRig")
@@ -22,10 +25,15 @@ var player: Node3D
 var route_mesh_instance: MeshInstance3D
 var target_marker: MeshInstance3D
 var status_label: Label
-var route_thread: Thread
-var binary_path: String = ""
+
+var server_path: String = ""
 var graph_path: String = ""
 var snap_path: String = ""
+var server_pid: int = -1
+var server_peer: StreamPeerTCP
+var receive_buffer: String = ""
+var connect_retry_left: float = 0.0
+var gps_busy: bool = false
 
 var perf_queries: int = 0
 var perf_route_ms: float = 0.0
@@ -35,7 +43,7 @@ var perf_relaxed: int = 0
 var perf_last_success: bool = false
 
 func _ready() -> void:
-	binary_path = ProjectSettings.globalize_path(ROUTE_BINARY)
+	server_path = ProjectSettings.globalize_path(SERVER_BINARY)
 	graph_path = ProjectSettings.globalize_path(GRAPH_PATH)
 	snap_path = ProjectSettings.globalize_path(SNAP_PATH)
 	_create_route_visuals()
@@ -43,25 +51,19 @@ func _ready() -> void:
 	call_deferred("_finish_setup")
 
 func _finish_setup() -> void:
-	if not FileAccess.file_exists(ROUTE_BINARY):
-		_set_status("GPS native binary missing. Run: bash tools/build_native_gps.sh")
-		push_warning("GPS native binary missing. Run: bash tools/build_native_gps.sh")
+	if not FileAccess.file_exists(SERVER_BINARY):
+		_set_status("GPS native server missing. Run: bash tools/build_native_gps.sh")
+		push_warning("GPS native server missing. Run: bash tools/build_native_gps.sh")
 		return
 	if not FileAccess.file_exists(GRAPH_PATH) or not FileAccess.file_exists(SNAP_PATH):
 		_set_status("GPS data missing: routing.brg / routing_snap.brs")
 		return
 	_spawn_player()
-	_set_status("GPS ready — Shift + left click a road to route from the player")
+	_start_native_server()
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	_update_visual_height()
-	if route_thread != null and not route_thread.is_alive():
-		var response: Variant = route_thread.wait_to_finish()
-		route_thread = null
-		if typeof(response) == TYPE_DICTIONARY:
-			_apply_route_response(response as Dictionary)
-		else:
-			_set_status("GPS query failed")
+	_poll_native_server(delta)
 
 func _input(event: InputEvent) -> void:
 	if not (event is InputEventMouseButton):
@@ -71,7 +73,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if player == null:
 		return
-	if route_thread != null:
+	if server_peer == null or server_peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+		_set_status("GPS native server is not ready yet")
+		return
+	if gps_busy:
 		_set_status("GPS is already calculating a route…")
 		return
 	var hit: Vector3 = _screen_to_ground(mouse_event.position)
@@ -81,9 +86,75 @@ func _input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 func _exit_tree() -> void:
-	if route_thread != null:
-		route_thread.wait_to_finish()
-		route_thread = null
+	if server_peer != null:
+		server_peer.disconnect_from_host()
+		server_peer = null
+	if server_pid > 0:
+		OS.kill(server_pid)
+		server_pid = -1
+
+func _start_native_server() -> void:
+	var args: PackedStringArray = PackedStringArray([
+		graph_path,
+		snap_path,
+		str(SERVER_PORT),
+	])
+	server_pid = OS.create_process(server_path, args, false)
+	if server_pid <= 0:
+		_set_status("Could not start native GPS server")
+		return
+	_set_status("GPS native server starting…")
+	server_peer = StreamPeerTCP.new()
+	connect_retry_left = 0.0
+	_try_connect_server()
+
+func _try_connect_server() -> void:
+	if server_peer == null:
+		server_peer = StreamPeerTCP.new()
+	var status: StreamPeerTCP.Status = server_peer.get_status()
+	if status == StreamPeerTCP.STATUS_CONNECTED or status == StreamPeerTCP.STATUS_CONNECTING:
+		return
+	server_peer.disconnect_from_host()
+	var error: Error = server_peer.connect_to_host(SERVER_HOST, SERVER_PORT)
+	if error != OK:
+		connect_retry_left = CONNECT_RETRY_SECONDS
+
+func _poll_native_server(delta: float) -> void:
+	if server_peer == null:
+		return
+	server_peer.poll()
+	var status: StreamPeerTCP.Status = server_peer.get_status()
+	if status == StreamPeerTCP.STATUS_CONNECTED:
+		_read_server_responses()
+		if not gps_busy and status_label != null and status_label.text.begins_with("GPS native server"):
+			_set_status("GPS ready — Shift + left click a road to route from the player")
+		return
+	if status == StreamPeerTCP.STATUS_CONNECTING:
+		return
+	connect_retry_left -= delta
+	if connect_retry_left <= 0.0:
+		connect_retry_left = CONNECT_RETRY_SECONDS
+		_try_connect_server()
+
+func _read_server_responses() -> void:
+	var available: int = server_peer.get_available_bytes()
+	if available <= 0:
+		return
+	receive_buffer += server_peer.get_utf8_string(available)
+	while true:
+		var newline: int = receive_buffer.find("\n")
+		if newline < 0:
+			break
+		var line: String = receive_buffer.substr(0, newline).strip_edges()
+		receive_buffer = receive_buffer.substr(newline + 1)
+		if line.is_empty():
+			continue
+		var parsed: Variant = JSON.parse_string(line)
+		gps_busy = false
+		if typeof(parsed) == TYPE_DICTIONARY:
+			_apply_route_response(parsed as Dictionary)
+		else:
+			_set_status("GPS server returned invalid JSON")
 
 func _spawn_player() -> void:
 	var scene: PackedScene = load("res://scenes/vehicle.tscn") as PackedScene
@@ -134,38 +205,18 @@ func _create_status_ui() -> void:
 func _request_route(target_world: Vector3) -> void:
 	var start_abs: Vector2 = _world_to_absolute(player.global_position)
 	var target_abs: Vector2 = _world_to_absolute(target_world)
-	var args: PackedStringArray = PackedStringArray([
-		str(start_abs.x),
-		str(start_abs.y),
-		str(target_abs.x),
-		str(target_abs.y),
-		graph_path,
-		snap_path,
-	])
-	route_thread = Thread.new()
-	var error: Error = route_thread.start(_run_native_route.bind(args))
+	var request: String = "%.9f %.9f %.9f %.9f\n" % [
+		start_abs.x,
+		start_abs.y,
+		target_abs.x,
+		target_abs.y,
+	]
+	var error: Error = server_peer.put_data(request.to_utf8_buffer())
 	if error != OK:
-		route_thread = null
-		_set_status("Could not start GPS worker")
+		_set_status("Could not send GPS query")
 		return
+	gps_busy = true
 	_set_status("Calculating GPS route…")
-
-func _run_native_route(args: PackedStringArray) -> Dictionary:
-	var output: Array = []
-	var exit_code: int = OS.execute(binary_path, args, output, false, false)
-	var text: String = ""
-	for chunk in output:
-		text += String(chunk)
-	var parsed: Variant = JSON.parse_string(text.strip_edges())
-	if typeof(parsed) != TYPE_DICTIONARY:
-		return {
-			"success": false,
-			"adapter_error": "native output was not JSON",
-			"exit_code": exit_code,
-		}
-	var result: Dictionary = parsed as Dictionary
-	result["exit_code"] = exit_code
-	return result
 
 func _apply_route_response(response: Dictionary) -> void:
 	perf_queries += 1
@@ -225,7 +276,7 @@ func consume_perf_metrics() -> Dictionary:
 		"gps_settled": perf_settled,
 		"gps_relaxed": perf_relaxed,
 		"gps_last_success": perf_last_success,
-		"gps_busy": route_thread != null,
+		"gps_busy": gps_busy,
 	}
 	perf_queries = 0
 	perf_route_ms = 0.0
