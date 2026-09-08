@@ -4,8 +4,8 @@ extends MultiMeshInstance3D
 ##
 ## Dependencies:
 ## - Consumes cloud_field_model.gd output.
-## - Receives camera view state and sun direction explicitly from composition.
-## - Does not own astronomy, weather, world time, or coordinate conversion.
+## - Receives camera view state explicitly from composition.
+## - Uses normal Godot scene lighting, so #66 can move the shared sun without cloud astronomy.
 
 const CloudFieldModelScript = preload("res://scripts/cloud_field_model.gd")
 const MAX_PUFF_INSTANCES: int = 1400
@@ -23,7 +23,6 @@ var _camera_distance_m: float = 800000.0
 var _last_cell := Vector2i(2147483647, 2147483647)
 var _last_lod: int = -1
 var _resources_ready: bool = false
-var _material: ShaderMaterial
 
 func _ready() -> void:
 	_create_render_resources()
@@ -44,12 +43,6 @@ func set_simulation_seconds(simulation_seconds: float) -> void:
 	_simulation_seconds = maxf(0.0, simulation_seconds)
 	if _resources_ready:
 		_update_instance_transforms()
-
-func set_sun_direction(world_direction: Vector3) -> void:
-	if world_direction.length_squared() <= 0.000001:
-		return
-	if _material != null:
-		_material.set_shader_parameter("sun_direction", world_direction.normalized())
 
 func set_coverage(new_coverage: float) -> void:
 	var clamped: float = _model.normalized_coverage(new_coverage)
@@ -75,26 +68,15 @@ func _create_render_resources() -> void:
 	puff_mesh.radial_segments = 8
 	puff_mesh.rings = 4
 
-	var shader := Shader.new()
-	shader.code = """
-shader_type spatial;
-render_mode unshaded, blend_mix, cull_disabled, depth_draw_opaque;
-
-uniform vec3 sun_direction = vec3(0.35, -0.8, 0.4);
-uniform vec3 cloud_tint = vec3(0.98, 0.99, 1.0);
-
-void fragment() {
-	vec3 sun_view = normalize((VIEW_MATRIX * vec4(-sun_direction, 0.0)).xyz);
-	float sun_facing = clamp(dot(normalize(NORMAL), sun_view) * 0.5 + 0.5, 0.0, 1.0);
-	float upper = clamp(NORMAL.y * 0.5 + 0.5, 0.0, 1.0);
-	float brightness = 0.55 + sun_facing * 0.29 + upper * 0.16;
-	ALBEDO = cloud_tint * brightness;
-	ALPHA = 0.88;
-}
-"""
-	_material = ShaderMaterial.new()
-	_material.shader = shader
-	puff_mesh.material = _material
+	# Keep cloud lighting deliberately conventional: the same DirectionalLight3D
+	# used by the world lights the puff normals. When #66 moves that shared sun,
+	# cloud tops/sun-facing sides respond automatically with no duplicate sun math.
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color(0.98, 0.99, 1.0, 0.86)
+	material.roughness = 1.0
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	puff_mesh.material = material
 
 	var cloud_multimesh := MultiMesh.new()
 	cloud_multimesh.transform_format = MultiMesh.TRANSFORM_3D
