@@ -7,11 +7,11 @@
 // - Consumes an immutable byte span; file mapping/loading belongs to adapters.
 // - Query text must already be normalized to lowercase ASCII words using the
 //   same normalization contract as tools/gps_search.py.
-// - SearchEngine builds an immutable in-memory trigram candidate index once at
-//   startup; query ranking remains exactly the same as the BSI1 reference.
+// - BSI2 may append a BSA1 mmap trigram accelerator. Queries with at least one
+//   3+ character token use its immutable postings; older BSI2 files fall back
+//   to the exact full scan.
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -23,8 +23,8 @@ namespace brur::gps::search {
 
 constexpr std::size_t BSI2_HEADER_SIZE = 32;
 constexpr std::size_t BSI2_RECORD_SIZE = 72;
-constexpr uint32_t TRIGRAM_ALPHABET = 36;
-constexpr uint32_t TRIGRAM_BUCKETS = TRIGRAM_ALPHABET * TRIGRAM_ALPHABET * TRIGRAM_ALPHABET;
+constexpr std::size_t BSA1_ENTRY_SIZE = 12;
+constexpr std::size_t BSA1_FOOTER_SIZE = 40;
 
 inline uint32_t read_u32_le(const uint8_t *p) {
     return static_cast<uint32_t>(p[0]) |
@@ -154,6 +154,13 @@ inline bool match_score(std::string_view query,
     return true;
 }
 
+inline uint32_t trigram_key(std::string_view value) {
+    if (value.size() < 3) return std::numeric_limits<uint32_t>::max();
+    return static_cast<uint32_t>(static_cast<unsigned char>(value[0])) |
+           (static_cast<uint32_t>(static_cast<unsigned char>(value[1])) << 8) |
+           (static_cast<uint32_t>(static_cast<unsigned char>(value[2])) << 16);
+}
+
 class IndexView {
 public:
     IndexView() = default;
@@ -162,6 +169,13 @@ public:
     void reset(const uint8_t *data, std::size_t size) {
         data_ = data;
         size_ = size;
+        accelerator_ = false;
+        strings_end_ = size_;
+        entries_offset_ = 0;
+        postings_offset_ = 0;
+        entry_count_ = 0;
+        postings_count_ = 0;
+
         if (data_ == nullptr || size_ < BSI2_HEADER_SIZE)
             throw std::runtime_error("BSI2 file too small");
         if (std::string_view(reinterpret_cast<const char *>(data_), 4) != "BSI2")
@@ -177,9 +191,14 @@ public:
         const uint64_t records_end = records_offset_ + static_cast<uint64_t>(count_) * BSI2_RECORD_SIZE;
         if (records_end != strings_offset_ || records_end > size_)
             throw std::runtime_error("invalid BSI2 record table");
+
+        parse_accelerator();
     }
 
     uint32_t count() const { return count_; }
+    bool has_accelerator() const { return accelerator_; }
+    uint32_t accelerator_entry_count() const { return entry_count_; }
+    uint32_t accelerator_posting_count() const { return postings_count_; }
 
     RecordView record(uint32_t index) const {
         if (index >= count_) throw std::out_of_range("BSI2 record index");
@@ -200,11 +219,48 @@ public:
     }
 
     std::vector<Result> search(std::string_view normalized_query, std::size_t limit = 8) const {
+        std::vector<Result> best;
+        if (limit == 0 || normalized_query.empty()) return best;
         const auto tokens = split_words(normalized_query);
+        best.reserve(limit);
+
+        std::vector<PostingSpan> spans;
+        if (accelerator_ && collect_posting_spans(tokens, spans)) {
+            if (spans.empty()) return full_scan(normalized_query, tokens, limit);
+            std::sort(spans.begin(), spans.end(), [](const PostingSpan &a, const PostingSpan &b) {
+                return a.count < b.count;
+            });
+            if (spans.front().count == 0) return best;
+            for (uint32_t pos = 0; pos < spans.front().count; ++pos) {
+                const uint32_t candidate = posting_value(spans.front(), pos);
+                bool present = true;
+                for (std::size_t i = 1; i < spans.size(); ++i) {
+                    if (!posting_contains(spans[i], candidate)) {
+                        present = false;
+                        break;
+                    }
+                }
+                if (present) consider(candidate, normalized_query, tokens, limit, best);
+            }
+            finish(best, limit);
+            return best;
+        }
+
+        return full_scan(normalized_query, tokens, limit);
+    }
+
+private:
+    struct PostingSpan {
+        uint32_t start = 0;
+        uint32_t count = 0;
+    };
+
+    std::vector<Result> full_scan(std::string_view query,
+                                  const std::vector<std::string_view> &tokens,
+                                  std::size_t limit) const {
         std::vector<Result> best;
         best.reserve(limit);
-        if (limit == 0 || normalized_query.empty()) return best;
-        for (uint32_t i = 0; i < count_; ++i) consider(i, normalized_query, tokens, limit, best);
+        for (uint32_t i = 0; i < count_; ++i) consider(i, query, tokens, limit, best);
         finish(best, limit);
         return best;
     }
@@ -231,93 +287,111 @@ public:
         if (best.size() < limit) std::sort(best.begin(), best.end(), result_less);
     }
 
-private:
+    bool collect_posting_spans(const std::vector<std::string_view> &tokens,
+                               std::vector<PostingSpan> &spans) const {
+        std::vector<uint32_t> keys;
+        keys.reserve(tokens.size() * 2);
+        for (const auto token : tokens) {
+            if (token.size() < 3) continue;
+            keys.push_back(trigram_key(token.substr(0, 3)));
+            const uint32_t last = trigram_key(token.substr(token.size() - 3, 3));
+            if (last != keys.back()) keys.push_back(last);
+        }
+        if (keys.empty()) return false;
+        std::sort(keys.begin(), keys.end());
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        spans.clear();
+        spans.reserve(keys.size());
+        for (const uint32_t key : keys) {
+            PostingSpan span;
+            if (!find_postings(key, span)) {
+                spans.push_back({0, 0});
+                return true;
+            }
+            spans.push_back(span);
+        }
+        return true;
+    }
+
+    bool find_postings(uint32_t key, PostingSpan &out) const {
+        uint32_t low = 0;
+        uint32_t high = entry_count_;
+        while (low < high) {
+            const uint32_t mid = low + (high - low) / 2;
+            const uint8_t *entry = data_ + entries_offset_ + static_cast<uint64_t>(mid) * BSA1_ENTRY_SIZE;
+            const uint32_t entry_key = read_u32_le(entry);
+            if (entry_key < key) low = mid + 1;
+            else high = mid;
+        }
+        if (low >= entry_count_) return false;
+        const uint8_t *entry = data_ + entries_offset_ + static_cast<uint64_t>(low) * BSA1_ENTRY_SIZE;
+        if (read_u32_le(entry) != key) return false;
+        out.start = read_u32_le(entry + 4);
+        out.count = read_u32_le(entry + 8);
+        if (static_cast<uint64_t>(out.start) + out.count > postings_count_)
+            throw std::runtime_error("invalid BSA1 posting span");
+        return true;
+    }
+
+    uint32_t posting_value(const PostingSpan &span, uint32_t position) const {
+        const uint64_t index = static_cast<uint64_t>(span.start) + position;
+        return read_u32_le(data_ + postings_offset_ + index * 4);
+    }
+
+    bool posting_contains(const PostingSpan &span, uint32_t value) const {
+        uint32_t low = 0;
+        uint32_t high = span.count;
+        while (low < high) {
+            const uint32_t mid = low + (high - low) / 2;
+            const uint32_t candidate = posting_value(span, mid);
+            if (candidate < value) low = mid + 1;
+            else high = mid;
+        }
+        return low < span.count && posting_value(span, low) == value;
+    }
+
+    void parse_accelerator() {
+        if (size_ < BSA1_FOOTER_SIZE) return;
+        const uint64_t footer_offset = size_ - BSA1_FOOTER_SIZE;
+        const uint8_t *footer = data_ + footer_offset;
+        if (std::string_view(reinterpret_cast<const char *>(footer), 4) != "BSA1") return;
+
+        const uint32_t entry_size = read_u32_le(footer + 4);
+        entry_count_ = read_u32_le(footer + 8);
+        postings_count_ = read_u32_le(footer + 12);
+        entries_offset_ = read_u64_le(footer + 16);
+        postings_offset_ = read_u64_le(footer + 24);
+        const uint64_t stored_footer_offset = read_u64_le(footer + 32);
+
+        if (entry_size != BSA1_ENTRY_SIZE || stored_footer_offset != footer_offset)
+            throw std::runtime_error("invalid BSA1 footer");
+        const uint64_t expected_postings = entries_offset_ + static_cast<uint64_t>(entry_count_) * BSA1_ENTRY_SIZE;
+        const uint64_t expected_footer = postings_offset_ + static_cast<uint64_t>(postings_count_) * 4;
+        if (entries_offset_ < strings_offset_ || postings_offset_ != expected_postings || expected_footer != footer_offset)
+            throw std::runtime_error("invalid BSA1 offsets");
+
+        strings_end_ = entries_offset_;
+        accelerator_ = true;
+    }
+
     std::string_view string_at(uint32_t offset, uint32_t length) const {
         const uint64_t begin = strings_offset_ + offset;
         const uint64_t end = begin + length;
-        if (begin > size_ || end > size_) throw std::runtime_error("invalid BSI2 string span");
+        if (begin > strings_end_ || end > strings_end_) throw std::runtime_error("invalid BSI2 string span");
         return std::string_view(reinterpret_cast<const char *>(data_ + begin), length);
     }
 
     const uint8_t *data_ = nullptr;
     std::size_t size_ = 0;
+    std::size_t strings_end_ = 0;
     uint32_t count_ = 0;
     uint64_t records_offset_ = 0;
     uint64_t strings_offset_ = 0;
-};
-
-inline int trigram_symbol(char value) {
-    if (value >= '0' && value <= '9') return value - '0';
-    if (value >= 'a' && value <= 'z') return 10 + value - 'a';
-    return -1;
-}
-
-inline uint32_t trigram_id(std::string_view text) {
-    if (text.size() < 3) return TRIGRAM_BUCKETS;
-    const int a = trigram_symbol(text[0]);
-    const int b = trigram_symbol(text[1]);
-    const int c = trigram_symbol(text[2]);
-    if (a < 0 || b < 0 || c < 0) return TRIGRAM_BUCKETS;
-    return (static_cast<uint32_t>(a) * TRIGRAM_ALPHABET + static_cast<uint32_t>(b)) *
-        TRIGRAM_ALPHABET + static_cast<uint32_t>(c);
-}
-
-class SearchEngine {
-public:
-    explicit SearchEngine(const IndexView &index) : index_(index) { build_candidates(); }
-
-    std::vector<Result> search(std::string_view normalized_query, std::size_t limit = 8) const {
-        if (limit == 0 || normalized_query.empty()) return {};
-        const auto tokens = split_words(normalized_query);
-        std::string_view longest;
-        for (const auto token : tokens)
-            if (token.size() > longest.size()) longest = token;
-        if (longest.size() < 3) return index_.search(normalized_query, limit);
-
-        const std::vector<uint32_t> *candidates = nullptr;
-        for (std::size_t i = 0; i + 3 <= longest.size(); ++i) {
-            const uint32_t id = trigram_id(longest.substr(i, 3));
-            if (id >= TRIGRAM_BUCKETS) continue;
-            const auto &bucket = buckets_[id];
-            if (candidates == nullptr || bucket.size() < candidates->size()) candidates = &bucket;
-        }
-        if (candidates == nullptr) return index_.search(normalized_query, limit);
-
-        std::vector<Result> best;
-        best.reserve(limit);
-        for (const uint32_t index : *candidates)
-            index_.consider(index, normalized_query, tokens, limit, best);
-        IndexView::finish(best, limit);
-        return best;
-    }
-
-    std::size_t posting_count() const { return posting_count_; }
-
-private:
-    void build_candidates() {
-        std::vector<uint32_t> ids;
-        ids.reserve(64);
-        for (uint32_t record_index = 0; record_index < index_.count(); ++record_index) {
-            ids.clear();
-            const auto text = index_.record(record_index).search_text;
-            const auto words = split_words(text);
-            for (const auto word : words) {
-                if (word.size() < 3) continue;
-                for (std::size_t i = 0; i + 3 <= word.size(); ++i) {
-                    const uint32_t id = trigram_id(word.substr(i, 3));
-                    if (id < TRIGRAM_BUCKETS) ids.push_back(id);
-                }
-            }
-            std::sort(ids.begin(), ids.end());
-            ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
-            for (const uint32_t id : ids) buckets_[id].push_back(record_index);
-            posting_count_ += ids.size();
-        }
-    }
-
-    const IndexView &index_;
-    std::array<std::vector<uint32_t>, TRIGRAM_BUCKETS> buckets_;
-    std::size_t posting_count_ = 0;
+    bool accelerator_ = false;
+    uint64_t entries_offset_ = 0;
+    uint64_t postings_offset_ = 0;
+    uint32_t entry_count_ = 0;
+    uint32_t postings_count_ = 0;
 };
 
 } // namespace brur::gps::search
