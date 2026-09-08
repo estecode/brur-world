@@ -47,11 +47,11 @@ jobs:
 
       - name: Run portable vehicle dynamics tests
         run: |
-          "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_dynamics.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_dynamics.gd
 
       - name: Run vehicle integration tests
         run: |
-          "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_integration.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_integration.gd
 
       - name: Run objective GPS regression suite
         env:
