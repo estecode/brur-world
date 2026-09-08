@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launches an exact pull-request revision in an isolated temporary worktree for human Godot verification.
-# Dependencies: git, a local Godot executable, and this checkout's ignored world_data runtime dataset.
+# Dependencies: git, a local Godot executable, a C++20 compiler, and this checkout's ignored world_data runtime dataset.
 set -euo pipefail
 
 PR="${1:-}"
@@ -40,6 +40,11 @@ ADDED=1
 
 rm -rf "$TMP/world_data"
 ln -s "$WORLD_DATA" "$TMP/world_data"
+
+if [[ -x "$TMP/tools/build_native_gps.sh" ]]; then
+  printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s\n' "$PR"
+  bash "$TMP/tools/build_native_gps.sh"
+fi
 
 printf 'PR_CHECK=RUN pr=%s revision=%s\n' "$PR" "$(git -C "$TMP" rev-parse --short HEAD)"
 printf 'Close Godot when the check is complete; the temporary checkout will then be removed automatically.\n'
