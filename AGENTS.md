@@ -10,6 +10,23 @@ If a requested change conflicts with `ARCHITECTURE.md`, identify the conflict an
 
 These instructions are persistent repository rules and apply without needing to be repeated in individual tasks or issues.
 
+## Issue workflow
+
+When asked to implement or fix a GitHub issue, including shorthand requests such as `fix #48` or `fixa #48`:
+
+1. Read `AGENTS.md` and `ARCHITECTURE.md` before changing code.
+2. Read the current GitHub issue and keep the implementation within its scope and acceptance criteria.
+3. Start from the latest `main` branch.
+4. Create a dedicated branch named `issue/<number>-<short-name>`.
+5. Keep concurrent issue work isolated on separate branches and avoid unrelated changes that increase merge conflicts.
+6. Implement the smallest architecture-compliant change that satisfies the issue.
+7. Run the relevant tests and validation for the touched subsystem.
+8. Commit the completed work to the issue branch with a message that references the issue.
+9. Do not merge the issue branch into `main` unless explicitly requested.
+10. Report the branch name, commit, tests/validation performed, and anything still outstanding.
+
+The dedicated issue branch is the default for issue implementation work and does not need to be requested separately.
+
 ## Key reminders
 
 ### 1. No speculative abstraction
