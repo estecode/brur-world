@@ -56,8 +56,7 @@ grep -q -- "--path $FAKE_ROOT $FAKE_ROOT/harness/gps/gps_harness.tscn" "$GODOT_L
 
 : > "$GODOT_LOG"
 BRUR_GODOT="$TMP/godot" bash "$FAKE_ROOT/tools/playtest.sh" driving >"$TMP/driving.out"
-grep -q 'PLAYTEST=READY world-data' "$TMP/driving.out"
-grep -q 'PLAYTEST=READY native-gps' "$TMP/driving.out"
+grep -q 'PLAYTEST=RUN target=driving scene=harness/driving/driving_harness.tscn' "$TMP/driving.out"
 grep -q -- "--path $FAKE_ROOT $FAKE_ROOT/harness/driving/driving_harness.tscn" "$GODOT_LOG"
 
 rm "$FAKE_ROOT/world_data/routing.brg"
