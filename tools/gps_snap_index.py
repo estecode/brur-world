@@ -20,8 +20,8 @@ from gps_routing import DirectedSnap, RoadSnap
 from routing_graph import RoutingProfile, is_edge_allowed
 
 
-MAGIC = b"BRS1"
-HEADER = struct.Struct("<4sfII")
+MAGIC = b"BRS2"
+HEADER = struct.Struct("<4sfIIf")
 CELL = struct.Struct("<iiII")
 EDGE_REF = struct.Struct("<I")
 DEFAULT_CELL_SIZE_M = 1000.0
@@ -52,17 +52,25 @@ def _cell_bounds(graph, edge_index: int, cell_size_m: float) -> tuple[int, int, 
 
 
 def build_snap_index(graph, path: Path, cell_size_m: float = DEFAULT_CELL_SIZE_M) -> dict[str, int | float]:
-    """Build BRS1 once offline; one representative is stored per physical edge."""
+    """Build BRS2 once offline; one representative is stored per physical edge.
+
+    The file also stores the maximum legal NORMAL-profile edge speed. The router
+    uses that value as a mathematically admissible A* time heuristic bound.
+    """
     if cell_size_m <= 0.0:
         raise ValueError("cell_size_m must be positive")
     started = time.perf_counter()
     last_print = started
     cells: dict[tuple[int, int], list[int]] = defaultdict(list)
     physical_edges = 0
+    max_legal_speed_kmh = 0.0
 
     edge_total = len(graph.edges)
     for edge_index in range(edge_total):
         edge = graph.edges[edge_index]
+        if is_edge_allowed(edge, RoutingProfile.NORMAL):
+            max_legal_speed_kmh = max(max_legal_speed_kmh, float(edge.speed_kmh))
+
         # BRG1 always stores both physical directions. Picking the direction whose
         # node index increases removes the expensive runtime physical-edge hash map.
         if edge.source_index >= edge.target_index:
@@ -77,10 +85,14 @@ def build_snap_index(graph, path: Path, cell_size_m: float = DEFAULT_CELL_SIZE_M
             elapsed = now - started
             print(
                 f"[snap-index] scanning edges: {edge_index + 1:,}/{edge_total:,} | "
-                f"{physical_edges:,} physical | {len(cells):,} cells | {elapsed:.1f}s",
+                f"{physical_edges:,} physical | {len(cells):,} cells | "
+                f"max legal {max_legal_speed_kmh:.1f} km/h | {elapsed:.1f}s",
                 flush=True,
             )
             last_print = now
+
+    if max_legal_speed_kmh <= 0.0:
+        raise ValueError("routing graph has no NORMAL-profile legal edge speed")
 
     ordered_cells = sorted(cells.items())
     ref_count = sum(len(refs) for _, refs in ordered_cells)
@@ -88,7 +100,15 @@ def build_snap_index(graph, path: Path, cell_size_m: float = DEFAULT_CELL_SIZE_M
     temp = path.with_suffix(path.suffix + ".tmp")
     try:
         with temp.open("wb") as handle:
-            handle.write(HEADER.pack(MAGIC, float(cell_size_m), len(ordered_cells), ref_count))
+            handle.write(
+                HEADER.pack(
+                    MAGIC,
+                    float(cell_size_m),
+                    len(ordered_cells),
+                    ref_count,
+                    float(max_legal_speed_kmh),
+                )
+            )
             offset = 0
             for (cx, cy), refs in ordered_cells:
                 refs.sort()
@@ -106,20 +126,22 @@ def build_snap_index(graph, path: Path, cell_size_m: float = DEFAULT_CELL_SIZE_M
     elapsed = time.perf_counter() - started
     print(
         f"[snap-index] done: {physical_edges:,} physical edges, {len(ordered_cells):,} cells, "
-        f"{ref_count:,} refs, {path.stat().st_size:,} bytes, {elapsed:.1f}s",
+        f"{ref_count:,} refs, max legal {max_legal_speed_kmh:.1f} km/h, "
+        f"{path.stat().st_size:,} bytes, {elapsed:.1f}s",
         flush=True,
     )
     return {
         "physical_edge_count": physical_edges,
         "cell_count": len(ordered_cells),
         "reference_count": ref_count,
+        "max_legal_speed_kmh": max_legal_speed_kmh,
         "output_bytes": path.stat().st_size,
         "build_seconds": round(elapsed, 3),
     }
 
 
 class PersistentRoadSnapIndex:
-    """Memory-map BRS1 and query nearby physical edges without a startup rebuild."""
+    """Memory-map BRS2 and query nearby physical edges without a startup rebuild."""
 
     def __init__(self, graph, path: Path, profile: RoutingProfile = RoutingProfile.NORMAL) -> None:
         self.graph = graph
@@ -129,15 +151,23 @@ class PersistentRoadSnapIndex:
         try:
             self._map = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
             if len(self._map) < HEADER.size:
-                raise ValueError("BRS1 header is truncated")
-            magic, self.cell_size_m, self.cell_count, self.ref_count = HEADER.unpack_from(self._map, 0)
+                raise ValueError("BRS2 header is truncated")
+            (
+                magic,
+                self.cell_size_m,
+                self.cell_count,
+                self.ref_count,
+                self.max_legal_speed_kmh,
+            ) = HEADER.unpack_from(self._map, 0)
             if magic != MAGIC:
-                raise ValueError(f"Unsupported snap index magic: {magic!r}")
+                raise ValueError(f"Unsupported snap index magic: {magic!r}; rebuild routing_snap.brs")
+            if self.max_legal_speed_kmh <= 0.0:
+                raise ValueError("BRS2 has invalid legal speed bound")
             self._cell_table_offset = HEADER.size
             self._ref_table_offset = self._cell_table_offset + self.cell_count * CELL.size
             expected = self._ref_table_offset + self.ref_count * EDGE_REF.size
             if len(self._map) != expected:
-                raise ValueError(f"BRS1 file size mismatch: expected {expected}, got {len(self._map)}")
+                raise ValueError(f"BRS2 file size mismatch: expected {expected}, got {len(self._map)}")
         except Exception:
             self._file.close()
             raise
