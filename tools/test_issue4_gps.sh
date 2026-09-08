@@ -12,6 +12,7 @@ cd "$ROOT"
 python -m unittest \
   tests.test_gps_routing \
   tests.test_gps_search \
+  tests.test_search_postcode_enrichment \
   tests.test_routing_graph_view \
   tests.test_gps_snap_index \
   tests.test_gps_astar \
