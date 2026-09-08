@@ -6,6 +6,7 @@ extends Node3D
 ## - bin/brur-gps-route owns snapping and route search in native C++.
 ## - Main owns world origin coordinates; CameraRig supplies the current screen ray.
 ## - Godot only launches the native query on a worker thread and renders its polyline.
+## - The player scene is treated as a generic Node3D so GPS does not depend on Vehicle class registration order.
 
 const EARTH_RADIUS: float = 6378137.0
 const START_LON: float = 18.0686
@@ -18,7 +19,7 @@ const SNAP_PATH: String = "res://world_data/routing_snap.brs"
 @onready var camera_rig: Node3D = get_node("../CameraRig")
 @onready var camera: Camera3D = get_node("../CameraRig/Camera3D")
 
-var player: Vehicle
+var player: Node3D
 var route_mesh_instance: MeshInstance3D
 var target_marker: MeshInstance3D
 var status_label: Label
@@ -83,9 +84,14 @@ func _spawn_player() -> void:
 	if scene == null:
 		push_error("Could not load player vehicle scene")
 		return
-	player = scene.instantiate() as Vehicle
-	player.vehicle_id = &"player"
-	player.active = false
+	var instance: Node = scene.instantiate()
+	player = instance as Node3D
+	if player == null:
+		instance.queue_free()
+		push_error("Player vehicle scene root must be Node3D")
+		return
+	player.set("vehicle_id", &"player")
+	player.set("active", false)
 	add_child(player)
 	var projected: Vector2 = _project_lonlat(START_LON, START_LAT)
 	player.position = _absolute_to_world(projected.x, projected.y)
