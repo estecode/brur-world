@@ -7,7 +7,8 @@
 #include <stdexcept>
 #include <vector>
 
-// Verifies portable BRH1 route densification for forward/reverse traversal and partial-edge snaps.
+// Verifies portable BRH1 route densification, including forward/reverse traversal,
+// partial-edge snaps, and shared-waypoint continuity across opposite directions.
 // Dependencies: native/gps_route_geometry.h and standard C++20 only.
 
 namespace {
