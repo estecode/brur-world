@@ -116,7 +116,7 @@ if street_results and not full_results:
         + ", ".join(value if value else "<empty>" for value in subtitles)
     )
     print(
-        "address locality diagnostic | if 24756 Dalby is absent above, rebuild search_index.jsonl from the PBF before rebuilding BSI2"
+        "address locality diagnostic | rebuild BSI1 from the PBF; the builder now infers a postcode only when the same street+locality has one unambiguous known postcode"
     )
 
 ordered = sorted(times)
