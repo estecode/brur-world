@@ -15,7 +15,7 @@ func _run() -> void:
 	_test_profile_bounds_and_weighting(model)
 	_test_world_space_motion(model)
 	_test_invalid_coverage(model)
-	await _test_renderer_structure()
+	await _test_renderer_structure(model)
 	print("godot cloud field tests: OK")
 	quit(0)
 
@@ -77,19 +77,22 @@ func _test_invalid_coverage(model) -> void:
 	var full: Array[Dictionary] = model.generate_cell(Vector2i(2, 2), 1.0, 99)
 	_assert(clamped.size() == full.size(), "coverage above one clamps deterministically")
 
-func _test_renderer_structure() -> void:
+func _test_renderer_structure(model) -> void:
 	var renderer = CloudFieldRendererScript.new()
 	root.add_child(renderer)
 	await process_frame
-	renderer.set_view_state(Vector3.ZERO, 800000.0)
+	renderer.set_view_state(Vector3.ZERO, 800000.0, Vector3(0.0, 800000.0, 0.0))
 	renderer.set_simulation_seconds(0.0)
 	await process_frame
 
 	var stats: Dictionary = renderer.get_render_stats()
-	_assert(int(stats["cloud_count"]) > 0, "reference full-zoom view generates clouds")
+	_assert(int(stats["cloud_count"]) >= 250, "reference full-zoom view contains a substantial but bounded cloud population")
 	_assert(int(stats["puff_instance_count"]) > 0, "renderer creates puff instances")
 	_assert(int(stats["puff_instance_count"]) <= int(stats["max_puff_instances"]), "renderer respects explicit instance budget")
+	_assert(int(stats["max_puff_instances"]) == 2200, "denser field keeps an explicit lightweight puff budget")
+	_assert(is_equal_approx(float(stats["coverage"]), 0.64), "default coverage is raised for a fuller sky")
 	_assert(renderer.multimesh != null and renderer.multimesh.instance_count == int(stats["puff_instance_count"]), "one MultiMesh owns all puff instances")
+	_assert(renderer.multimesh.use_colors, "MultiMesh enables per-puff opacity without creating nodes")
 	_assert(renderer.get_child_count() == 0, "renderer does not create one Godot node per puff")
 
 	# The headless dummy renderer does not reliably round-trip per-instance
@@ -103,16 +106,35 @@ func _test_renderer_structure() -> void:
 	# Same LOD and generated field: changing camera distance must not regenerate
 	# a different physical cloud set or alter the instance budget.
 	var before_count: int = renderer.multimesh.instance_count
-	renderer.set_view_state(Vector3.ZERO, 700000.0)
+	renderer.set_view_state(Vector3.ZERO, 700000.0, Vector3(0.0, 700000.0, 0.0))
 	renderer.set_simulation_seconds(0.0)
 	_assert(renderer.multimesh.instance_count == before_count, "camera zoom does not change physical cloud population inside one LOD")
+
+	# Put the camera at the center of a deterministic rendered cloud. The central
+	# puff is always centered on the cloud, so at least one instance must fade.
+	var inside_position := _first_rendered_cloud_position(model, 0.64, 700031)
+	_assert(inside_position.is_finite(), "inside-cloud fixture finds a rendered cloud")
+	renderer.set_view_state(Vector3.ZERO, 700000.0, inside_position)
+	renderer.set_simulation_seconds(0.0)
+	var inside_stats: Dictionary = renderer.get_render_stats()
+	_assert(int(inside_stats["faded_puff_count"]) > 0, "camera inside a cloud fades nearby puffs for map visibility")
+	_assert(int(inside_stats["faded_puff_count"]) < int(inside_stats["puff_instance_count"]), "inside fade is local and leaves distant clouds opaque")
 
 	var material := mesh.material as StandardMaterial3D
 	_assert(material != null, "cloud puffs share one lightweight material")
 	_assert(material.shading_mode != BaseMaterial3D.SHADING_MODE_UNSHADED, "clouds use shared scene lighting instead of duplicated sun math")
+	_assert(material.vertex_color_use_as_albedo, "shared material consumes per-instance alpha for interior fading")
 
 	renderer.queue_free()
 	await process_frame
+
+func _first_rendered_cloud_position(model, coverage: float, seed: int) -> Vector3:
+	for cell_y in range(-4, 5):
+		for cell_x in range(-4, 5):
+			var generated: Array[Dictionary] = model.generate_cell(Vector2i(cell_x, cell_y), coverage, seed)
+			if not generated.is_empty():
+				return generated[0]["position"]
+	return Vector3(INF, INF, INF)
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:
