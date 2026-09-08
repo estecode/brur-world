@@ -48,7 +48,10 @@ func draw_route(points: Array) -> bool:
 		var pair: Array = value as Array
 		if pair.size() < 2:
 			continue
-		var local: Vector3 = _to_world.call(float(pair[0]), float(pair[1])) as Vector3
+		var converted: Variant = _to_world.call(float(pair[0]), float(pair[1]))
+		if typeof(converted) != TYPE_VECTOR3:
+			continue
+		var local: Vector3 = converted
 		if not local.is_finite():
 			continue
 		vertices.append(Vector3(local.x, 0.0, local.z))
@@ -69,7 +72,11 @@ func show_target(target_snap: Array) -> bool:
 	if target_snap.size() < 2 or not _to_world.is_valid():
 		_target_marker.visible = false
 		return false
-	var local: Vector3 = _to_world.call(float(target_snap[0]), float(target_snap[1])) as Vector3
+	var converted: Variant = _to_world.call(float(target_snap[0]), float(target_snap[1]))
+	if typeof(converted) != TYPE_VECTOR3:
+		_target_marker.visible = false
+		return false
+	var local: Vector3 = converted
 	if not local.is_finite():
 		_target_marker.visible = false
 		return false
