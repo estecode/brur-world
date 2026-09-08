@@ -6,7 +6,6 @@ extends Node3D
 ## - bin/brur-gps-route owns snapping and route search in native C++.
 ## - Main owns world origin coordinates; CameraRig supplies the current screen ray.
 ## - Godot only launches the native query on a worker thread and renders its polyline.
-## - The player scene is treated as a generic Node3D so GPS does not depend on Vehicle class registration order.
 
 const EARTH_RADIUS: float = 6378137.0
 const START_LON: float = 18.0686
@@ -27,6 +26,13 @@ var route_thread: Thread
 var binary_path: String = ""
 var graph_path: String = ""
 var snap_path: String = ""
+
+var perf_queries: int = 0
+var perf_route_ms: float = 0.0
+var perf_route_max_ms: float = 0.0
+var perf_settled: int = 0
+var perf_relaxed: int = 0
+var perf_last_success: bool = false
 
 func _ready() -> void:
 	binary_path = ProjectSettings.globalize_path(ROUTE_BINARY)
@@ -84,12 +90,7 @@ func _spawn_player() -> void:
 	if scene == null:
 		push_error("Could not load player vehicle scene")
 		return
-	var instance: Node = scene.instantiate()
-	player = instance as Node3D
-	if player == null:
-		instance.queue_free()
-		push_error("Player vehicle scene root must be Node3D")
-		return
+	player = scene.instantiate() as Node3D
 	player.set("vehicle_id", &"player")
 	player.set("active", false)
 	add_child(player)
@@ -167,7 +168,15 @@ func _run_native_route(args: PackedStringArray) -> Dictionary:
 	return result
 
 func _apply_route_response(response: Dictionary) -> void:
-	if not bool(response.get("success", false)):
+	perf_queries += 1
+	var route_ms: float = float(response.get("route_ms", 0.0))
+	perf_route_ms += route_ms
+	perf_route_max_ms = maxf(perf_route_max_ms, route_ms)
+	perf_settled += int(response.get("settled", 0))
+	perf_relaxed += int(response.get("relaxed", 0))
+	perf_last_success = bool(response.get("success", false))
+
+	if not perf_last_success:
 		_set_status("No drivable route found")
 		_clear_route_visual()
 		return
@@ -197,7 +206,6 @@ func _apply_route_response(response: Dictionary) -> void:
 
 	var distance_km: float = float(response.get("distance_m", 0.0)) / 1000.0
 	var minutes: float = float(response.get("travel_time_s", 0.0)) / 60.0
-	var route_ms: float = float(response.get("route_ms", 0.0))
 	_set_status("GPS %.1f km · %.0f min · %.1f ms" % [distance_km, minutes, route_ms])
 	print(
 		"GPS route | %.1f km | %.1f min | %.2f ms | settled %d | relaxed %d" % [
@@ -208,6 +216,23 @@ func _apply_route_response(response: Dictionary) -> void:
 			int(response.get("relaxed", 0)),
 		]
 	)
+
+func consume_perf_metrics() -> Dictionary:
+	var result: Dictionary = {
+		"gps_queries": perf_queries,
+		"gps_route_ms": perf_route_ms,
+		"gps_route_max_ms": perf_route_max_ms,
+		"gps_settled": perf_settled,
+		"gps_relaxed": perf_relaxed,
+		"gps_last_success": perf_last_success,
+		"gps_busy": route_thread != null,
+	}
+	perf_queries = 0
+	perf_route_ms = 0.0
+	perf_route_max_ms = 0.0
+	perf_settled = 0
+	perf_relaxed = 0
+	return result
 
 func _draw_route(points: Array) -> void:
 	var route_mesh: ImmediateMesh = ImmediateMesh.new()
