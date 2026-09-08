@@ -112,9 +112,6 @@ int main() {
         require(!(near(chord_snapped.points.back().x, 7.5) && near(chord_snapped.points.back().y, 0.0)),
                 "raw BRG1 chord target must not create an off-road connector");
 
-        // A shared waypoint can lie on a compressed chord with two equally-near points
-        // on the curved physical road. Forward/reverse traversal must resolve that
-        // ambiguity to the same visible road point or the merged plan draws a chord.
         brur::gps::RouteResult waypoint_plan;
         waypoint_plan.success = true;
         waypoint_plan.failure = brur::gps::RouteFailure::None;
