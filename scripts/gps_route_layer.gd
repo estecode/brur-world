@@ -265,7 +265,7 @@ func _absolute_to_world(x: float, y: float) -> Vector3:
 	return Vector3(
 		x - float(main.get("origin_x")),
 		0.0,
-		-(y - float(main.get("origin_y"))
+		-(y - float(main.get("origin_y")))
 	)
 
 func _set_status(text: String) -> void:
