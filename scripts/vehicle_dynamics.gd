@@ -7,7 +7,7 @@ extends RefCounted
 ## - Mutates VehicleState only; has no SceneTree, rendering, input, routing, traffic, or police dependency.
 ## - Uses real SI units and explicit vehicle limits supplied by the adapter/configuration layer.
 
-static func step(
+func step(
 	state: VehicleState,
 	throttle: float,
 	brake: float,
