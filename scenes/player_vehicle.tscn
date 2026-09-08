@@ -1,10 +1,15 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=4 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/vehicle.tscn" id="1_vehicle"]
 [ext_resource type="Script" path="res://scripts/player_vehicle_controller.gd" id="2_controller"]
+[ext_resource type="Script" path="res://scripts/vehicle_route_follower.gd" id="3_follower"]
 
 [node name="PlayerVehicle" instance=ExtResource("1_vehicle")]
 vehicle_id = &"player"
 
 [node name="PlayerVehicleController" type="Node" parent="."]
 script = ExtResource("2_controller")
+
+[node name="VehicleRouteFollower" type="Node" parent="."]
+script = ExtResource("3_follower")
+enabled = false
