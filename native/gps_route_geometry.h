@@ -141,7 +141,6 @@ private:
                                         RoutePoint start, RoutePoint target) const {
         if (edges.empty()) return {start, target};
         std::vector<RoutePoint> points;
-        append_unique(points, start);
 
         for (std::size_t edge_position = 0; edge_position < edges.size(); ++edge_position) {
             const auto shape = edge_points(edges[edge_position]);
@@ -157,13 +156,15 @@ private:
                 to = {shape.size() - 2, 1.0, shape.back(), 0.0};
             }
 
+            // BRG1 still owns snapping and route selection, but its snap position lies on
+            // the topology-compressed chord. Visible route geometry must start/end on the
+            // detailed BRH1 road shape, otherwise a curved edge gets an off-road connector.
             append_unique(points, from.point);
             for (std::size_t i = from.segment + 1; i <= to.segment && i < shape.size(); ++i)
                 append_unique(points, shape[i]);
             append_unique(points, to.point);
         }
 
-        append_unique(points, target);
         return points;
     }
 };
