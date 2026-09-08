@@ -2,13 +2,16 @@ extends Node
 class_name MusicPlayer
 
 ## Adapts MusicLibrary/MusicPlaybackState to Godot AudioStreamPlayer playback.
-## Dependencies: MusicLibrary, MusicPlaybackState, and Godot AudioStreamPlayer; UI/gameplay may call its public API but are not dependencies.
+## Dependencies: explicit preloads of MusicLibrary/MusicPlaybackState plus Godot AudioStreamPlayer; UI/gameplay may call its public API but are not dependencies.
+
+const MusicLibraryScript = preload("res://scripts/music_library.gd")
+const MusicPlaybackStateScript = preload("res://scripts/music_playback_state.gd")
 
 signal track_changed(track: Dictionary)
 signal playback_changed(is_playing: bool, is_paused: bool)
 
-var _library := MusicLibrary.new()
-var _state := MusicPlaybackState.new(_library)
+var _library = MusicLibraryScript.new()
+var _state = MusicPlaybackStateScript.new(_library)
 var _audio := AudioStreamPlayer.new()
 
 func _ready() -> void:
@@ -89,7 +92,7 @@ func is_paused() -> bool:
 	return _state.is_paused()
 
 func _start_current_track() -> bool:
-	var track := _state.current_track()
+	var track: Dictionary = _state.current_track()
 	var asset_path := str(track.get("asset_path", ""))
 	if asset_path.is_empty():
 		_state.stop()
