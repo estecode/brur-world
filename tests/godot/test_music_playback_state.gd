@@ -1,17 +1,18 @@
 extends SceneTree
 
-## Headless deterministic tests for the reusable music library, playback state, and adapter loadability.
-## Dependencies: scripts/music_library.gd, scripts/music_playback_state.gd, and scripts/music_player.gd.
+## Headless deterministic tests for the reusable music library, playback state, and Godot audio adapter.
+## Dependencies: scripts/music_library.gd, scripts/music_playback_state.gd, scripts/music_player.gd, and a local AudioStreamWAV fixture.
 
 const MusicLibraryScript = preload("res://scripts/music_library.gd")
 const MusicPlaybackStateScript = preload("res://scripts/music_playback_state.gd")
 const MusicPlayerScript = preload("res://scripts/music_player.gd")
+const FIXTURE_STREAM := "res://tests/fixtures/music_test_stream.tres"
 
 func _init() -> void:
 	_test_library()
 	_test_playback()
 	_test_shuffle_determinism()
-	_test_adapter_loads()
+	_test_adapter_playback()
 	print("godot music playback-state tests: OK")
 	quit(0)
 
@@ -78,9 +79,19 @@ func _test_shuffle_determinism() -> void:
 	for track_id in first_sequence:
 		_assert(track_id in ["one", "two", "three"], "shuffle selects only valid tracks")
 
-func _test_adapter_loads() -> void:
+func _test_adapter_playback() -> void:
 	var player = MusicPlayerScript.new()
-	_assert(player != null, "Godot music adapter instantiates")
+	root.add_child(player)
+	_assert(player.add_track({"id": "fixture", "title": "Fixture", "asset_path": FIXTURE_STREAM}), "adapter accepts local fixture track")
+	_assert(player.play("fixture"), "adapter loads and starts a local AudioStream")
+	_assert(player.current_track_id() == "fixture", "adapter exposes current track")
+	_assert(player.is_playing() and not player.is_paused(), "adapter exposes active playback state")
+	_assert(player.pause() and player.is_paused(), "adapter pauses playback")
+	_assert(player.resume() and not player.is_paused(), "adapter resumes playback")
+	player.set_volume(0.25)
+	_assert(is_equal_approx(player.volume(), 0.25), "adapter exposes volume state")
+	player.stop()
+	_assert(not player.is_playing(), "adapter stops playback")
 	player.free()
 
 func _assert(condition: bool, message: String) -> void:
