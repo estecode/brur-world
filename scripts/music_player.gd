@@ -48,6 +48,7 @@ func stop() -> void:
 	_state.stop()
 	_audio.stop()
 	_audio.stream_paused = false
+	_audio.stream = null
 	playback_changed.emit(false, false)
 
 func next() -> bool:
