@@ -41,7 +41,7 @@ ADDED=1
 rm -rf "$TMP/world_data"
 ln -s "$WORLD_DATA" "$TMP/world_data"
 
-if [[ -x "$TMP/tools/build_native_gps.sh" ]]; then
+if [[ -f "$TMP/tools/build_native_gps.sh" ]]; then
   printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s\n' "$PR"
   bash "$TMP/tools/build_native_gps.sh"
 fi
