@@ -290,12 +290,15 @@ private:
     bool collect_posting_spans(const std::vector<std::string_view> &tokens,
                                std::vector<PostingSpan> &spans) const {
         std::vector<uint32_t> keys;
-        keys.reserve(tokens.size() * 2);
+        std::size_t trigram_count = 0;
+        for (const auto token : tokens) {
+            if (token.size() >= 3) trigram_count += token.size() - 2;
+        }
+        keys.reserve(trigram_count);
         for (const auto token : tokens) {
             if (token.size() < 3) continue;
-            keys.push_back(trigram_key(token.substr(0, 3)));
-            const uint32_t last = trigram_key(token.substr(token.size() - 3, 3));
-            if (last != keys.back()) keys.push_back(last);
+            for (std::size_t offset = 0; offset + 3 <= token.size(); ++offset)
+                keys.push_back(trigram_key(token.substr(offset, 3)));
         }
         if (keys.empty()) return false;
         std::sort(keys.begin(), keys.end());
