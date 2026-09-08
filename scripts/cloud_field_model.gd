@@ -48,8 +48,8 @@ func generate_cell(cell: Vector2i, coverage: float, seed: int = DEFAULT_SEED) ->
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _cell_seed(cell, seed)
 
-	# Vary density per stable spatial cell so the field naturally contains gaps,
-	# sparse patches and denser areas instead of uniform random scatter.
+	# Stable per-cell density produces natural gaps and denser patches instead
+	# of uniform random scatter. Individual clouds are then clustered locally.
 	var local_density: float = clampf(safe_coverage * rng.randf_range(0.30, 1.55), 0.0, 1.0)
 	if rng.randf() > minf(0.96, 0.28 + safe_coverage * 0.80):
 		local_density *= 0.12
@@ -96,16 +96,11 @@ func generate_cell(cell: Vector2i, coverage: float, seed: int = DEFAULT_SEED) ->
 	return result
 
 func position_at(cloud: Dictionary, simulation_seconds: float) -> Vector3:
-	var base: Vector3 = cloud["position"] as Vector3
-	var velocity: Vector3 = cloud["velocity_mps"] as Vector3
-	var cell: Vector2i = cloud["cell"] as Vector2i
-	var cell_min_x: float = float(cell.x) * CELL_SIZE_M
-	var cell_min_z: float = float(cell.y) * CELL_SIZE_M
-	return Vector3(
-		cell_min_x + fposmod(base.x - cell_min_x + velocity.x * simulation_seconds, CELL_SIZE_M),
-		base.y,
-		cell_min_z + fposmod(base.z - cell_min_z + velocity.z * simulation_seconds, CELL_SIZE_M)
-	)
+	# Motion remains continuous across generation-cell boundaries. Spatial cells
+	# own deterministic initial placement only; they are not runtime walls.
+	var base: Vector3 = cloud["position"]
+	var velocity: Vector3 = cloud["velocity_mps"]
+	return base + velocity * maxf(0.0, simulation_seconds)
 
 func profile_bounds(profile_name: String) -> Dictionary:
 	if profile_name == String(SMALL_PROFILE["name"]):
