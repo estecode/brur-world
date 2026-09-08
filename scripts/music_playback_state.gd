@@ -2,12 +2,12 @@ extends RefCounted
 class_name MusicPlaybackState
 
 ## Owns deterministic playlist selection and playback state without producing audio.
-## Dependencies: MusicLibrary and Godot RandomNumberGenerator only; does not depend on SceneTree, audio, UI, or gameplay.
+## Dependencies: MusicLibrary-compatible API and Godot RandomNumberGenerator only; does not depend on SceneTree, audio, UI, or gameplay.
 
 const MIN_VOLUME := 0.0
 const MAX_VOLUME := 1.0
 
-var _library: MusicLibrary
+var _library
 var _current_index := -1
 var _is_playing := false
 var _is_paused := false
@@ -16,7 +16,7 @@ var _repeat_enabled := false
 var _volume := 1.0
 var _rng := RandomNumberGenerator.new()
 
-func _init(library: MusicLibrary, shuffle_seed: int = 1) -> void:
+func _init(library, shuffle_seed: int = 1) -> void:
 	_library = library
 	_rng.seed = shuffle_seed
 
