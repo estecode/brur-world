@@ -104,7 +104,7 @@ func _test_overnight_schedule() -> void:
 	_assert(police_schedule.is_active(clock), "overnight schedule activates at start")
 	clock.advance(3.0 * 3600.0)
 	_assert(police_schedule.is_active(clock), "overnight schedule carries into next weekday")
-	clock.advance(6.0 * 3600.0)
+	clock.advance(5.0 * 3600.0)
 	_assert(not police_schedule.is_active(clock), "overnight schedule ends at exact boundary")
 
 
