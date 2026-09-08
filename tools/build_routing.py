@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build the BRG1 routing graph from OSM input.
+"""Build the BRG1 routing graph and BRH1 route geometry from OSM input.
 
 Dependencies:
 - Uses pyosmium for production .osm.pbf input.
 - Uses the standard-library XML reader for tiny .osm test fixtures.
-- Uses compressed_routing.py to split ways only at routing-relevant OSM nodes.
+- Uses compressed_routing.py to split ways only at routing-relevant OSM nodes while preserving shape geometry.
 - Delegates shared routing policy/data definitions to routing_graph.py.
 """
 
@@ -23,6 +23,7 @@ from compressed_routing import (
     CompressedGraphAccumulator,
     write_brg1_with_progress,
 )
+from route_geometry import validate_route_geometry
 from routing_graph import EDGE_RECORD, HEADER, MAGIC, NODE_RECORD, ROAD_CLASS, WayInput
 from world_common import ensure_pbf
 
@@ -229,6 +230,19 @@ def _write_graph(graph, path: Path) -> None:
     write_brg1_with_progress(graph, path, report)
 
 
+def _write_geometry(accumulator: CompressedGraphAccumulator, path: Path) -> None:
+    progressers: dict[str, _Progress] = {}
+
+    def report(stage: str, processed: int, detail: str) -> None:
+        progress = progressers.get(stage)
+        if progress is None:
+            progress = _Progress(f"Phase 3/4 {stage}")
+            progressers[stage] = progress
+        progress.maybe_print(processed, detail)
+
+    accumulator.write_route_geometry(path, report)
+
+
 def build_routing(source: Path, output: Path) -> dict:
     if source.suffix.lower() in {".osm", ".xml"}:
         if not source.is_file():
@@ -273,55 +287,69 @@ def build_routing(source: Path, output: Path) -> dict:
     graph = _finish_graph(accumulator)
     print(
         f"[routing] Phase 2/4 finalizing compressed graph: done in {time.perf_counter() - phase_started:.1f}s "
-        f"({len(graph.nodes):,} nodes, {len(graph.edges):,} directed edges)",
+        f"({len(graph.nodes):,} nodes, {len(graph.edges):,} directed edges, "
+        f"{accumulator.geometry_point_count:,} route-shape points)",
         flush=True,
     )
 
     output.mkdir(parents=True, exist_ok=True)
     graph_path = output / "routing.brg"
+    geometry_path = output / "routing_geometry.brh"
     temp_graph_path = output / "routing.brg.tmp"
+    temp_geometry_path = output / "routing_geometry.brh.tmp"
     stats_path = output / "routing_stats.json"
 
-    if temp_graph_path.exists():
-        temp_graph_path.unlink()
+    for temporary in (temp_graph_path, temp_geometry_path):
+        if temporary.exists():
+            temporary.unlink()
 
     expected_bytes = HEADER.size + len(graph.nodes) * NODE_RECORD.size + len(graph.edges) * EDGE_RECORD.size
     phase_started = time.perf_counter()
     print(
-        f"[routing] Phase 3/4 writing BRG1 ({expected_bytes / (1024 ** 3):.2f} GiB expected) ...",
+        f"[routing] Phase 3/4 writing BRG1 + BRH1 ({expected_bytes / (1024 ** 3):.2f} GiB BRG1 expected) ...",
         flush=True,
     )
     try:
         _write_graph(graph, temp_graph_path)
+        _write_geometry(accumulator, temp_geometry_path)
         print(
-            f"[routing] Phase 3/4 writing BRG1: done in {time.perf_counter() - phase_started:.1f}s",
+            f"[routing] Phase 3/4 writing BRG1 + BRH1: done in {time.perf_counter() - phase_started:.1f}s",
             flush=True,
         )
 
         phase_started = time.perf_counter()
-        print("[routing] Phase 4/4 validating BRG1 header and file size ...", flush=True)
+        print("[routing] Phase 4/4 validating routing graph and route geometry ...", flush=True)
         _validate_written_brg1(temp_graph_path, len(graph.nodes), len(graph.edges))
+        _, geometry_points = validate_route_geometry(temp_geometry_path, len(graph.edges))
+        if geometry_points != accumulator.geometry_point_count:
+            raise RuntimeError(
+                f"BRH1 point count mismatch: expected {accumulator.geometry_point_count:,}, got {geometry_points:,}"
+            )
         temp_graph_path.replace(graph_path)
+        temp_geometry_path.replace(geometry_path)
         print(
-            f"[routing] Phase 4/4 validating BRG1: done in {time.perf_counter() - phase_started:.1f}s",
+            f"[routing] Phase 4/4 validation: done in {time.perf_counter() - phase_started:.1f}s",
             flush=True,
         )
     except BaseException:
-        if temp_graph_path.exists():
-            temp_graph_path.unlink()
+        for temporary in (temp_graph_path, temp_geometry_path):
+            if temporary.exists():
+                temporary.unlink()
         raise
 
     elapsed = time.perf_counter() - started
     report = accumulator.stats.to_dict()
     report.update(
         {
-            "format": "BRG1",
+            "format": "BRG1+BRH1",
             "topology_compressed": True,
             "original_shape_segment_count": accumulator.original_shape_segments,
+            "route_geometry_point_count": accumulator.geometry_point_count,
             "node_count": len(graph.nodes),
             "directed_edge_count": len(graph.edges),
             "build_seconds": round(elapsed, 3),
             "output_bytes": graph_path.stat().st_size,
+            "geometry_output_bytes": geometry_path.stat().st_size,
         }
     )
     stats_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
@@ -329,13 +357,15 @@ def build_routing(source: Path, output: Path) -> dict:
     print(f"[routing] Nodes: {len(graph.nodes):,}", flush=True)
     print(f"[routing] Directed edges: {len(graph.edges):,}", flush=True)
     print(f"[routing] Original shape segments: {accumulator.original_shape_segments:,}", flush=True)
+    print(f"[routing] Route-shape points: {accumulator.geometry_point_count:,}", flush=True)
     print(f"[routing] Explicit speed edges: {report['explicit_speed_edges']:,}", flush=True)
     print(f"[routing] Fallback speed edges: {report['fallback_speed_edges']:,}", flush=True)
     print(f"[routing] Restricted/special edges: {report['restricted_edges']:,}", flush=True)
     print(f"[routing] Against-oneway edges: {report['against_oneway_edges']:,}", flush=True)
     if report["unknown_maxspeed"]:
         print(f"[routing] Unknown maxspeed values: {report['unknown_maxspeed']}", flush=True)
-    print(f"[routing] Output: {graph_path} ({report['output_bytes']:,} bytes)", flush=True)
+    print(f"[routing] Graph: {graph_path} ({report['output_bytes']:,} bytes)", flush=True)
+    print(f"[routing] Geometry: {geometry_path} ({report['geometry_output_bytes']:,} bytes)", flush=True)
     print(f"[routing] Build time: {elapsed:.2f}s", flush=True)
     return report
 
@@ -348,7 +378,7 @@ def main() -> None:
     try:
         build_routing(args.source, args.output)
     except KeyboardInterrupt:
-        print("\n[routing] Build interrupted by user; existing routing.brg was left untouched.", flush=True)
+        print("\n[routing] Build interrupted by user; existing routing data was left untouched.", flush=True)
         raise SystemExit(130)
 
 
