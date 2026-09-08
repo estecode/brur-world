@@ -1,7 +1,7 @@
 class_name GpsRouteUi
 extends CanvasLayer
 
-## Presents GPS status, routing preference and waypoint controls.
+## Presents GPS status, routing preference, follow control and waypoint controls.
 ##
 ## Dependencies:
 ## - Emits user intent only; route-plan state remains in GpsRouteModel.
@@ -11,6 +11,7 @@ extends CanvasLayer
 signal preference_selected(preference: String)
 signal remove_waypoint_requested(index: int)
 signal clear_waypoints_requested
+signal follow_changed(enabled: bool)
 
 const OverlayLayoutScript = preload("res://scripts/overlay_layout.gd")
 const OverlayWindowHeaderScript = preload("res://scripts/overlay_window_header.gd")
@@ -29,6 +30,7 @@ const ROUTING_PREFERENCE_LABELS: Array[String] = [
 
 var _status_label: Label
 var _preference_select: OptionButton
+var _follow_toggle: CheckButton
 var _waypoint_list: ItemList
 var _remove_waypoint_button: Button
 var _clear_waypoints_button: Button
@@ -49,6 +51,16 @@ func set_preference(preference: String) -> void:
 func preference_label(preference: String) -> String:
 	var index: int = ROUTING_PREFERENCE_IDS.find(preference)
 	return ROUTING_PREFERENCE_LABELS[index] if index >= 0 else preference
+
+func set_follow_available(available: bool) -> void:
+	_ensure_ui()
+	_follow_toggle.disabled = not available
+	if not available:
+		_follow_toggle.set_pressed_no_signal(false)
+
+func set_follow_enabled(enabled: bool) -> void:
+	_ensure_ui()
+	_follow_toggle.set_pressed_no_signal(enabled)
 
 func set_waypoints(points: Array) -> void:
 	_ensure_ui()
@@ -84,8 +96,15 @@ func _build_ui() -> void:
 	_preference_select.item_selected.connect(_on_preference_selected)
 	content.add_child(_preference_select)
 
+	_follow_toggle = CheckButton.new()
+	_follow_toggle.text = "Follow route"
+	_follow_toggle.tooltip_text = "Let GPS drive this same vehicle; WASD takes manual control back"
+	_follow_toggle.disabled = true
+	_follow_toggle.toggled.connect(_on_follow_toggled)
+	content.add_child(_follow_toggle)
+
 	var help := Label.new()
-	help.text = "Shift+click destination · Cmd/Ctrl+Shift+click waypoint"
+	help.text = "Drive: W/S/A/D + Space · Shift+click destination · Cmd/Ctrl+Shift+click waypoint"
 	content.add_child(help)
 
 	_waypoint_list = ItemList.new()
@@ -121,6 +140,9 @@ func _ensure_ui() -> void:
 func _on_preference_selected(index: int) -> void:
 	if index >= 0 and index < ROUTING_PREFERENCE_IDS.size():
 		preference_selected.emit(ROUTING_PREFERENCE_IDS[index])
+
+func _on_follow_toggled(enabled: bool) -> void:
+	follow_changed.emit(enabled)
 
 func _on_remove_waypoint_pressed() -> void:
 	var selected: PackedInt32Array = _waypoint_list.get_selected_items()
