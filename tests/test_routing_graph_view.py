@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from gps_routing import EdgeCostPolicy, GraphRouter, RoadSnapIndex, RoutingPreference
-from routing_graph import RoutingProfile, WayInput, build_graph, write_brg1
+from routing_graph import RoutingProfile, WayInput, build_graph, load_brg1, write_brg1
 from routing_graph_view import RoutingGraphView
 
 
@@ -26,11 +26,12 @@ class RoutingGraphViewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "routing.brg"
             write_brg1(graph, path)
+            serialized = load_brg1(path)
             with RoutingGraphView(path) as view:
-                self.assertEqual(len(view.nodes), len(graph.nodes))
-                self.assertEqual(len(view.edges), len(graph.edges))
-                self.assertEqual(view.nodes[1], graph.nodes[1])
-                self.assertEqual(view.edges[2], graph.edges[2])
+                self.assertEqual(len(view.nodes), len(serialized.nodes))
+                self.assertEqual(len(view.edges), len(serialized.edges))
+                self.assertEqual(view.nodes[1], serialized.nodes[1])
+                self.assertEqual(view.edges[2], serialized.edges[2])
 
                 snap_index = RoadSnapIndex(view, RoutingProfile.NORMAL, cell_size_m=100.0)
                 start_node = view.nodes[0]
