@@ -220,7 +220,9 @@ func _cell_radius_for_lod(lod: int) -> int:
 func _puffs_per_cloud_for_lod(lod: int) -> int:
 	match lod:
 		0:
-			return 4
+			# At Sweden overview scale, silhouette/size carries the cloud shape.
+			# Three puffs lets the fixed GPU budget show many more distinct groups.
+			return 3
 		1:
 			return 6
 		_:
