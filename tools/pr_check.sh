@@ -31,6 +31,31 @@ else
   exit 69
 fi
 
+ensure_runtime_ports_free() {
+  "$PYTHON_BIN" - <<'PY'
+import socket
+
+ports = (47741, 47742)
+occupied = []
+for port in ports:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(0.2)
+    try:
+        if sock.connect_ex(("127.0.0.1", port)) == 0:
+            occupied.append(port)
+    finally:
+        sock.close()
+
+if occupied:
+    joined = ", ".join(str(port) for port in occupied)
+    print(
+        f"PR_CHECK=FAIL GPS runtime port(s) already in use: {joined}. "
+        "Close any existing Brur World/Godot instance or native GPS server, then run Safe Check again."
+    )
+    raise SystemExit(1)
+PY
+}
+
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/brur-world-pr${PR}.XXXXXX")"
 ADDED=0
 cleanup() {
@@ -82,6 +107,7 @@ resolve_sweden_pbf() {
 }
 
 printf 'PR_CHECK=PREPARE pr=%s\n' "$PR"
+ensure_runtime_ports_free
 git -C "$ROOT" fetch --quiet origin "pull/${PR}/head"
 git -C "$ROOT" worktree add --quiet --detach "$TMP" FETCH_HEAD
 ADDED=1
