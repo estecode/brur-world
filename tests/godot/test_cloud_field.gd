@@ -24,10 +24,14 @@ func _test_model_determinism(model) -> void:
 	var second: Array[Dictionary] = model.generate_cell(Vector2i(3, -2), 0.64, 12345)
 	_assert(first.size() == second.size(), "same seed/config produces same cloud count")
 	for index in range(first.size()):
+		var first_position: Vector3 = first[index]["position"]
+		var second_position: Vector3 = second[index]["position"]
+		var first_velocity: Vector3 = first[index]["velocity_mps"]
+		var second_velocity: Vector3 = second[index]["velocity_mps"]
 		_assert(first[index]["profile"] == second[index]["profile"], "profile generation is deterministic")
-		_assert((first[index]["position"] as Vector3).is_equal_approx(second[index]["position"] as Vector3), "position generation is deterministic")
+		_assert(first_position.is_equal_approx(second_position), "position generation is deterministic")
 		_assert(is_equal_approx(float(first[index]["size_m"]), float(second[index]["size_m"])), "size generation is deterministic")
-		_assert((first[index]["velocity_mps"] as Vector3).is_equal_approx(second[index]["velocity_mps"] as Vector3), "wind generation is deterministic")
+		_assert(first_velocity.is_equal_approx(second_velocity), "wind generation is deterministic")
 
 func _test_profile_bounds_and_weighting(model) -> void:
 	var small_count: int = 0
@@ -40,7 +44,8 @@ func _test_profile_bounds_and_weighting(model) -> void:
 				var size_m: float = float(cloud["size_m"])
 				var thickness_m: float = float(cloud["thickness_m"])
 				var altitude_m: float = float(cloud["altitude_m_asl"])
-				var speed_mps: float = (cloud["velocity_mps"] as Vector3).length()
+				var velocity: Vector3 = cloud["velocity_mps"]
+				var speed_mps: float = velocity.length()
 				_assert(size_m >= float(bounds["size_min_m"]) and size_m <= float(bounds["size_max_m"]), "cloud size stays inside profile bounds")
 				_assert(thickness_m >= float(bounds["thickness_min_m"]) and thickness_m <= float(bounds["thickness_max_m"]), "cloud thickness stays inside profile bounds")
 				_assert(altitude_m >= float(bounds["altitude_min_m_asl"]) and altitude_m <= float(bounds["altitude_max_m_asl"]), "cloud altitude stays inside profile bounds")
@@ -100,11 +105,9 @@ func _test_renderer_structure() -> void:
 
 	var mesh := renderer.multimesh.mesh as SphereMesh
 	_assert(mesh != null and mesh.radial_segments <= 8 and mesh.rings <= 4, "puff mesh stays deliberately low-poly")
-	var material := mesh.material as ShaderMaterial
-	_assert(material != null, "cloud puffs use one shared shader material")
-	renderer.set_sun_direction(Vector3(1.0, -1.0, 0.0))
-	var sun_direction: Vector3 = material.get_shader_parameter("sun_direction")
-	_assert(sun_direction.is_equal_approx(Vector3(1.0, -1.0, 0.0).normalized()), "renderer consumes explicit moving-sun direction input")
+	var material := mesh.material as StandardMaterial3D
+	_assert(material != null, "cloud puffs share one lightweight material")
+	_assert(material.shading_mode != BaseMaterial3D.SHADING_MODE_UNSHADED, "clouds use shared scene lighting instead of duplicated sun math")
 
 	renderer.queue_free()
 	await process_frame
