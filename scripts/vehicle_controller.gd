@@ -1,11 +1,11 @@
 extends Node
 class_name VehicleController
 
-## Base controller contract for driving a Vehicle.
+## Base controller contract for producing control intent for a Vehicle.
 ##
 ## Dependencies:
 ## - Expects a Vehicle as parent or assigned vehicle_path.
-## - Does not know whether commands come from a player, traffic AI, police AI, or another system.
+## - Owns no vehicle physics and does not know whether the caller is player, traffic, police, or GPS.
 
 @export var vehicle_path: NodePath
 @export var enabled: bool = true
@@ -22,12 +22,15 @@ func _physics_process(_delta: float) -> void:
 	if vehicle == null:
 		return
 	if not enabled:
-		vehicle.clear_control_inputs()
+		_clear_owned_controls()
 		return
 	_apply_controls()
 
 func _apply_controls() -> void:
-	vehicle.clear_control_inputs()
+	_clear_owned_controls()
+
+func _clear_owned_controls() -> void:
+	pass
 
 func _resolve_vehicle() -> Vehicle:
 	if not vehicle_path.is_empty():
