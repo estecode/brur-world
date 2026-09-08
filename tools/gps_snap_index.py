@@ -24,7 +24,7 @@ MAGIC = b"BRS2"
 HEADER = struct.Struct("<4sfIIf")
 CELL = struct.Struct("<iiII")
 EDGE_REF = struct.Struct("<I")
-DEFAULT_CELL_SIZE_M = 1000.0
+DEFAULT_CELL_SIZE_M = 256.0
 PROGRESS_SECONDS = 5.0
 
 
@@ -71,8 +71,6 @@ def build_snap_index(graph, path: Path, cell_size_m: float = DEFAULT_CELL_SIZE_M
         if is_edge_allowed(edge, RoutingProfile.NORMAL):
             max_legal_speed_kmh = max(max_legal_speed_kmh, float(edge.speed_kmh))
 
-        # BRG1 always stores both physical directions. Picking the direction whose
-        # node index increases removes the expensive runtime physical-edge hash map.
         if edge.source_index >= edge.target_index:
             continue
         physical_edges += 1
@@ -169,6 +167,9 @@ class PersistentRoadSnapIndex:
             if len(self._map) != expected:
                 raise ValueError(f"BRS2 file size mismatch: expected {expected}, got {len(self._map)}")
         except Exception:
+            if getattr(self, "_map", None) is not None:
+                self._map.close()
+                self._map = None
             self._file.close()
             raise
 
@@ -234,7 +235,8 @@ class PersistentRoadSnapIndex:
         found.sort(key=lambda item: item.edge_index)
         return tuple(found)
 
-    def snap(self, x: float, y: float, max_distance_m: float = 250.0) -> RoadSnap | None:
+    def snap_with_stats(self, x: float, y: float, max_distance_m: float = 250.0) -> tuple[RoadSnap | None, int]:
+        """Snap and report how many unique segment candidates were tested."""
         if max_distance_m < 0.0:
             raise ValueError("max_distance_m must be non-negative")
         cx = math.floor(x / self.cell_size_m)
@@ -257,6 +259,10 @@ class PersistentRoadSnapIndex:
                 best = candidate
 
         if best is None or best[0] > max_distance_m:
-            return None
+            return None, len(candidates)
         distance, edge_index, fraction, px, py = best
-        return RoadSnap(px, py, distance, self._directions(edge_index, fraction))
+        return RoadSnap(px, py, distance, self._directions(edge_index, fraction)), len(candidates)
+
+    def snap(self, x: float, y: float, max_distance_m: float = 250.0) -> RoadSnap | None:
+        snap, _ = self.snap_with_stats(x, y, max_distance_m)
+        return snap
