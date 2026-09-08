@@ -1,0 +1,26 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource path="res://harness/gps/gps_harness.gd" type="Script" id="1_harness"]
+
+[node name="GpsHarness" type="Node3D"]
+script = ExtResource("1_harness")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+position = Vector3(0, 4500, 5000)
+rotation_degrees = Vector3(-42, 0, 0)
+current = true
+far = 50000.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-55, -20, 0)
+
+[node name="Ui" type="CanvasLayer" parent="."]
+
+[node name="Panel" type="PanelContainer" parent="Ui"]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 760.0
+offset_bottom = 78.0
+
+[node name="Status" type="Label" parent="Ui/Panel"]
+text = "GPS harness starting…"
