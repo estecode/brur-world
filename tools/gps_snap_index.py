@@ -51,8 +51,45 @@ def _cell_bounds(graph, edge_index: int, cell_size_m: float) -> tuple[int, int, 
     )
 
 
+def _reverse_edge_index(graph, edge_index: int) -> int | None:
+    """Find the opposite directed record for the same physical OSM segment."""
+    edge = graph.edges[edge_index]
+    target = graph.nodes[edge.target_index]
+    start = target.adjacency_offset
+    end = start + target.adjacency_count
+    for candidate_index in range(start, end):
+        candidate = graph.edges[candidate_index]
+        if (
+            candidate.target_index == edge.source_index
+            and candidate.way_id == edge.way_id
+            and candidate.segment_index == edge.segment_index
+        ):
+            return candidate_index
+    return None
+
+
+def _is_normal_physical_representative(graph, edge_index: int) -> bool:
+    """Select exactly one NORMAL-routable direction per physical road segment.
+
+    BRG1 stores both directions even for one-way roads; the forbidden direction
+    carries FLAG_AGAINST_ONEWAY. Selecting by source/target node index alone is
+    therefore incorrect for one-way segments whose legal direction happens to
+    run from a higher node index to a lower one.
+    """
+    edge = graph.edges[edge_index]
+    if not is_edge_allowed(edge, RoutingProfile.NORMAL):
+        return False
+    reverse_index = _reverse_edge_index(graph, edge_index)
+    if reverse_index is None:
+        return True
+    reverse = graph.edges[reverse_index]
+    if not is_edge_allowed(reverse, RoutingProfile.NORMAL):
+        return True
+    return edge_index < reverse_index
+
+
 def build_snap_index(graph, path: Path, cell_size_m: float = DEFAULT_CELL_SIZE_M) -> dict[str, int | float]:
-    """Build BRS2 once offline; one representative is stored per physical edge.
+    """Build BRS2 once offline; one legal representative per physical edge.
 
     The file also stores the maximum legal NORMAL-profile edge speed. The router
     uses that value as a mathematically admissible A* time heuristic bound.
@@ -71,7 +108,7 @@ def build_snap_index(graph, path: Path, cell_size_m: float = DEFAULT_CELL_SIZE_M
         if is_edge_allowed(edge, RoutingProfile.NORMAL):
             max_legal_speed_kmh = max(max_legal_speed_kmh, float(edge.speed_kmh))
 
-        if edge.source_index >= edge.target_index:
+        if not _is_normal_physical_representative(graph, edge_index):
             continue
         physical_edges += 1
         min_cx, min_cy, max_cx, max_cy = _cell_bounds(graph, edge_index, cell_size_m)
@@ -83,7 +120,7 @@ def build_snap_index(graph, path: Path, cell_size_m: float = DEFAULT_CELL_SIZE_M
             elapsed = now - started
             print(
                 f"[snap-index] scanning edges: {edge_index + 1:,}/{edge_total:,} | "
-                f"{physical_edges:,} physical | {len(cells):,} cells | "
+                f"{physical_edges:,} routable physical | {len(cells):,} cells | "
                 f"max legal {max_legal_speed_kmh:.1f} km/h | {elapsed:.1f}s",
                 flush=True,
             )
@@ -123,7 +160,7 @@ def build_snap_index(graph, path: Path, cell_size_m: float = DEFAULT_CELL_SIZE_M
 
     elapsed = time.perf_counter() - started
     print(
-        f"[snap-index] done: {physical_edges:,} physical edges, {len(ordered_cells):,} cells, "
+        f"[snap-index] done: {physical_edges:,} routable physical edges, {len(ordered_cells):,} cells, "
         f"{ref_count:,} refs, max legal {max_legal_speed_kmh:.1f} km/h, "
         f"{path.stat().st_size:,} bytes, {elapsed:.1f}s",
         flush=True,
@@ -219,19 +256,11 @@ class PersistentRoadSnapIndex:
         if is_edge_allowed(representative, self.profile):
             found.append(DirectedSnap(representative_index, fraction))
 
-        target = self.graph.nodes[representative.target_index]
-        start = target.adjacency_offset
-        end = start + target.adjacency_count
-        for edge_index in range(start, end):
-            edge = self.graph.edges[edge_index]
-            if (
-                edge.target_index == representative.source_index
-                and edge.way_id == representative.way_id
-                and edge.segment_index == representative.segment_index
-            ):
-                if is_edge_allowed(edge, self.profile):
-                    found.append(DirectedSnap(edge_index, 1.0 - fraction))
-                break
+        reverse_index = _reverse_edge_index(self.graph, representative_index)
+        if reverse_index is not None:
+            reverse = self.graph.edges[reverse_index]
+            if is_edge_allowed(reverse, self.profile):
+                found.append(DirectedSnap(reverse_index, 1.0 - fraction))
         found.sort(key=lambda item: item.edge_index)
         return tuple(found)
 
@@ -261,7 +290,10 @@ class PersistentRoadSnapIndex:
         if best is None or best[0] > max_distance_m:
             return None, len(candidates)
         distance, edge_index, fraction, px, py = best
-        return RoadSnap(px, py, distance, self._directions(edge_index, fraction)), len(candidates)
+        directions = self._directions(edge_index, fraction)
+        if not directions:
+            raise ValueError("BRS2 contains a physical segment with no legal directions; rebuild the snap index")
+        return RoadSnap(px, py, distance, directions), len(candidates)
 
     def snap(self, x: float, y: float, max_distance_m: float = 250.0) -> RoadSnap | None:
         snap, _ = self.snap_with_stats(x, y, max_distance_m)
