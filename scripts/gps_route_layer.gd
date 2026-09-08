@@ -6,7 +6,7 @@ extends Node3D
 ## - GpsClient owns native process/TCP lifecycle and response delivery.
 ## - GpsRouteModel owns destination/waypoint/preference state.
 ## - GpsRouteRenderer owns route/target visuals; GpsRouteUi owns controls/status.
-## - Main explicitly supplies world origin and camera dependencies through setup().
+## - Game/harness composition supplies world origin and camera dependencies explicitly.
 
 const GpsClientScript = preload("res://scripts/gps_client.gd")
 const GpsInputAdapterScript = preload("res://scripts/gps_input_adapter.gd")
@@ -17,6 +17,10 @@ const GpsRouteUiScript = preload("res://scripts/gps_route_ui.gd")
 const EARTH_RADIUS: float = 6378137.0
 const START_LON: float = 18.0686
 const START_LAT: float = 59.3293
+
+@export var main_path: NodePath
+@export var camera_rig_path: NodePath
+@export var camera_path: NodePath
 
 var route_model = GpsRouteModelScript.new()
 var player: Node3D
@@ -50,6 +54,12 @@ func setup(main_owner: Node3D, camera_rig: Node3D, camera: Camera3D) -> void:
 
 func _ready() -> void:
 	_create_modules()
+	if _main == null and not main_path.is_empty():
+		_main = get_node(main_path) as Node3D
+	if _camera_rig == null and not camera_rig_path.is_empty():
+		_camera_rig = get_node(camera_rig_path) as Node3D
+	if _camera == null and not camera_path.is_empty():
+		_camera = get_node(camera_path) as Camera3D
 	call_deferred("_finish_setup")
 
 func _process(delta: float) -> void:
@@ -65,8 +75,7 @@ func _input(event: InputEvent) -> void:
 	var mouse_event := event as InputEventMouseButton
 	if mouse_event.button_index != MOUSE_BUTTON_LEFT or not mouse_event.pressed or not mouse_event.shift_pressed:
 		return
-	var gui_blocked: bool = get_viewport().gui_get_hovered_control() != null
-	if gui_blocked:
+	if get_viewport().gui_get_hovered_control() != null:
 		return
 	var hit: Vector3 = _screen_to_ground(mouse_event.position)
 	if not hit.is_finite():
@@ -123,12 +132,12 @@ func request_current_plan() -> bool:
 		_set_status("Could not send GPS route plan")
 		return false
 	_set_status("Calculating %s route · %d waypoint(s)…" % [
-		route_ui.call("preference_label", route_model.preference()),
+		str(route_ui.call("preference_label", route_model.preference())),
 		route_model.waypoint_count(),
 	])
 	return true
 
-# Compatibility bridge for existing adapters/tests while callers migrate to the public API.
+# Compatibility bridge for existing callers while the public API lands.
 func _request_current_plan() -> void:
 	request_current_plan()
 
@@ -165,12 +174,12 @@ func _finish_setup() -> void:
 	gps_client.call("start")
 
 func _apply_input_command(command: Dictionary) -> void:
-	var point: Vector2 = command.get("point", Vector2(INF, INF)) as Vector2
-	match str(command.get("type", "")):
-		GpsInputAdapterScript.COMMAND_WAYPOINT:
-			add_waypoint(point)
-		GpsInputAdapterScript.COMMAND_DESTINATION:
-			set_destination(point)
+	var point: Vector2 = command.get("point", Vector2(INF, INF))
+	var command_type: String = str(command.get("type", ""))
+	if command_type == GpsInputAdapterScript.COMMAND_WAYPOINT:
+		add_waypoint(point)
+	elif command_type == GpsInputAdapterScript.COMMAND_DESTINATION:
+		set_destination(point)
 
 func _on_preference_selected(preference: String) -> void:
 	if not route_model.set_preference(preference):
@@ -269,7 +278,9 @@ func _on_client_ready_changed(ready: bool) -> void:
 		_set_status("GPS ready — Shift+click destination · Cmd/Ctrl+Shift+click waypoint")
 
 func consume_perf_metrics() -> Dictionary:
-	var client_metrics: Dictionary = gps_client.call("consume_perf_metrics") as Dictionary if gps_client != null else {}
+	var client_metrics: Dictionary = {}
+	if gps_client != null:
+		client_metrics = gps_client.call("consume_perf_metrics") as Dictionary
 	var result: Dictionary = {
 		"gps_queries": perf_queries,
 		"gps_route_ms": perf_route_ms,
