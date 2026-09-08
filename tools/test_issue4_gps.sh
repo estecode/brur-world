@@ -19,7 +19,8 @@ python -m unittest \
   tests.test_gps_ch \
   tests.test_gps_bch \
   tests.test_routing_runtime_contract \
-  tests.test_native_route_plan
+  tests.test_native_route_plan \
+  tests.test_native_search_index
 
 bash tools/build_native_gps.sh
 
