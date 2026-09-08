@@ -43,6 +43,7 @@ enum ControlOwner {
 var emergency_lights_active: bool = false
 
 var _state: VehicleState = VehicleStateScript.new()
+var _dynamics: VehicleDynamics = VehicleDynamicsScript.new()
 var _state_initialized: bool = false
 var _control_owner: ControlOwner = ControlOwner.PLAYER
 var _throttle_input: float = 0.0
@@ -53,7 +54,7 @@ func _physics_process(delta: float) -> void:
 	if not active:
 		return
 	_ensure_state_from_transform()
-	VehicleDynamicsScript.step(
+	_dynamics.step(
 		_state,
 		_throttle_input,
 		_brake_input,
