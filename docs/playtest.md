@@ -6,7 +6,7 @@ Currently supported targets:
 
 - `game` — full game scene
 - `gps` — isolated GPS harness
-- `driving` — full production world through the driving harness, including the player vehicle and GPS follow toggle
+- `driving` — isolated connected street/ring-road fixture using the production player vehicle, route follower and camera
 
 Future targets should be added only when the corresponding production subsystem/harness actually exists.
 
@@ -21,11 +21,13 @@ bash allow-project.sh /absolute/path/to/brur-world playtest . /bin/bash tools/pl
 
 Safe Command Links must include enum project-parameter support. The signed local approval allows only `game`, `gps` or `driving`; arbitrary paths, scenes, shell arguments, and unknown target values are rejected before `tools/playtest.sh` runs.
 
-If generated Sweden data already exists and is compatible, no source PBF setting is needed. If a required world/routing artifact is missing or known stale, set the external source once in the environment used by Safe Command Links:
+If generated Sweden data already exists and is compatible, no source PBF setting is needed for `game`/`gps`. If a required world/routing artifact is missing or known stale, set the external source once in the environment used by Safe Command Links:
 
 ```bash
 export BRUR_WORLD_PBF=/path/to/sweden.osm.pbf
 ```
+
+The `driving` target deliberately needs neither Sweden data nor native GPS. Its small road network is a fixture at the world boundary while all vehicle/control/camera behavior under test uses production modules.
 
 The PBF remains external and must not be committed. `tools/playtest.sh` reuses compatible `world_data` and native binaries, rebuilds only the prerequisites required by the selected target, and starts Godot only after preparation succeeds.
 
@@ -57,6 +59,6 @@ Driving harness:
 http://127.0.0.1:17384/safecommand/project?repo=estecode/brur-world&command=playtest&target=driving
 ```
 
-In the driving view, W/S/A/D + Space control the player car manually. After calculating a GPS route, `Follow route` hands control intent to the route follower for the same vehicle; any manual driving input disengages follow without replacing or resetting the car.
+The driving harness is a compact connected rectangular road grid: streets/avenues plus an outer ring road. W/S/A/D + Space control the production player car manually. `Follow route` hands control to the production route follower on a fixed ring-road route; any manual driving input disengages route follow without replacing/resetting the car. `Follow car` independently controls camera centering, and `Reset car` returns the same vehicle to the fixture start.
 
 `playtest` always runs the current mapped checkout. It is intentionally separate from `pr-check`, which verifies an exact isolated pull-request revision.
