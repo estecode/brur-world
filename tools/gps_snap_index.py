@@ -8,7 +8,6 @@ Dependencies:
 
 from __future__ import annotations
 
-import bisect
 import math
 import mmap
 import struct
@@ -139,10 +138,6 @@ class PersistentRoadSnapIndex:
             expected = self._ref_table_offset + self.ref_count * EDGE_REF.size
             if len(self._map) != expected:
                 raise ValueError(f"BRS1 file size mismatch: expected {expected}, got {len(self._map)}")
-            self._cell_keys = [
-                CELL.unpack_from(self._map, self._cell_table_offset + index * CELL.size)[:2]
-                for index in range(self.cell_count)
-            ]
         except Exception:
             self._file.close()
             raise
@@ -161,12 +156,27 @@ class PersistentRoadSnapIndex:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
+    def _cell_record(self, index: int) -> tuple[int, int, int, int]:
+        return CELL.unpack_from(self._map, self._cell_table_offset + index * CELL.size)
+
     def _refs_for_cell(self, cx: int, cy: int) -> Iterable[int]:
         wanted = (cx, cy)
-        index = bisect.bisect_left(self._cell_keys, wanted)
-        if index >= self.cell_count or self._cell_keys[index] != wanted:
+        low = 0
+        high = self.cell_count
+        while low < high:
+            middle = (low + high) // 2
+            cell = self._cell_record(middle)
+            key = (cell[0], cell[1])
+            if key < wanted:
+                low = middle + 1
+            else:
+                high = middle
+        if low >= self.cell_count:
             return ()
-        _, _, offset, count = CELL.unpack_from(self._map, self._cell_table_offset + index * CELL.size)
+        cell = self._cell_record(low)
+        if (cell[0], cell[1]) != wanted:
+            return ()
+        offset, count = cell[2], cell[3]
         return (
             EDGE_REF.unpack_from(self._map, self._ref_table_offset + (offset + item) * EDGE_REF.size)[0]
             for item in range(count)
