@@ -23,7 +23,7 @@ from compressed_routing import (
     CompressedGraphAccumulator,
     write_brg1_with_progress,
 )
-from route_geometry import validate_route_geometry
+from route_geometry import validate_route_geometry, validate_route_geometry_alignment
 from routing_graph import EDGE_RECORD, HEADER, MAGIC, NODE_RECORD, ROAD_CLASS, WayInput
 from world_common import ensure_pbf
 
@@ -325,6 +325,23 @@ def build_routing(source: Path, output: Path) -> dict:
             raise RuntimeError(
                 f"BRH1 point count mismatch: expected {accumulator.geometry_point_count:,}, got {geometry_points:,}"
             )
+
+        alignment_progress = _Progress("Phase 4/4 validating BRG1/BRH1 edge geometry")
+
+        def alignment_report(processed: int, total: int) -> None:
+            alignment_progress.maybe_print(processed, f"{total:,} directed edges total")
+
+        alignment = validate_route_geometry_alignment(
+            temp_graph_path,
+            temp_geometry_path,
+            progress=alignment_report,
+        )
+        alignment_progress.done(
+            int(alignment["edge_count"]),
+            f"max endpoint error {float(alignment['max_endpoint_error_m']):.3f} m, "
+            f"max length error {float(alignment['max_length_error_m']):.3f} m",
+        )
+
         temp_graph_path.replace(graph_path)
         temp_geometry_path.replace(geometry_path)
         print(
