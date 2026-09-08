@@ -3,9 +3,10 @@ extends Node3D
 ## Thin Godot adapter for click-to-road GPS routing.
 ##
 ## Dependencies:
+## - GpsRouteModel owns waypoint/destination state without UI or transport.
+## - GpsProtocol owns request encoding.
 ## - bin/brur-gps-server owns snapping, cost policy and route search in resident native C++.
 ## - Main owns world origin coordinates; CameraRig supplies the current screen ray.
-## - Godot sends coordinates plus the selected preference and renders the returned polyline.
 
 const EARTH_RADIUS: float = 6378137.0
 const START_LON: float = 18.0686
@@ -33,12 +34,16 @@ const ROUTING_PREFERENCE_LABELS: Array[String] = [
 @onready var camera_rig: Node3D = get_node("../CameraRig")
 @onready var camera: Camera3D = get_node("../CameraRig/Camera3D")
 
+var route_model: GpsRouteModel = GpsRouteModel.new()
 var player: Node3D
 var route_mesh_instance: MeshInstance3D
 var route_material: StandardMaterial3D
 var target_marker: MeshInstance3D
 var status_label: Label
 var preference_select: OptionButton
+var waypoint_list: ItemList
+var remove_waypoint_button: Button
+var clear_waypoints_button: Button
 
 var server_path: String = ""
 var graph_path: String = ""
@@ -88,6 +93,8 @@ func _input(event: InputEvent) -> void:
 	var mouse_event: InputEventMouseButton = event as InputEventMouseButton
 	if mouse_event.button_index != MOUSE_BUTTON_LEFT or not mouse_event.pressed or not mouse_event.shift_pressed:
 		return
+	if get_viewport().gui_get_hovered_control() != null:
+		return
 	if player == null:
 		return
 	if server_peer == null or server_peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
@@ -99,7 +106,17 @@ func _input(event: InputEvent) -> void:
 	var hit: Vector3 = _screen_to_ground(mouse_event.position)
 	if not hit.is_finite():
 		return
-	_request_route(hit)
+	var absolute: Vector2 = _world_to_absolute(hit)
+	if mouse_event.ctrl_pressed or mouse_event.meta_pressed:
+		route_model.add_waypoint(absolute)
+		_refresh_waypoint_ui()
+		if route_model.has_destination():
+			_request_current_plan()
+		else:
+			_set_status("Waypoint %d added — Shift + click destination" % route_model.waypoint_count())
+	else:
+		route_model.set_destination(absolute)
+		_request_current_plan()
 	get_viewport().set_input_as_handled()
 
 func _exit_tree() -> void:
@@ -144,7 +161,7 @@ func _poll_native_server(delta: float) -> void:
 	if status == StreamPeerTCP.STATUS_CONNECTED:
 		_read_server_responses()
 		if not gps_busy and status_label != null and status_label.text.begins_with("GPS native server"):
-			_set_status("GPS ready — Shift + left click a road to route from the player")
+			_set_status("GPS ready — Shift+click destination · Cmd/Ctrl+Shift+click waypoint")
 		return
 	if status == StreamPeerTCP.STATUS_CONNECTING:
 		return
@@ -220,7 +237,7 @@ func _create_status_ui() -> void:
 	panel.offset_left = -520.0
 	panel.offset_top = 14.0
 	panel.offset_right = -14.0
-	panel.offset_bottom = 94.0
+	panel.offset_bottom = 250.0
 	canvas.add_child(panel)
 	var content: VBoxContainer = VBoxContainer.new()
 	panel.add_child(content)
@@ -231,8 +248,30 @@ func _create_status_ui() -> void:
 	for label_text in ROUTING_PREFERENCE_LABELS:
 		preference_select.add_item(label_text)
 	preference_select.selected = 0
-	preference_select.tooltip_text = "Routing preference used for every GPS query"
+	preference_select.tooltip_text = "Routing preference used for every GPS leg"
+	preference_select.item_selected.connect(_on_preference_selected)
 	content.add_child(preference_select)
+
+	var help := Label.new()
+	help.text = "Shift+click destination · Cmd/Ctrl+Shift+click waypoint"
+	content.add_child(help)
+
+	waypoint_list = ItemList.new()
+	waypoint_list.custom_minimum_size = Vector2(0.0, 80.0)
+	waypoint_list.select_mode = ItemList.SELECT_SINGLE
+	content.add_child(waypoint_list)
+
+	var buttons := HBoxContainer.new()
+	content.add_child(buttons)
+	remove_waypoint_button = Button.new()
+	remove_waypoint_button.text = "Remove selected"
+	remove_waypoint_button.pressed.connect(_on_remove_waypoint_pressed)
+	buttons.add_child(remove_waypoint_button)
+	clear_waypoints_button = Button.new()
+	clear_waypoints_button.text = "Clear waypoints"
+	clear_waypoints_button.pressed.connect(_on_clear_waypoints_pressed)
+	buttons.add_child(clear_waypoints_button)
+	_refresh_waypoint_ui()
 
 func _selected_preference() -> String:
 	if preference_select == null:
@@ -240,23 +279,66 @@ func _selected_preference() -> String:
 	var index: int = clampi(preference_select.selected, 0, ROUTING_PREFERENCE_IDS.size() - 1)
 	return ROUTING_PREFERENCE_IDS[index]
 
-func _request_route(target_world: Vector3) -> void:
+func _request_current_plan() -> void:
+	if player == null or not route_model.has_destination():
+		return
+	if server_peer == null or server_peer.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+		_set_status("GPS native server is not ready yet")
+		return
+	if gps_busy:
+		_set_status("GPS is already calculating a route…")
+		return
 	var start_abs: Vector2 = _world_to_absolute(player.global_position)
-	var target_abs: Vector2 = _world_to_absolute(target_world)
+	var stops: Array[Vector2] = route_model.ordered_stops(start_abs)
 	var preference: String = _selected_preference()
-	var request: String = "%.9f %.9f %.9f %.9f %s\n" % [
-		start_abs.x,
-		start_abs.y,
-		target_abs.x,
-		target_abs.y,
-		preference,
-	]
+	var request: String = GpsProtocol.encode_plan(stops, preference)
+	if request.is_empty():
+		_set_status("GPS route plan has no destination")
+		return
 	var error: Error = server_peer.put_data(request.to_utf8_buffer())
 	if error != OK:
-		_set_status("Could not send GPS query")
+		_set_status("Could not send GPS route plan")
 		return
 	gps_busy = true
-	_set_status("Calculating %s GPS route…" % preference_select.get_item_text(preference_select.selected))
+	_set_status("Calculating %s route · %d waypoint(s)…" % [
+		preference_select.get_item_text(preference_select.selected),
+		route_model.waypoint_count(),
+	])
+
+func _on_preference_selected(_index: int) -> void:
+	if route_model.has_destination() and not gps_busy:
+		_request_current_plan()
+
+func _on_remove_waypoint_pressed() -> void:
+	if waypoint_list == null:
+		return
+	var selected: PackedInt32Array = waypoint_list.get_selected_items()
+	if selected.is_empty():
+		_set_status("Select a waypoint to remove")
+		return
+	if route_model.remove_waypoint(int(selected[0])):
+		_refresh_waypoint_ui()
+		if route_model.has_destination() and not gps_busy:
+			_request_current_plan()
+
+func _on_clear_waypoints_pressed() -> void:
+	route_model.clear_waypoints()
+	_refresh_waypoint_ui()
+	if route_model.has_destination() and not gps_busy:
+		_request_current_plan()
+
+func _refresh_waypoint_ui() -> void:
+	if waypoint_list == null:
+		return
+	waypoint_list.clear()
+	var points: Array[Vector2] = route_model.waypoints()
+	for index in range(points.size()):
+		var point: Vector2 = points[index]
+		waypoint_list.add_item("%d  %.0f, %.0f" % [index + 1, point.x, point.y])
+	if remove_waypoint_button != null:
+		remove_waypoint_button.disabled = points.is_empty()
+	if clear_waypoints_button != null:
+		clear_waypoints_button.disabled = points.is_empty()
 
 func _apply_route_response(response: Dictionary) -> void:
 	var apply_started: int = Time.get_ticks_usec()
@@ -270,7 +352,12 @@ func _apply_route_response(response: Dictionary) -> void:
 
 	if not perf_last_success:
 		var adapter_error: String = str(response.get("adapter_error", ""))
-		_set_status("GPS error: %s" % adapter_error if not adapter_error.is_empty() else "No drivable route found")
+		var failure_reason: String = str(response.get("failure_reason", adapter_error))
+		var failed_leg: int = int(response.get("failed_leg_index", -1))
+		if failed_leg >= 0:
+			_set_status("GPS leg %d failed: %s" % [failed_leg + 1, failure_reason if not failure_reason.is_empty() else "unreachable"])
+		else:
+			_set_status("GPS error: %s" % failure_reason if not failure_reason.is_empty() else "No drivable route found")
 		_clear_route_visual()
 		perf_apply_ms += float(Time.get_ticks_usec() - apply_started) / 1000.0
 		return
@@ -288,27 +375,40 @@ func _apply_route_response(response: Dictionary) -> void:
 		return
 
 	_draw_route(points)
-	var start_snap: Array = response.get("start_snap", []) as Array
-	if start_snap.size() >= 2 and player != null:
-		var snapped_start: Vector3 = _absolute_to_world(float(start_snap[0]), float(start_snap[1]))
-		player.position.x = snapped_start.x
-		player.position.z = snapped_start.z
+	var start_snap_value: Variant = response.get("start_snap", [])
+	if typeof(start_snap_value) == TYPE_ARRAY:
+		var start_snap: Array = start_snap_value as Array
+		if start_snap.size() >= 2 and player != null:
+			var snapped_start: Vector3 = _absolute_to_world(float(start_snap[0]), float(start_snap[1]))
+			player.position.x = snapped_start.x
+			player.position.z = snapped_start.z
 
-	var target_snap: Array = response.get("target_snap", []) as Array
-	if target_snap.size() >= 2:
-		var snapped_target: Vector3 = _absolute_to_world(float(target_snap[0]), float(target_snap[1]))
-		target_marker.position.x = snapped_target.x
-		target_marker.position.z = snapped_target.z
-		target_marker.visible = true
+	var target_snap_value: Variant = response.get("target_snap", [])
+	if typeof(target_snap_value) == TYPE_ARRAY:
+		var target_snap: Array = target_snap_value as Array
+		if target_snap.size() >= 2:
+			var snapped_target: Vector3 = _absolute_to_world(float(target_snap[0]), float(target_snap[1]))
+			target_marker.position.x = snapped_target.x
+			target_marker.position.z = snapped_target.z
+			target_marker.visible = true
 
 	var distance_km: float = float(response.get("distance_m", 0.0)) / 1000.0
 	var minutes: float = float(response.get("travel_time_s", 0.0)) / 60.0
 	var preference: String = str(response.get("preference", _selected_preference()))
-	_set_status("GPS %s · %.1f km · %.0f min · %.1f ms" % [preference, distance_km, minutes, route_ms])
+	var legs_value: Variant = response.get("legs", [])
+	var leg_count: int = (legs_value as Array).size() if typeof(legs_value) == TYPE_ARRAY else 1
+	_set_status("GPS %s · %d leg(s) · %.1f km · %.0f min · %.1f ms" % [
+		preference,
+		leg_count,
+		distance_km,
+		minutes,
+		route_ms,
+	])
 	perf_apply_ms += float(Time.get_ticks_usec() - apply_started) / 1000.0
 	print(
-		"GPS route | %s | %.1f km | %.1f min | %.2f ms | settled %d | relaxed %d | points %d" % [
+		"GPS route | %s | legs %d | %.1f km | %.1f min | %.2f ms | settled %d | relaxed %d | points %d" % [
 			preference,
+			leg_count,
 			distance_km,
 			minutes,
 			route_ms,
