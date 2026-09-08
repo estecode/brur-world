@@ -4,19 +4,26 @@
 Dependencies:
 - Uses pyosmium for production .osm.pbf input.
 - Uses the standard-library XML reader for tiny .osm test fixtures.
-- Delegates graph policy, topology and serialization to routing_graph.py.
+- Uses compressed_routing.py to split ways only at routing-relevant OSM nodes.
+- Delegates shared routing policy/data definitions to routing_graph.py.
 """
 
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Iterable
 
-from routing_graph import EDGE_RECORD, HEADER, MAGIC, NODE_RECORD, GraphAccumulator, WayInput, write_brg1
+from compressed_routing import (
+    BreakpointIndex,
+    CompressedGraphAccumulator,
+    write_brg1_with_progress,
+)
+from routing_graph import EDGE_RECORD, HEADER, MAGIC, NODE_RECORD, ROAD_CLASS, WayInput
 from world_common import ensure_pbf
 
 
@@ -37,10 +44,11 @@ class _Progress:
         if now - self.last_print < self.interval:
             return
         elapsed = now - self.started
-        rate = processed / elapsed if elapsed > 0.0 else 0.0
+        rate = processed / elapsed if processed > 0 and elapsed > 0.0 else 0.0
         suffix = f", {detail}" if detail else ""
+        rate_text = f", {rate:,.0f}/s" if processed > 0 else ""
         print(
-            f"[routing] {self.label}: {processed:,} processed, {elapsed:.1f}s elapsed, {rate:,.0f}/s{suffix}",
+            f"[routing] {self.label}: {processed:,} processed, {elapsed:.1f}s elapsed{rate_text}{suffix}",
             flush=True,
         )
         self.last_print = now
@@ -67,15 +75,17 @@ def _iter_xml_ways(path: Path) -> Iterable[WayInput]:
         yield WayInput(int(way.attrib["id"]), node_ids, coords, tags)
 
 
-def _build_pbf(path: Path, accumulator: GraphAccumulator) -> None:
+def _index_pbf_topology(path: Path) -> BreakpointIndex:
+    """Pass 1: identify endpoints/shared nodes without resolving node locations."""
     try:
         import osmium
     except ImportError as exc:
         raise SystemExit("pyosmium is required for .osm.pbf routing builds") from exc
 
-    progress = _Progress("Phase 1/4 reading PBF ways")
+    topology = BreakpointIndex()
+    progress = _Progress("Phase 1a/4 indexing routing topology")
 
-    class RoutingHandler(osmium.SimpleHandler):
+    class TopologyHandler(osmium.SimpleHandler):
         def __init__(self) -> None:
             super().__init__()
             self.way_count = 0
@@ -83,15 +93,63 @@ def _build_pbf(path: Path, accumulator: GraphAccumulator) -> None:
 
         def way(self, way: osmium.osm.Way) -> None:
             self.way_count += 1
-            highway = way.tags.get("highway")
-            if highway is None:
+            highway = str(way.tags.get("highway") or "").strip()
+            if not highway:
                 progress.maybe_print(
                     self.way_count,
-                    f"{self.highway_way_count:,} highway ways accepted for policy check",
+                    f"{self.highway_way_count:,} highway ways, {topology.routable_way_count:,} routable",
                 )
                 return
 
             self.highway_way_count += 1
+            if highway in ROAD_CLASS:
+                topology.observe_way([int(node.ref) for node in way.nodes], highway)
+
+            progress.maybe_print(
+                self.way_count,
+                f"{self.highway_way_count:,} highway ways, {topology.routable_way_count:,} routable, "
+                f"{len(topology.breakpoints):,} breakpoints",
+            )
+
+    handler = TopologyHandler()
+    # No location index in pass 1: only OSM node identities are needed here.
+    handler.apply_file(str(path))
+    progress.done(
+        handler.way_count,
+        f"{handler.highway_way_count:,} highway ways, {topology.routable_way_count:,} routable, "
+        f"{topology.seen_node_count:,} unique shape nodes, {len(topology.breakpoints):,} routing breakpoints",
+    )
+    return topology
+
+
+def _build_pbf_graph(path: Path, topology: BreakpointIndex) -> CompressedGraphAccumulator:
+    """Pass 2: resolve geometry and emit compressed edges between breakpoints."""
+    try:
+        import osmium
+    except ImportError as exc:
+        raise SystemExit("pyosmium is required for .osm.pbf routing builds") from exc
+
+    accumulator = CompressedGraphAccumulator(topology.breakpoints)
+    progress = _Progress("Phase 1b/4 building compressed routing edges")
+
+    class RoutingHandler(osmium.SimpleHandler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.way_count = 0
+            self.routable_candidate_count = 0
+
+        def way(self, way: osmium.osm.Way) -> None:
+            self.way_count += 1
+            highway = str(way.tags.get("highway") or "").strip()
+            if highway not in ROAD_CLASS:
+                progress.maybe_print(
+                    self.way_count,
+                    f"{self.routable_candidate_count:,} routable ways, "
+                    f"{accumulator.pending_node_count:,} nodes, {accumulator.pending_edge_count:,} directed edges",
+                )
+                return
+
+            self.routable_candidate_count += 1
             try:
                 node_ids = [int(node.ref) for node in way.nodes]
                 coords = [(float(node.lon), float(node.lat)) for node in way.nodes]
@@ -99,27 +157,33 @@ def _build_pbf(path: Path, accumulator: GraphAccumulator) -> None:
                 accumulator.stats.skipped_way_count += 1
                 progress.maybe_print(
                     self.way_count,
-                    f"{self.highway_way_count:,} highway ways accepted for policy check",
+                    f"{self.routable_candidate_count:,} routable ways, "
+                    f"{accumulator.pending_node_count:,} nodes, {accumulator.pending_edge_count:,} directed edges",
                 )
                 return
 
+            # Only routing-relevant tags are retained for this transient WayInput.
             tags = {str(tag.k): str(tag.v) for tag in way.tags}
             accumulator.add_way(WayInput(int(way.id), node_ids, coords, tags))
             progress.maybe_print(
                 self.way_count,
-                f"{self.highway_way_count:,} highway ways accepted for policy check",
+                f"{self.routable_candidate_count:,} routable ways, "
+                f"{accumulator.pending_node_count:,} nodes, {accumulator.pending_edge_count:,} directed edges",
             )
 
     handler = RoutingHandler()
     handler.apply_file(str(path), locations=True)
     progress.done(
         handler.way_count,
-        f"{handler.highway_way_count:,} highway ways accepted for policy check",
+        f"{accumulator.stats.way_count:,} routable ways, "
+        f"{accumulator.original_shape_segments:,} original shape segments -> "
+        f"{accumulator.pending_edge_count:,} directed routing edges",
     )
+    return accumulator
 
 
 def _validate_written_brg1(path: Path, node_count: int, edge_count: int) -> None:
-    """Validate the on-disk container without loading a multi-GB graph into Python again."""
+    """Validate the on-disk container without loading a large graph into Python again."""
     expected_size = HEADER.size + node_count * NODE_RECORD.size + edge_count * EDGE_RECORD.size
     actual_size = path.stat().st_size
     if actual_size != expected_size:
@@ -139,6 +203,32 @@ def _validate_written_brg1(path: Path, node_count: int, edge_count: int) -> None
         )
 
 
+def _finish_graph(accumulator: CompressedGraphAccumulator):
+    progressers: dict[str, _Progress] = {}
+
+    def report(stage: str, processed: int, detail: str) -> None:
+        progress = progressers.get(stage)
+        if progress is None:
+            progress = _Progress(f"Phase 2/4 {stage}")
+            progressers[stage] = progress
+        progress.maybe_print(processed, detail)
+
+    return accumulator.finish(report)
+
+
+def _write_graph(graph, path: Path) -> None:
+    progressers: dict[str, _Progress] = {}
+
+    def report(stage: str, processed: int, detail: str) -> None:
+        progress = progressers.get(stage)
+        if progress is None:
+            progress = _Progress(f"Phase 3/4 {stage}")
+            progressers[stage] = progress
+        progress.maybe_print(processed, detail)
+
+    write_brg1_with_progress(graph, path, report)
+
+
 def build_routing(source: Path, output: Path) -> dict:
     if source.suffix.lower() in {".osm", ".xml"}:
         if not source.is_file():
@@ -147,29 +237,42 @@ def build_routing(source: Path, output: Path) -> dict:
         ensure_pbf(source)
 
     started = time.perf_counter()
-    accumulator = GraphAccumulator()
     source_bytes = source.stat().st_size
     print(f"[routing] Source: {source} ({source_bytes / (1024 ** 3):.2f} GiB)", flush=True)
 
     if source.suffix.lower() in {".osm", ".xml"}:
-        print("[routing] Phase 1/4 reading OSM fixture ...", flush=True)
-        progress = _Progress("Phase 1/4 reading OSM ways")
-        count = 0
-        for count, way in enumerate(_iter_xml_ways(source), start=1):
+        ways = list(_iter_xml_ways(source))
+        topology = BreakpointIndex()
+        progress = _Progress("Phase 1a/4 indexing OSM fixture topology")
+        for count, way in enumerate(ways, start=1):
+            topology.observe_way(list(way.node_ids), str(way.tags.get("highway", "")).strip())
+            progress.maybe_print(count, f"{len(topology.breakpoints):,} breakpoints")
+        progress.done(len(ways), f"{len(topology.breakpoints):,} routing breakpoints")
+        topology.release_seen_nodes()
+
+        accumulator = CompressedGraphAccumulator(topology.breakpoints)
+        progress = _Progress("Phase 1b/4 building OSM fixture edges")
+        for count, way in enumerate(ways, start=1):
             accumulator.add_way(way)
-            progress.maybe_print(count)
-        progress.done(count)
+            progress.maybe_print(count, f"{accumulator.pending_edge_count:,} directed edges")
+        progress.done(len(ways), f"{accumulator.pending_edge_count:,} directed routing edges")
     else:
-        _build_pbf(source, accumulator)
+        topology = _index_pbf_topology(source)
+        # The uniqueness set can contain tens of millions of shape-node IDs. It is no
+        # longer needed after breakpoint discovery, so free it before the location pass.
+        topology.release_seen_nodes()
+        gc.collect()
+        accumulator = _build_pbf_graph(source, topology)
 
     phase_started = time.perf_counter()
     print(
-        f"[routing] Phase 2/4 finalizing graph from {accumulator.stats.way_count:,} routable ways ...",
+        f"[routing] Phase 2/4 finalizing compressed graph from {accumulator.stats.way_count:,} routable ways "
+        f"({accumulator.pending_node_count:,} nodes, {accumulator.pending_edge_count:,} directed edges) ...",
         flush=True,
     )
-    graph = accumulator.finish()
+    graph = _finish_graph(accumulator)
     print(
-        f"[routing] Phase 2/4 finalizing graph: done in {time.perf_counter() - phase_started:.1f}s "
+        f"[routing] Phase 2/4 finalizing compressed graph: done in {time.perf_counter() - phase_started:.1f}s "
         f"({len(graph.nodes):,} nodes, {len(graph.edges):,} directed edges)",
         flush=True,
     )
@@ -179,7 +282,6 @@ def build_routing(source: Path, output: Path) -> dict:
     temp_graph_path = output / "routing.brg.tmp"
     stats_path = output / "routing_stats.json"
 
-    # Never clobber an existing valid graph with an interrupted build.
     if temp_graph_path.exists():
         temp_graph_path.unlink()
 
@@ -190,7 +292,7 @@ def build_routing(source: Path, output: Path) -> dict:
         flush=True,
     )
     try:
-        write_brg1(graph, temp_graph_path)
+        _write_graph(graph, temp_graph_path)
         print(
             f"[routing] Phase 3/4 writing BRG1: done in {time.perf_counter() - phase_started:.1f}s",
             flush=True,
@@ -214,6 +316,8 @@ def build_routing(source: Path, output: Path) -> dict:
     report.update(
         {
             "format": "BRG1",
+            "topology_compressed": True,
+            "original_shape_segment_count": accumulator.original_shape_segments,
             "node_count": len(graph.nodes),
             "directed_edge_count": len(graph.edges),
             "build_seconds": round(elapsed, 3),
@@ -224,6 +328,7 @@ def build_routing(source: Path, output: Path) -> dict:
 
     print(f"[routing] Nodes: {len(graph.nodes):,}", flush=True)
     print(f"[routing] Directed edges: {len(graph.edges):,}", flush=True)
+    print(f"[routing] Original shape segments: {accumulator.original_shape_segments:,}", flush=True)
     print(f"[routing] Explicit speed edges: {report['explicit_speed_edges']:,}", flush=True)
     print(f"[routing] Fallback speed edges: {report['fallback_speed_edges']:,}", flush=True)
     print(f"[routing] Restricted/special edges: {report['restricted_edges']:,}", flush=True)
