@@ -8,13 +8,21 @@ const MusicPlaybackStateScript = preload("res://scripts/music_playback_state.gd"
 const MusicPlayerScript = preload("res://scripts/music_player.gd")
 const FIXTURE_STREAM := "res://tests/fixtures/music_test_stream.tres"
 
+var _failed := false
+
 func _init() -> void:
+	call_deferred("_run")
+
+func _run() -> void:
 	_test_library()
 	_test_empty_library_playback()
 	_test_one_track_library()
 	_test_playback()
 	_test_shuffle_determinism()
-	_test_adapter_playback()
+	await _test_adapter_playback()
+	if _failed:
+		quit(1)
+		return
 	print("godot music playback-state tests: OK")
 	quit(0)
 
@@ -89,8 +97,10 @@ func _test_playback() -> void:
 	_assert(not state.is_playing() and not state.is_paused(), "stop clears playback state")
 
 func _test_shuffle_determinism() -> void:
-	var first = MusicPlaybackStateScript.new(_fixture_library(), 12345)
-	var second = MusicPlaybackStateScript.new(_fixture_library(), 12345)
+	var first_library = _fixture_library()
+	var second_library = _fixture_library()
+	var first = MusicPlaybackStateScript.new(first_library, 12345)
+	var second = MusicPlaybackStateScript.new(second_library, 12345)
 	first.set_shuffle_enabled(true)
 	second.set_shuffle_enabled(true)
 	_assert(first.play() and second.play(), "shuffle fixtures start")
@@ -107,6 +117,7 @@ func _test_shuffle_determinism() -> void:
 func _test_adapter_playback() -> void:
 	var player = MusicPlayerScript.new()
 	root.add_child(player)
+	await process_frame
 	_assert(player.add_track({"id": "fixture", "title": "Fixture", "asset_path": FIXTURE_STREAM}), "adapter accepts local fixture track")
 	_assert(player.play("fixture"), "adapter loads and starts a local AudioStream")
 	_assert(player.current_track_id() == "fixture", "adapter exposes current track")
@@ -117,10 +128,11 @@ func _test_adapter_playback() -> void:
 	_assert(is_equal_approx(player.volume(), 0.25), "adapter exposes volume state")
 	player.stop()
 	_assert(not player.is_playing(), "adapter stops playback")
-	player.free()
+	player.queue_free()
+	await process_frame
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:
 		return
+	_failed = true
 	push_error("music playback-state test failed: " + message)
-	quit(1)
