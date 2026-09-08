@@ -1,17 +1,67 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
-[ext_resource type="PackedScene" path="res://scenes/main.tscn" id="1_main"]
+[ext_resource type="Script" path="res://harness/driving/driving_harness.gd" id="1_harness"]
+[ext_resource type="Script" path="res://scripts/camera_controller.gd" id="2_camera"]
 
-[node name="DrivingHarness" instance=ExtResource("1_main")]
+[node name="DrivingHarness" type="Node3D"]
+script = ExtResource("1_harness")
 
-[node name="DrivingHelp" type="CanvasLayer" parent="."]
-layer = 60
+[node name="Roads" type="Node3D" parent="."]
 
-[node name="Panel" type="PanelContainer" parent="DrivingHelp"]
-offset_left = 14.0
-offset_top = 174.0
-offset_right = 430.0
-offset_bottom = 242.0
+[node name="CameraRig" type="Node3D" parent="."]
+script = ExtResource("2_camera")
+min_distance = 55.0
+max_distance = 450.0
+start_distance = 115.0
+gameplay_blend_start = 300.0
+move_speed_factor = 0.55
 
-[node name="Label" type="Label" parent="DrivingHelp/Panel"]
-text = "DRIVING HARNESS\nZoom in: W/S/A/D + Space · GPS: Follow route on/off"
+[node name="Camera3D" type="Camera3D" parent="CameraRig"]
+current = true
+fov = 52.0
+near = 0.2
+far = 2500.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-55, -30, 0)
+shadow_enabled = true
+
+[node name="Ui" type="CanvasLayer" parent="."]
+layer = 80
+
+[node name="Panel" type="PanelContainer" parent="Ui"]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 410.0
+offset_bottom = 224.0
+
+[node name="Margin" type="MarginContainer" parent="Ui/Panel"]
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 10
+
+[node name="VBox" type="VBoxContainer" parent="Ui/Panel/Margin"]
+theme_override_constants/separation = 6
+
+[node name="Title" type="Label" parent="Ui/Panel/Margin/VBox"]
+text = "DRIVING HARNESS — connected streets + ring road"
+
+[node name="Help" type="Label" parent="Ui/Panel/Margin/VBox"]
+text = "W/S accelerate/reverse · A/D steer · Space brake"
+
+[node name="Speed" type="Label" parent="Ui/Panel/Margin/VBox"]
+text = "Speed: 0.0 km/h"
+
+[node name="Status" type="Label" parent="Ui/Panel/Margin/VBox"]
+text = "Control: MANUAL   Route: VISIBLE / MANUAL   Camera: FOLLOW"
+
+[node name="FollowRoute" type="CheckButton" parent="Ui/Panel/Margin/VBox"]
+text = "Follow route"
+
+[node name="FollowCar" type="CheckButton" parent="Ui/Panel/Margin/VBox"]
+text = "Follow car"
+button_pressed = true
+
+[node name="Reset" type="Button" parent="Ui/Panel/Margin/VBox"]
+text = "Reset car"
