@@ -9,6 +9,7 @@ extends CanvasLayer
 const PERF_LOG_PATH: String = "user://brur_performance.log"
 const LUND_FOCUS: Vector3 = Vector3(-489086.0, 0.0, 1582123.0)
 const LUND_ALTITUDE_M: float = 9000.0
+const LUND_GAP: float = 6.0
 
 @onready var main: Node = get_parent()
 @onready var camera_rig: Node = main.get_node("CameraRig")
@@ -42,6 +43,7 @@ var shown_gps_failures: int = 0
 var shown_gps_failure_reason: String = ""
 var shown_gps_failed_leg: int = -1
 var shown_gps_busy: bool = false
+var _lund_button: Button = null
 
 func _ready() -> void:
 	build_id = _read_build_id()
@@ -58,14 +60,26 @@ func _read_build_id() -> String:
 	return "unknown"
 
 func _create_lund_button() -> void:
-	var button: Button = Button.new()
-	button.text = "Lund"
-	button.tooltip_text = "Focus Lund at the saved gameplay altitude"
-	button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	button.position = Vector2(-124.0, 14.0)
-	button.custom_minimum_size = Vector2(110.0, 34.0)
-	button.pressed.connect(_focus_lund)
-	add_child(button)
+	_lund_button = Button.new()
+	_lund_button.name = "LundButton"
+	_lund_button.text = "Lund"
+	_lund_button.tooltip_text = "Focus Lund at the saved gameplay altitude"
+	_lund_button.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_lund_button.custom_minimum_size = Vector2(110.0, 34.0)
+	_lund_button.pressed.connect(_focus_lund)
+	add_child(_lund_button)
+	var panel := get_node_or_null("Panel") as Control
+	if panel != null:
+		panel.resized.connect(_place_lund_button)
+	call_deferred("_place_lund_button")
+
+func _place_lund_button() -> void:
+	if _lund_button == null:
+		return
+	var panel := get_node_or_null("Panel") as Control
+	if panel == null:
+		return
+	_lund_button.position = Vector2(panel.position.x, panel.position.y + panel.size.y + LUND_GAP)
 
 func _focus_lund() -> void:
 	camera_rig.call("set_view_altitude", LUND_FOCUS, LUND_ALTITUDE_M)
@@ -212,7 +226,7 @@ func _write_perf_sample(
 	if shown_worst_ms >= 33.3:
 		perf_log.store_line("PERF SPIKE,%s,build=%s,worst_frame_ms=%.3f,distance=%.0f,lod=%d,pois=%d,road_tiles=%d,road_build_max_ms=%.3f,road_pending=%d,gps_queries=%d,gps_route_max_ms=%.3f,gps_parse_ms=%.3f,gps_apply_ms=%.3f,gps_points=%d,gps_failures=%d,gps_failure_reason=%s,gps_failed_leg=%d,gps_busy=%s" % [
 			Time.get_datetime_string_from_system(), build_id, shown_worst_ms, distance, lod, poi_count, road_tiles, shown_road_build_max_ms, shown_road_pending,
-			shown_gps_queries, shown_gps_route_max_ms, shown_gps_parse_ms, shown_gps_apply_ms, shown_gps_points,
+			shown_gps_queries, shown_gps_route_ms, shown_gps_route_max_ms, shown_gps_parse_ms, shown_gps_apply_ms, shown_gps_points,
 			shown_gps_failures, _csv_safe(shown_gps_failure_reason), shown_gps_failed_leg, str(shown_gps_busy)
 		])
 	perf_log.flush()
