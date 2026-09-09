@@ -115,6 +115,16 @@ Never put a developer's absolute checkout path in a PR. Safe Command Links maps 
 
 If the local Safe Command installation/mapping/approval is missing, the link may fail locally; agents must not infer installation state from GitHub. Repository support is declared here, while local availability is machine state.
 
+### Manual test handoff
+
+After all relevant available objective validation has been completed, if human verification is still required, the agent must make the test handoff explicit and copy-paste ready. The user must never have to infer which checkout or revision should be tested.
+
+- **Open PR:** provide the complete Safe Command Link for that exact PR when `pr-check` applies. Do not ask the user to manually switch the normal checkout to the PR branch.
+- **Merged work:** before asking the user to test the merged result in Godot, provide the complete command `git switch main && git pull --ff-only origin main` so the local checkout cannot silently remain on an old `main`.
+- Clearly state exactly what remains for the user to verify and why that property could not reasonably be verified automatically.
+- Never ask the user to manually verify something that should reasonably have been covered by deterministic, native, headless Godot, or real-data validation first.
+- After a merge, if further playtesting or verification is expected, always include the `main` update command even if it was shown earlier in the conversation.
+
 ## Dependency graph execution
 
 Treat the roadmap as a dependency graph, not a mandatory queue. Read issue dependencies for non-trivial tracked work. `Independent` means no implementation blocker, not priority. `Blocked` means do not complete until dependencies are satisfied. `Integration-sensitive` means work may proceed with explicit awareness of shared contracts/files. Claim parallel safety only after assessment.
