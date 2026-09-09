@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Verifies that PR-owned local objective checks run from the exact worktree and fail closed.
-# Dependencies: bash, mktemp, grep, tools/run_pr_owned_check.sh, and tools/pr_check.sh.
+# Dependencies: bash, mktemp, grep, tools/run_pr_owned_check.sh, tools/pr_check.sh, and tests/test_pr_check_entry.sh.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -48,4 +48,5 @@ success_line="$(grep -n -- '--state success' "$ROOT/tools/pr_check.sh" | head -n
   exit 1
 }
 
+bash "$ROOT/tests/test_pr_check_entry.sh"
 printf 'pr-owned check hook tests passed\n'
