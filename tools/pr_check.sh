@@ -137,7 +137,10 @@ fi
 rm -rf "$TMP/world_data"
 ln -s "$WORLD_DATA" "$TMP/world_data"
 
-if [[ -f "$TMP/tools/test_city_lights_real_data.sh" ]]; then
+if [[ -f "$TMP/tools/build_city_light_density.py" && -f "$TMP/tools/test_city_lights_real_data.sh" ]]; then
+  [[ -d "$WORLD_DATA/poi_tiles" ]] || { printf 'PR_CHECK=FAIL missing runtime POI tiles for city-light density\n' >&2; exit 66; }
+  printf 'PR_CHECK=BUILD_CITY_LIGHT_DENSITY pr=%s\n' "$PR"
+  "$PYTHON_BIN" "$TMP/tools/build_city_light_density.py" "$WORLD_DATA"
   printf 'PR_CHECK=CHECK_CITY_LIGHTS_REAL_DATA pr=%s\n' "$PR"
   GODOT_BIN="$GODOT" bash "$TMP/tools/test_city_lights_real_data.sh"
 fi
