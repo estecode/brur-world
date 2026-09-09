@@ -1,6 +1,6 @@
 extends MultiMeshInstance3D
 
-## Renders deterministic cloud state as one lightweight MultiMesh of bounded 3D puffs.
+## Renders deterministic cloud state as one lightweight MultiMesh of shaped 3D lobes.
 ##
 ## Dependencies:
 ## - Consumes cloud_field_model.gd output.
@@ -12,8 +12,9 @@ const MAX_PUFF_INSTANCES: int = 7200
 const DEFAULT_COVERAGE: float = 0.64
 const INSIDE_FADE_MIN_ALPHA: float = 0.10
 const INSIDE_FADE_START: float = 1.30
-const MAX_LOCAL_PUFF_WIDTH_M: float = 36000.0
-const MAX_PUFF_ASPECT: float = 3.2
+const MAX_LOCAL_PUFF_MAJOR_M: float = 36000.0
+const MAX_VERTICAL_ASPECT: float = 3.2
+const MAX_HORIZONTAL_ASPECT: float = 2.35
 
 @export_range(0.0, 1.0, 0.01) var coverage: float = DEFAULT_COVERAGE
 @export var field_seed: int = 700031
@@ -29,8 +30,10 @@ var _last_cell := Vector2i(2147483647, 2147483647)
 var _last_lod: int = -1
 var _resources_ready: bool = false
 var _faded_puff_count: int = 0
-var _max_puff_width_m: float = 0.0
+var _max_puff_major_m: float = 0.0
 var _max_formation_size_m: float = 0.0
+var _anisotropic_puff_count: int = 0
+var _max_horizontal_aspect: float = 1.0
 
 func _ready() -> void:
 	_create_render_resources()
@@ -70,8 +73,10 @@ func get_render_stats() -> Dictionary:
 		"faded_puff_count": _faded_puff_count,
 		"lod": _lod_for_distance(_camera_distance_m),
 		"coverage": coverage,
-		"max_puff_width_m": _max_puff_width_m,
+		"max_puff_width_m": _max_puff_major_m,
 		"max_formation_size_m": _max_formation_size_m,
+		"anisotropic_puff_count": _anisotropic_puff_count,
+		"max_horizontal_aspect": _max_horizontal_aspect,
 	}
 
 func _create_render_resources() -> void:
@@ -112,8 +117,10 @@ func _rebuild_if_needed(force: bool) -> void:
 func _rebuild_clouds(center_cell: Vector2i, lod: int) -> void:
 	_clouds.clear()
 	_puffs.clear()
-	_max_puff_width_m = 0.0
+	_max_puff_major_m = 0.0
 	_max_formation_size_m = 0.0
+	_anisotropic_puff_count = 0
+	_max_horizontal_aspect = 1.0
 	var radius: int = _cell_radius_for_lod(lod)
 
 	for cell_y in range(center_cell.y - radius, center_cell.y + radius + 1):
@@ -142,7 +149,7 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 	var thickness_m: float = float(cloud["thickness_m"])
 	var profile_name := String(cloud["profile"])
 	var footprint_radius: float = _footprint_radius_fraction(profile_name) * size_m
-	var nominal_width: float = _nominal_lobe_width(profile_name, size_m, thickness_m)
+	var nominal_major: float = _nominal_lobe_width(profile_name, size_m, thickness_m)
 
 	for puff_index in range(puff_count):
 		var offset := Vector3.ZERO
@@ -160,60 +167,80 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 				sin(angle) * radial
 			)
 
-		var height_m: float = maxf(300.0, thickness_m * rng.randf_range(0.42, 0.78))
-		var width_m: float = nominal_width * rng.randf_range(0.72, 1.18)
-		width_m = minf(width_m, MAX_LOCAL_PUFF_WIDTH_M)
-		width_m = minf(width_m, height_m * MAX_PUFF_ASPECT)
-		width_m = maxf(width_m, minf(700.0, size_m * 0.35))
-		_max_puff_width_m = maxf(_max_puff_width_m, width_m)
+		var height_m: float = maxf(300.0, thickness_m * rng.randf_range(0.48, 0.88))
+		var major_m: float = nominal_major * rng.randf_range(0.78, 1.20)
+		major_m = minf(major_m, MAX_LOCAL_PUFF_MAJOR_M)
+		major_m = minf(major_m, height_m * MAX_VERTICAL_ASPECT)
+		major_m = maxf(major_m, minf(700.0, size_m * 0.30))
+
+		# Horizontal anisotropy restores the irregular cloud silhouette from above.
+		# Rotation plus a separate minor axis prevents the same bounded 3D lobe
+		# from reading as a round ball while its real vertical thickness remains.
+		var horizontal_aspect: float = rng.randf_range(1.18, MAX_HORIZONTAL_ASPECT)
+		if puff_index == 0:
+			horizontal_aspect = rng.randf_range(1.30, 1.85)
+		var minor_m: float = maxf(height_m * 0.82, major_m / horizontal_aspect)
+		minor_m = minf(minor_m, major_m)
+		var yaw: float = rng.randf_range(0.0, TAU)
+		if puff_index > 0:
+			# Bias lobe orientation partly along its offset so neighbouring puffs
+			# overlap into one formation rather than a set of disconnected spheres.
+			yaw = atan2(offset.z, offset.x) + rng.randf_range(-0.65, 0.65)
+
+		_max_puff_major_m = maxf(_max_puff_major_m, major_m)
+		var actual_horizontal_aspect: float = major_m / maxf(1.0, minor_m)
+		_max_horizontal_aspect = maxf(_max_horizontal_aspect, actual_horizontal_aspect)
+		if actual_horizontal_aspect >= 1.12:
+			_anisotropic_puff_count += 1
 
 		_puffs.append({
 			"cloud_index": cloud_index,
 			"offset": offset,
-			"scale": Vector3(width_m, height_m, width_m),
+			"scale": Vector3(major_m, height_m, minor_m),
+			"yaw": yaw,
 		})
 
 func _nominal_lobe_width(profile_name: String, size_m: float, thickness_m: float) -> float:
 	match profile_name:
 		"small_cumulus":
-			return minf(size_m * 0.52, 1800.0)
+			return minf(size_m * 0.56, 1900.0)
 		"medium_cumulus":
-			return minf(size_m * 0.34, 3600.0)
+			return minf(size_m * 0.38, 3900.0)
 		"large_low_mid":
-			return minf(size_m * 0.22, 6500.0)
+			return minf(size_m * 0.24, 7000.0)
 		"giant_cloud_bank":
-			return minf(size_m * 0.11, 14000.0)
+			return minf(size_m * 0.12, 14500.0)
 		"continental_cloud_bank":
-			return minf(size_m * 0.035, 32000.0)
+			return minf(size_m * 0.038, 32000.0)
 		_:
-			return minf(size_m * 0.35, thickness_m * MAX_PUFF_ASPECT)
+			return minf(size_m * 0.35, thickness_m * MAX_VERTICAL_ASPECT)
 
 func _footprint_radius_fraction(profile_name: String) -> float:
 	match profile_name:
 		"small_cumulus":
-			return 0.28
+			return 0.25
 		"medium_cumulus":
-			return 0.34
+			return 0.31
 		"large_low_mid":
-			return 0.39
+			return 0.38
 		"giant_cloud_bank":
 			return 0.44
 		"continental_cloud_bank":
 			return 0.48
 		_:
-			return 0.32
+			return 0.30
 
 func _puffs_for_cloud(cloud: Dictionary, lod: int) -> int:
 	var profile_name := String(cloud["profile"])
 	match profile_name:
 		"continental_cloud_bank":
-			return 24 if lod == 0 else (56 if lod == 1 else 96)
+			return 28 if lod == 0 else (60 if lod == 1 else 96)
 		"giant_cloud_bank":
-			return 10 if lod == 0 else (24 if lod == 1 else 40)
+			return 12 if lod == 0 else (26 if lod == 1 else 42)
 		"large_low_mid":
-			return 5 if lod == 0 else (12 if lod == 1 else 18)
+			return 6 if lod == 0 else (13 if lod == 1 else 20)
 		"medium_cumulus":
-			return 3 if lod == 0 else (8 if lod == 1 else 12)
+			return 4 if lod == 0 else (8 if lod == 1 else 12)
 		_:
 			return 3 if lod == 0 else (6 if lod == 1 else 9)
 
@@ -231,21 +258,22 @@ func _update_instance_transforms() -> void:
 		var cloud_index: int = int(puff["cloud_index"])
 		var offset: Vector3 = puff["offset"]
 		var scale_value: Vector3 = puff["scale"]
+		var yaw: float = float(puff["yaw"])
 		var center: Vector3 = moved_positions[cloud_index] + offset
-		var transform := Transform3D(Basis().scaled(scale_value), center)
-		multimesh.set_instance_transform(puff_index, transform)
-		var alpha: float = _camera_alpha(center, scale_value)
+		var basis := Basis(Vector3.UP, yaw).scaled(scale_value)
+		multimesh.set_instance_transform(puff_index, Transform3D(basis, center))
+		var alpha: float = _camera_alpha(center, scale_value, yaw)
 		if alpha < 0.89:
 			_faded_puff_count += 1
 		multimesh.set_instance_color(puff_index, Color(1.0, 1.0, 1.0, alpha))
 
-func _camera_alpha(center: Vector3, scale_value: Vector3) -> float:
+func _camera_alpha(center: Vector3, scale_value: Vector3, yaw: float) -> float:
 	var half_extents := Vector3(
 		maxf(1.0, scale_value.x * 0.5),
 		maxf(1.0, scale_value.y * 0.5),
 		maxf(1.0, scale_value.z * 0.5)
 	)
-	var relative := _camera_world_position - center
+	var relative: Vector3 = Basis(Vector3.UP, -yaw) * (_camera_world_position - center)
 	var normalized_distance := Vector3(
 		relative.x / half_extents.x,
 		relative.y / half_extents.y,
