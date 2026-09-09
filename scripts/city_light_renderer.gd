@@ -4,7 +4,7 @@ class_name CityLightRenderer
 ## Renders nighttime urban glow clusters and batched local city-light points from CityLightModel data.
 ##
 ## Dependencies:
-## - Consumes CityLightModel presentation data.
+## - Consumes CityLightModel presentation data, including derived runtime POI density.
 ## - Reads solar state from an explicitly configured SunRuntimeController.
 ## - Reads camera distance from an explicitly configured CameraRig for presentation LOD only.
 
@@ -58,6 +58,9 @@ func begin_urban_data() -> void:
 func add_urban_triangle(a: Vector3, b: Vector3, c: Vector3) -> void:
 	_model.add_urban_triangle(a, b, c)
 
+func add_poi_density_sample(world_position: Vector3, count: int) -> void:
+	_model.add_poi_density_sample(world_position, count)
+
 func finish_urban_data() -> void:
 	_build_multimesh(_glow_instance.multimesh, _model.overview_points(MAX_GLOW_CLUSTERS), Vector3(GLOW_DIAMETER_M, GLOW_HEIGHT_M, GLOW_DIAMETER_M))
 	_build_multimesh(_points_instance.multimesh, _model.local_light_points(MAX_LOCAL_LIGHTS), Vector3(LOCAL_POINT_DIAMETER_M, LOCAL_POINT_HEIGHT_M, LOCAL_POINT_DIAMETER_M))
@@ -84,6 +87,8 @@ func get_render_stats() -> Dictionary:
 	return {
 		"night_intensity": _night_intensity,
 		"source_cell_count": _model.source_cell_count(),
+		"poi_density_cell_count": _model.poi_density_cell_count(),
+		"poi_density_total": _model.poi_density_total(),
 		"glow_count": _instance_count(_glow_instance),
 		"point_count": _instance_count(_points_instance),
 		"max_glow_count": MAX_GLOW_CLUSTERS,
