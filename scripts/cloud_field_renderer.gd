@@ -1,6 +1,6 @@
 extends MultiMeshInstance3D
 
-## Renders deterministic cloud state as one lightweight MultiMesh of shaped 3D lobes.
+## Renders deterministic cloud state as one lightweight MultiMesh of cohesive 3D cloudlets.
 ##
 ## Dependencies:
 ## - Consumes cloud_field_model.gd output.
@@ -14,7 +14,7 @@ const INSIDE_FADE_MIN_ALPHA: float = 0.10
 const INSIDE_FADE_START: float = 1.30
 const MAX_LOCAL_PUFF_MAJOR_M: float = 36000.0
 const MAX_VERTICAL_ASPECT: float = 3.2
-const MAX_HORIZONTAL_ASPECT: float = 2.35
+const MAX_HORIZONTAL_ASPECT: float = 2.10
 
 @export_range(0.0, 1.0, 0.01) var coverage: float = DEFAULT_COVERAGE
 @export var field_seed: int = 700031
@@ -34,6 +34,8 @@ var _max_puff_major_m: float = 0.0
 var _max_formation_size_m: float = 0.0
 var _anisotropic_puff_count: int = 0
 var _max_horizontal_aspect: float = 1.0
+var _cloudlet_count: int = 0
+var _clustered_satellite_count: int = 0
 
 func _ready() -> void:
 	_create_render_resources()
@@ -77,6 +79,8 @@ func get_render_stats() -> Dictionary:
 		"max_formation_size_m": _max_formation_size_m,
 		"anisotropic_puff_count": _anisotropic_puff_count,
 		"max_horizontal_aspect": _max_horizontal_aspect,
+		"cloudlet_count": _cloudlet_count,
+		"clustered_satellite_count": _clustered_satellite_count,
 	}
 
 func _create_render_resources() -> void:
@@ -121,6 +125,8 @@ func _rebuild_clouds(center_cell: Vector2i, lod: int) -> void:
 	_max_formation_size_m = 0.0
 	_anisotropic_puff_count = 0
 	_max_horizontal_aspect = 1.0
+	_cloudlet_count = 0
+	_clustered_satellite_count = 0
 	var radius: int = _cell_radius_for_lod(lod)
 
 	for cell_y in range(center_cell.y - radius, center_cell.y + radius + 1):
@@ -148,48 +154,59 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 	var size_m: float = float(cloud["size_m"])
 	var thickness_m: float = float(cloud["thickness_m"])
 	var profile_name := String(cloud["profile"])
-	var footprint_radius: float = _footprint_radius_fraction(profile_name) * size_m
 	var nominal_major: float = _nominal_lobe_width(profile_name, size_m, thickness_m)
+	var cloudlet_count: int = _cloudlets_for_profile(profile_name, puff_count)
+	var cloudlet_centers: Array[Vector3] = _build_cloudlet_centers(rng, profile_name, size_m, thickness_m, cloudlet_count)
+	_cloudlet_count += cloudlet_count
 
+	var puffs_per_cloudlet: int = maxi(1, int(ceil(float(puff_count) / float(cloudlet_count))))
 	for puff_index in range(puff_count):
-		var offset := Vector3.ZERO
-		if puff_index > 0:
-			var angle: float = rng.randf_range(0.0, TAU)
-			var radial: float = sqrt(rng.randf()) * footprint_radius
-			var vertical_layer: float = rng.randf_range(-0.38, 0.48)
-			if puff_index % 5 == 0:
-				vertical_layer = rng.randf_range(0.18, 0.55)
-			elif puff_index % 7 == 0:
-				vertical_layer = rng.randf_range(-0.48, -0.14)
-			offset = Vector3(
-				cos(angle) * radial,
-				vertical_layer * thickness_m,
-				sin(angle) * radial
-			)
+		var cloudlet_index: int = mini(cloudlet_count - 1, puff_index / puffs_per_cloudlet)
+		var local_index: int = puff_index % puffs_per_cloudlet
+		var cloudlet_center: Vector3 = cloudlet_centers[cloudlet_index]
+		var is_core: bool = local_index == 0
 
-		var height_m: float = maxf(300.0, thickness_m * rng.randf_range(0.48, 0.88))
-		var major_m: float = nominal_major * rng.randf_range(0.78, 1.20)
+		var height_m: float = maxf(300.0, thickness_m * rng.randf_range(0.50, 0.82))
+		var major_m: float = nominal_major * rng.randf_range(0.82, 1.16)
+		if is_core:
+			major_m *= rng.randf_range(1.12, 1.34)
+		else:
+			major_m *= rng.randf_range(0.62, 0.92)
 		major_m = minf(major_m, MAX_LOCAL_PUFF_MAJOR_M)
 		major_m = minf(major_m, height_m * MAX_VERTICAL_ASPECT)
-		major_m = maxf(major_m, minf(700.0, size_m * 0.30))
+		major_m = maxf(major_m, minf(650.0, size_m * 0.24))
 
-		# Separate horizontal axes restore an irregular cloud silhouette from above.
-		# The bounded vertical axis keeps the same lobes volumetric as the camera tilts.
-		var horizontal_aspect: float = rng.randf_range(1.18, MAX_HORIZONTAL_ASPECT)
-		if puff_index == 0:
-			horizontal_aspect = rng.randf_range(1.30, 1.85)
-		var minor_m: float = maxf(height_m * 0.82, major_m / horizontal_aspect)
+		var horizontal_aspect: float = rng.randf_range(1.12, MAX_HORIZONTAL_ASPECT)
+		if is_core:
+			horizontal_aspect = rng.randf_range(1.22, 1.72)
+		var minor_m: float = maxf(height_m * 0.78, major_m / horizontal_aspect)
 		minor_m = minf(minor_m, major_m)
+
+		var local_offset := Vector3.ZERO
+		if not is_core:
+			# Satellites stay close enough to overlap the core. This restores the
+			# older cloud-like silhouette instead of distributing isolated beads.
+			var local_angle: float = rng.randf_range(0.0, TAU)
+			var local_radius: float = rng.randf_range(0.22, 0.58) * major_m
+			var local_y: float = rng.randf_range(-0.34, 0.42) * height_m
+			if local_index % 3 == 0:
+				local_y = rng.randf_range(0.16, 0.48) * height_m
+			local_offset = Vector3(
+				cos(local_angle) * local_radius,
+				local_y,
+				sin(local_angle) * local_radius
+			)
+			_clustered_satellite_count += 1
+
+		var offset: Vector3 = cloudlet_center + local_offset
 		var yaw: float = rng.randf_range(0.0, TAU)
-		if puff_index > 0:
-			# Bias orientation partly along the local offset so neighbouring lobes
-			# overlap into one irregular formation instead of separate round beads.
-			yaw = atan2(offset.z, offset.x) + rng.randf_range(-0.65, 0.65)
+		if not is_core and local_offset.length_squared() > 1.0:
+			yaw = atan2(local_offset.z, local_offset.x) + rng.randf_range(-0.75, 0.75)
 
 		_max_puff_major_m = maxf(_max_puff_major_m, major_m)
 		var actual_horizontal_aspect: float = major_m / maxf(1.0, minor_m)
 		_max_horizontal_aspect = maxf(_max_horizontal_aspect, actual_horizontal_aspect)
-		if actual_horizontal_aspect >= 1.12:
+		if actual_horizontal_aspect >= 1.10:
 			_anisotropic_puff_count += 1
 
 		_puffs.append({
@@ -199,41 +216,59 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 			"yaw": yaw,
 		})
 
+func _build_cloudlet_centers(rng: RandomNumberGenerator, profile_name: String, size_m: float, thickness_m: float, count: int) -> Array[Vector3]:
+	var centers: Array[Vector3] = [Vector3.ZERO]
+	if count <= 1:
+		return centers
+	var footprint_radius: float = _formation_footprint_radius(profile_name, size_m)
+	for index in range(1, count):
+		var angle: float = (TAU * float(index) / float(count)) + rng.randf_range(-0.42, 0.42)
+		var radial: float = footprint_radius * rng.randf_range(0.34, 0.92)
+		centers.append(Vector3(
+			cos(angle) * radial,
+			rng.randf_range(-0.22, 0.30) * thickness_m,
+			sin(angle) * radial
+		))
+	return centers
+
+func _cloudlets_for_profile(profile_name: String, puff_count: int) -> int:
+	match profile_name:
+		"continental_cloud_bank":
+			return clampi(int(round(float(puff_count) / 6.0)), 4, 16)
+		"giant_cloud_bank":
+			return clampi(int(round(float(puff_count) / 6.0)), 2, 8)
+		_:
+			return 1
+
+func _formation_footprint_radius(profile_name: String, size_m: float) -> float:
+	match profile_name:
+		"continental_cloud_bank":
+			return size_m * 0.46
+		"giant_cloud_bank":
+			return size_m * 0.39
+		_:
+			return 0.0
+
 func _nominal_lobe_width(profile_name: String, size_m: float, thickness_m: float) -> float:
 	match profile_name:
 		"small_cumulus":
-			return minf(size_m * 0.56, 1900.0)
+			return minf(size_m * 0.50, 1900.0)
 		"medium_cumulus":
-			return minf(size_m * 0.38, 3900.0)
+			return minf(size_m * 0.42, 4200.0)
 		"large_low_mid":
-			return minf(size_m * 0.24, 7000.0)
+			return minf(size_m * 0.30, 8200.0)
 		"giant_cloud_bank":
 			return minf(size_m * 0.12, 14500.0)
 		"continental_cloud_bank":
-			return minf(size_m * 0.038, 32000.0)
+			return minf(size_m * 0.036, 30000.0)
 		_:
 			return minf(size_m * 0.35, thickness_m * MAX_VERTICAL_ASPECT)
-
-func _footprint_radius_fraction(profile_name: String) -> float:
-	match profile_name:
-		"small_cumulus":
-			return 0.25
-		"medium_cumulus":
-			return 0.31
-		"large_low_mid":
-			return 0.38
-		"giant_cloud_bank":
-			return 0.44
-		"continental_cloud_bank":
-			return 0.48
-		_:
-			return 0.30
 
 func _puffs_for_cloud(cloud: Dictionary, lod: int) -> int:
 	var profile_name := String(cloud["profile"])
 	match profile_name:
 		"continental_cloud_bank":
-			return 28 if lod == 0 else (60 if lod == 1 else 96)
+			return 30 if lod == 0 else (60 if lod == 1 else 96)
 		"giant_cloud_bank":
 			return 12 if lod == 0 else (26 if lod == 1 else 42)
 		"large_low_mid":
