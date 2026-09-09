@@ -55,7 +55,7 @@ func _build_ui() -> void:
 	add_child(panel)
 
 	var row := HBoxContainer.new()
-	row.theme_override_constants.separation = 8
+	row.add_theme_constant_override("separation", 8)
 	panel.add_child(row)
 
 	_poi_toggle = CheckButton.new()
