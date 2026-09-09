@@ -1,7 +1,7 @@
 extends SceneTree
 
-## Verifies that the production game scene drives the astronomical sun from WorldClock while retaining the legacy light as an off-by-default toggle.
-## Dependencies: scripts/sun_runtime_controller.gd, scripts/world_clock_runtime.gd, and scenes/main.tscn; controller behavior uses an injected deterministic snapshot.
+## Verifies the production astronomical sun, WorldClock wiring, debug time override, and off-by-default legacy light.
+## Dependencies: scripts/sun_runtime_controller.gd, scripts/world_clock_runtime.gd, scripts/sun_debug_time_ui.gd, and scenes/main.tscn.
 
 const SunRuntimeControllerScript = preload("res://scripts/sun_runtime_controller.gd")
 
@@ -32,14 +32,20 @@ func _test_main_scene_wiring() -> void:
 	var astronomical := scene.get_node_or_null("AstronomicalSun") as DirectionalLight3D
 	var world_clock_runtime := scene.get_node_or_null("WorldClockRuntime")
 	var controller := scene.get_node_or_null("SunRuntimeController")
-	var toggle := scene.get_node_or_null("DebugOverlay/LegacyLightToggle") as CheckButton
+	var legacy_toggle := scene.get_node_or_null("DebugOverlay/LegacyLightToggle") as CheckButton
+	var time_ui := scene.get_node_or_null("DebugOverlay/SunTimeOverride")
+	var override_toggle := scene.get_node_or_null("DebugOverlay/SunTimeOverride/OverrideToggle") as CheckButton
+	var hour_input := scene.get_node_or_null("DebugOverlay/SunTimeOverride/TimeRow/Hour") as SpinBox
 	_assert(legacy != null, "legacy DirectionalLight3D remains in the game scene")
 	_assert(legacy != null and not legacy.visible, "legacy light is off by default")
 	_assert(astronomical != null, "astronomical DirectionalLight3D is present in the game scene")
 	_assert(world_clock_runtime != null, "game scene contains the authoritative WorldClock runtime")
 	_assert(controller != null, "game scene contains the astronomical sun runtime controller")
 	_assert(controller != null and controller.world_clock_path == NodePath("../WorldClockRuntime"), "sun controller explicitly consumes WorldClockRuntime")
-	_assert(toggle != null and not toggle.button_pressed, "legacy light toggle exists and starts off")
+	_assert(legacy_toggle != null and not legacy_toggle.button_pressed, "legacy light toggle exists and starts off")
+	_assert(time_ui != null, "sun time override UI exists")
+	_assert(override_toggle != null and not override_toggle.button_pressed, "sun time override starts disabled")
+	_assert(hour_input != null and not hour_input.editable, "sun time inputs start locked while WorldClock is authoritative")
 	scene.free()
 
 func _test_runtime_controller() -> void:
@@ -76,6 +82,34 @@ func _test_runtime_controller() -> void:
 	_assert(astronomical.visible and astronomical.light_energy > 0.0, "astronomical sun actively lights the game during daytime")
 	_assert(not legacy.visible, "runtime controller forces legacy light off at startup")
 	_assert(not toggle.button_pressed, "legacy toggle starts off")
+
+	var world_clock_basis := astronomical.global_transform.basis
+	controller.set_time_override({
+		"year": 2026,
+		"month": 12,
+		"day": 21,
+		"hour": 0,
+		"minute": 0,
+		"second": 0,
+		"utc_offset_hours": 0.0,
+	})
+	_assert(controller.time_override_enabled(), "debug time override can replace WorldClock input")
+	_assert(not astronomical.visible and is_zero_approx(astronomical.light_energy), "midnight override immediately changes the astronomical sun")
+	controller.set_time_override({
+		"year": 2026,
+		"month": 6,
+		"day": 21,
+		"hour": 11,
+		"minute": 0,
+		"second": 0,
+		"utc_offset_hours": 0.0,
+	})
+	_assert(astronomical.visible and astronomical.light_energy > 0.0, "daytime override immediately restores direct sun")
+	_assert(astronomical.global_transform.basis != world_clock_basis, "override changes the sun direction")
+	controller.clear_time_override()
+	_assert(not controller.time_override_enabled(), "clearing override returns ownership to WorldClock/time source")
+	_assert(astronomical.visible and astronomical.light_energy > 0.0, "WorldClock/time source is reapplied after clearing override")
+
 	toggle.button_pressed = true
 	await process_frame
 	_assert(legacy.visible, "legacy light can be enabled with the toggle")
