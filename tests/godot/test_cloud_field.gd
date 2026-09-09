@@ -106,23 +106,16 @@ func _test_renderer_structure(model) -> void:
 	_assert(renderer.multimesh.use_colors, "MultiMesh enables per-puff opacity without creating nodes")
 	_assert(renderer.get_child_count() == 0, "renderer does not create one Godot node per puff")
 
-	# The headless dummy renderer does not reliably round-trip per-instance
-	# MultiMesh transforms. Validate 3D geometry structurally here while the
-	# model tests above enforce hundreds of metres of physical thickness.
 	var mesh := renderer.multimesh.mesh as SphereMesh
 	_assert(mesh != null and mesh.radial_segments <= 8 and mesh.rings <= 4, "puff mesh stays deliberately low-poly")
 	var mesh_bounds: AABB = mesh.get_aabb()
 	_assert(mesh_bounds.size.x > 0.0 and mesh_bounds.size.y > 0.0 and mesh_bounds.size.z > 0.0, "puff base mesh has real 3D volume")
 
-	# Same LOD and generated field: changing camera distance must not regenerate
-	# a different physical cloud set or alter the instance budget.
 	var before_count: int = renderer.multimesh.instance_count
 	renderer.set_view_state(Vector3.ZERO, 700000.0, Vector3(0.0, 700000.0, 0.0))
 	renderer.set_simulation_seconds(0.0)
 	_assert(renderer.multimesh.instance_count == before_count, "camera zoom does not change physical cloud population inside one LOD")
 
-	# Put the camera at the center of a deterministic rendered cloud. The central
-	# puff is always centered on the cloud, so at least one instance must fade.
 	var inside_position := _first_rendered_cloud_position(model, 0.64, 700031)
 	_assert(inside_position.is_finite(), "inside-cloud fixture finds a rendered cloud")
 	renderer.set_view_state(Vector3.ZERO, 700000.0, inside_position)
