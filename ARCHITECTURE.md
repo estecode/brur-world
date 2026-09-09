@@ -203,6 +203,25 @@ Police problem  -> police harness
 
 Validation is divided by responsibility and cost.
 
+### Automated correctness vs. manual playtesting
+
+The testing boundary is **objectively verifiable vs. subjective perception**, not "visual vs. code". **You should never be a human assert-runner.**
+
+Any objectively observable runtime state or presentation invariant must be automated where reasonably possible. This includes spatial, structural, rendering-state and interaction-state invariants that can be asserted programmatically in headless Godot. The fact that a property exists in a rendered scene does not make it a manual test.
+
+Examples of objective invariants include:
+
+- a vehicle spawn is on or above its expected drivable surface within tolerance, including terrain, bridges and tunnels
+- world chunks and route meshes exist and have sane bounds for the expected coordinates
+- a camera does not penetrate terrain or other surfaces according to its defined collision/clearance contract
+- follow-camera behavior keeps its target within a defined position or screen-space tolerance
+- UI rectangles remain inside the active viewport and do not overlap explicitly forbidden zones
+- state transitions such as manual driving takeover, GPS control release/reacquisition and reroute requests follow their defined contracts
+
+Manual playtesting should be reserved primarily for perception, feel, aesthetics, hardware-specific behavior, holistic UX, or other behavior that cannot reasonably be reduced to deterministic assertions. Examples include whether camera smoothing feels cinematic, vehicle handling feels rewarding, clouds look natural, or a layout feels intuitive.
+
+Do not create brittle or disproportionately expensive automation merely because a property is theoretically measurable. Prefer the smallest stable invariant that proves the behavior users depend on.
+
 ### 1. Core tests
 
 Fast, deterministic tests for portable/domain behavior without SceneTree or presentation dependencies.
