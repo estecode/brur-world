@@ -224,7 +224,7 @@ func _write_perf_sample(
 	]
 	perf_log.store_line(line)
 	if shown_worst_ms >= 33.3:
-		perf_log.store_line("PERF SPIKE,%s,build=%s,worst_frame_ms=%.3f,distance=%.0f,lod=%d,pois=%d,road_tiles=%d,road_build_max_ms=%.3f,road_pending=%d,gps_queries=%d,gps_route_max_ms=%.3f,gps_parse_ms=%.3f,gps_apply_ms=%.3f,gps_points=%d,gps_failures=%d,gps_failure_reason=%s,gps_failed_leg=%d,gps_busy=%s" % [
+		perf_log.store_line("PERF SPIKE,%s,build=%s,worst_frame_ms=%.3f,distance=%.0f,lod=%d,pois=%d,road_tiles=%d,road_build_max_ms=%.3f,road_pending=%d,gps_queries=%d,gps_route_ms=%.3f,gps_route_max_ms=%.3f,gps_parse_ms=%.3f,gps_apply_ms=%.3f,gps_points=%d,gps_failures=%d,gps_failure_reason=%s,gps_failed_leg=%d,gps_busy=%s" % [
 			Time.get_datetime_string_from_system(), build_id, shown_worst_ms, distance, lod, poi_count, road_tiles, shown_road_build_max_ms, shown_road_pending,
 			shown_gps_queries, shown_gps_route_ms, shown_gps_route_max_ms, shown_gps_parse_ms, shown_gps_apply_ms, shown_gps_points,
 			shown_gps_failures, _csv_safe(shown_gps_failure_reason), shown_gps_failed_leg, str(shown_gps_busy)
