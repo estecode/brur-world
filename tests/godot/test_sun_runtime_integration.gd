@@ -1,7 +1,7 @@
 extends SceneTree
 
-## Verifies that the production game scene uses the astronomical sun while retaining the legacy light as an off-by-default toggle.
-## Dependencies: scripts/sun_runtime_controller.gd and scenes/main.tscn; uses an injected time snapshot instead of system time.
+## Verifies that the production game scene drives the astronomical sun from WorldClock while retaining the legacy light as an off-by-default toggle.
+## Dependencies: scripts/sun_runtime_controller.gd, scripts/world_clock_runtime.gd, and scenes/main.tscn; controller behavior uses an injected deterministic snapshot.
 
 const SunRuntimeControllerScript = preload("res://scripts/sun_runtime_controller.gd")
 
@@ -30,12 +30,15 @@ func _test_main_scene_wiring() -> void:
 	var scene := packed.instantiate()
 	var legacy := scene.get_node_or_null("DirectionalLight3D") as DirectionalLight3D
 	var astronomical := scene.get_node_or_null("AstronomicalSun") as DirectionalLight3D
+	var world_clock_runtime := scene.get_node_or_null("WorldClockRuntime")
 	var controller := scene.get_node_or_null("SunRuntimeController")
 	var toggle := scene.get_node_or_null("DebugOverlay/LegacyLightToggle") as CheckButton
 	_assert(legacy != null, "legacy DirectionalLight3D remains in the game scene")
 	_assert(legacy != null and not legacy.visible, "legacy light is off by default")
 	_assert(astronomical != null, "astronomical DirectionalLight3D is present in the game scene")
+	_assert(world_clock_runtime != null, "game scene contains the authoritative WorldClock runtime")
 	_assert(controller != null, "game scene contains the astronomical sun runtime controller")
+	_assert(controller != null and controller.world_clock_path == NodePath("../WorldClockRuntime"), "sun controller explicitly consumes WorldClockRuntime")
 	_assert(toggle != null and not toggle.button_pressed, "legacy light toggle exists and starts off")
 	scene.free()
 
