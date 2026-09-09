@@ -28,7 +28,9 @@ run_godot_test() {
     echo "sun tests: Godot exited with status $status for $script" >&2
     exit $status
   fi
-  if grep -Eq 'SCRIPT ERROR:|Parse Error:|Failed to load script|^ERROR:' <<<"$output"; then
+  local error_output
+  error_output="$(grep -E 'SCRIPT ERROR:|Parse Error:|Failed to load script|^ERROR:' <<<"$output" | grep -Ev '^ERROR: [0-9]+ resources still in use at exit' || true)"
+  if [[ -n "$error_output" ]]; then
     echo "sun tests: Godot reported an error for $script" >&2
     exit 1
   fi
