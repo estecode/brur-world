@@ -20,6 +20,7 @@ const NIGHT_AMBIENT_ENERGY := 0.16
 var _sun_controller: Node
 var _world_environment: WorldEnvironment
 var _last_solar_state: Dictionary = {"valid": false}
+var _environment_applied := false
 
 func _ready() -> void:
 	_sun_controller = get_node_or_null(sun_controller_path)
@@ -27,6 +28,12 @@ func _ready() -> void:
 	if _sun_controller != null and _sun_controller.has_signal("solar_state_changed"):
 		_sun_controller.connect("solar_state_changed", _on_solar_state_changed)
 	refresh_now()
+
+func _process(_delta: float) -> void:
+	if _environment_applied:
+		return
+	if _world_environment != null and _world_environment.environment != null:
+		refresh_now()
 
 func refresh_now() -> void:
 	if _sun_controller != null and _sun_controller.has_method("get_last_solar_state"):
@@ -43,20 +50,24 @@ func apply_solar_state(solar_state: Dictionary) -> void:
 func get_environment_stats() -> Dictionary:
 	return {
 		"night_factor": _night_factor(float(_last_solar_state.get("elevation_deg", 90.0))) if bool(_last_solar_state.get("valid", false)) else 0.0,
+		"applied": _environment_applied,
 	}
 
 func _apply_environment() -> void:
 	if _world_environment == null or _world_environment.environment == null:
+		_environment_applied = false
 		return
 	var night_factor := _night_factor(float(_last_solar_state.get("elevation_deg", 90.0)))
 	var environment := _world_environment.environment
 	environment.background_color = DAY_BACKGROUND.lerp(NIGHT_BACKGROUND, night_factor)
 	environment.ambient_light_color = DAY_AMBIENT.lerp(NIGHT_AMBIENT, night_factor)
 	environment.ambient_light_energy = lerpf(DAY_AMBIENT_ENERGY, NIGHT_AMBIENT_ENERGY, night_factor)
+	_environment_applied = true
 
 func _night_factor(elevation_deg: float) -> float:
 	var t := clampf((2.0 - elevation_deg) / 10.0, 0.0, 1.0)
 	return t * t * (3.0 - 2.0 * t)
 
 func _on_solar_state_changed(solar_state: Dictionary) -> void:
+	_environment_applied = false
 	apply_solar_state(solar_state)
