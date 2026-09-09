@@ -11,11 +11,11 @@ class_name DayNightEnvironmentAdapter
 @export_node_path("WorldEnvironment") var world_environment_path: NodePath
 
 const DAY_BACKGROUND := Color(0.34, 0.56, 0.76)
-const NIGHT_BACKGROUND := Color(0.018, 0.035, 0.075)
+const NIGHT_BACKGROUND := Color(0.045, 0.075, 0.12)
 const DAY_AMBIENT := Color(0.78, 0.86, 0.95)
-const NIGHT_AMBIENT := Color(0.09, 0.12, 0.19)
+const NIGHT_AMBIENT := Color(0.13, 0.17, 0.24)
 const DAY_AMBIENT_ENERGY := 1.05
-const NIGHT_AMBIENT_ENERGY := 0.16
+const NIGHT_AMBIENT_ENERGY := 0.23
 
 var _sun_controller: Node
 var _world_environment: WorldEnvironment
