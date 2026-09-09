@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Validates an exact PR revision against local production data before launching Godot for any remaining human check.
-# Dependencies: git, Python 3, a local Godot executable, a C++20 compiler, ignored world_data, and Sweden PBF for stale/invalid routing rebuilds.
+# Dependencies: git, Python 3, tools/pr_check_scope.py, a local Godot executable, a C++20 compiler, ignored world_data, and Sweden PBF for stale/invalid routing rebuilds.
 set -euo pipefail
 
 PR="${1:-}"
@@ -10,6 +10,7 @@ ROOT="$(git rev-parse --show-toplevel)"
 WORLD_DATA="$ROOT/world_data"
 [[ -d "$WORLD_DATA" ]] || { printf 'PR_CHECK=FAIL missing %s\n' "$WORLD_DATA" >&2; exit 66; }
 [[ -f "$WORLD_DATA/manifest.json" ]] || { printf 'PR_CHECK=FAIL missing %s/manifest.json\n' "$WORLD_DATA" >&2; exit 66; }
+[[ -f "$ROOT/tools/pr_check_scope.py" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_scope.py\n' >&2; exit 66; }
 
 if [[ -x "$ROOT/.venv/bin/python" ]]; then
   PYTHON_BIN="$ROOT/.venv/bin/python"
@@ -120,7 +121,21 @@ rebuild_routing_dataset() {
 printf 'PR_CHECK=PREPARE pr=%s\n' "$PR"
 ensure_runtime_ports_free
 git -C "$ROOT" fetch --quiet origin "pull/${PR}/head"
-git -C "$ROOT" worktree add --quiet --detach "$TMP" FETCH_HEAD
+PR_HEAD="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
+git -C "$ROOT" fetch --quiet origin main:refs/remotes/origin/main
+MAIN_HEAD="$(git -C "$ROOT" rev-parse refs/remotes/origin/main)"
+PR_BASE="$(git -C "$ROOT" merge-base "$MAIN_HEAD" "$PR_HEAD")"
+CHANGED_FILES="$(git -C "$ROOT" diff --name-only "$PR_BASE" "$PR_HEAD")"
+ROUTE_GEOMETRY_SCOPE="$(printf '%s\n' "$CHANGED_FILES" | "$PYTHON_BIN" "$ROOT/tools/pr_check_scope.py" route-geometry)"
+case "$ROUTE_GEOMETRY_SCOPE" in
+  required|skip) ;;
+  *)
+    printf 'PR_CHECK=FAIL invalid route-geometry scope decision: %s\n' "$ROUTE_GEOMETRY_SCOPE" >&2
+    exit 70
+    ;;
+esac
+
+git -C "$ROOT" worktree add --quiet --detach "$TMP" "$PR_HEAD"
 ADDED=1
 
 if [[ -f "$TMP/tools/build_routing_dataset.py" ]] && ! routing_dataset_ready; then
@@ -136,12 +151,16 @@ if [[ -f "$TMP/tools/build_native_gps.sh" ]]; then
 fi
 
 if [[ -f "$TMP/tools/check_route_geometry_dataset.py" ]]; then
-  printf 'PR_CHECK=CHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
-  if ! "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"; then
-    printf 'PR_CHECK=ROUTE_GEOMETRY_INVALID pr=%s rebuilding source-aligned routing dataset\n' "$PR"
-    rebuild_routing_dataset
-    printf 'PR_CHECK=RECHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
-    "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"
+  if [[ "$ROUTE_GEOMETRY_SCOPE" == "required" ]]; then
+    printf 'PR_CHECK=CHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
+    if ! "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"; then
+      printf 'PR_CHECK=ROUTE_GEOMETRY_INVALID pr=%s rebuilding source-aligned routing dataset\n' "$PR"
+      rebuild_routing_dataset
+      printf 'PR_CHECK=RECHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
+      "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"
+    fi
+  else
+    printf 'PR_CHECK=SKIP_ROUTE_GEOMETRY_DATASET pr=%s reason=unrelated-changes\n' "$PR"
   fi
 fi
 
