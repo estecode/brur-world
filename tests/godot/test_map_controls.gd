@@ -1,10 +1,11 @@
 extends SceneTree
 
 ## Headless contract tests for POI visibility, armed teleport and map-control scene wiring.
-## Dependencies: production PoiLayer, GpsRouteLayer, player vehicle and main-scene adapters.
+## Dependencies: production PoiLayer, GpsRouteLayer, MapControlsUi, player vehicle and main-scene adapters.
 
 const PoiLayerScript = preload("res://scripts/poi_layer.gd")
 const GpsRouteLayerScript = preload("res://scripts/gps_route_layer.gd")
+const MapControlsUiScript = preload("res://scripts/map_controls_ui.gd")
 
 func _init() -> void:
 	call_deferred("_run")
@@ -12,6 +13,7 @@ func _init() -> void:
 func _run() -> void:
 	_test_poi_visibility_preserves_data()
 	_test_teleport_is_explicit_and_preserves_vehicle_identity()
+	_test_map_controls_ui_builds_headlessly()
 	_test_main_scene_control_wiring()
 	print("godot map-controls tests: OK")
 	quit(0)
@@ -45,6 +47,15 @@ func _test_teleport_is_explicit_and_preserves_vehicle_identity() -> void:
 	_assert(_approx(float(player.call("speed_mps")), 0.0), "teleport resets vehicle speed")
 	player.free()
 	route_layer.free()
+
+func _test_map_controls_ui_builds_headlessly() -> void:
+	var controls: CanvasLayer = MapControlsUiScript.new()
+	get_root().add_child(controls)
+	_assert(controls.get_child_count() == 1, "map controls build their panel during _ready")
+	var panel := controls.get_child(0) as PanelContainer
+	_assert(panel != null, "map controls panel exists after entering the tree")
+	_assert(panel.get_child_count() == 1, "map controls panel contains its control row")
+	controls.free()
 
 func _test_main_scene_control_wiring() -> void:
 	var main_scene := load("res://scenes/main.tscn") as PackedScene
