@@ -12,6 +12,7 @@ import argparse
 from pathlib import Path
 
 from build_background import build_background
+from build_city_light_density import build_city_light_density
 from build_features import build_buildings, build_pois
 from build_roads import build_roads
 from build_routing_dataset import build_routing_dataset
@@ -46,6 +47,10 @@ def main() -> None:
     print()
     print("=== BUILD BUILDINGS / RELATION POIS (HEAVY) ===")
     build_buildings(args.pbf, args.output)
+
+    print()
+    print("=== BUILD CITY-LIGHT POI DENSITY ===")
+    build_city_light_density(args.output)
 
     print()
     print("=== BUILD GPS SEARCH INDEX ===")
