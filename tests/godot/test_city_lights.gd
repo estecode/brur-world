@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Headless deterministic, density, LOD, and production-composition tests for nighttime city lighting.
+## Headless deterministic, POI-density, LOD, and production-composition tests for nighttime city lighting.
 ## Dependencies: production city-light model/renderer, day/night environment adapter, main scene.
 
 const CityLightModelScript = preload("res://scripts/city_light_model.gd")
@@ -27,6 +27,7 @@ func _run() -> void:
 	var model = CityLightModelScript.new()
 	_test_solar_intensity(model)
 	_test_density_and_distribution(model)
+	_test_poi_density_weighting()
 	_test_production_composition()
 	await _test_environment_contrast()
 	await _test_renderer_visual_contracts()
@@ -41,18 +42,16 @@ func _test_solar_intensity(model) -> void:
 	_assert(float(model.night_intensity(-4.0)) > dusk, "intensity rises monotonically after sunset")
 
 func _test_density_and_distribution(model) -> void:
-	# A 4.5 km square synthetic urban field exercises the same production model at
-	# realistic scale and prevents the sparse 1.4 km/three-lights-per-cell failure.
 	for x in range(10):
 		for z in range(10):
 			var ox := float(x) * 450.0
 			var oz := float(z) * 450.0
 			model.add_urban_triangle(Vector3(ox + 20.0, 0.0, oz + 20.0), Vector3(ox + 400.0, 0.0, oz + 20.0), Vector3(ox + 20.0, 0.0, oz + 400.0))
+	model.add_poi_density_sample(Vector3(2000.0, 0.0, 2000.0), 100)
 	var overview: Array[Vector3] = model.overview_points()
 	var local: Array[Vector3] = model.local_light_points()
-	_assert(overview.size() >= 95, "dense urban field retains near-cell-scale overview coverage")
-	_assert(local.size() >= overview.size() * 8, "close presentation has at least eight lights per occupied urban cell")
-	_assert(local.size() >= 760, "4.5 km urban field produces hundreds of local lights, not isolated dots")
+	_assert(overview.size() > 100, "POI density strengthens overview glow beyond one cluster per urban cell")
+	_assert(local.size() >= 800, "dense POI-backed urban field produces many small local lights")
 	var first := local.duplicate()
 	model.reset_distribution()
 	for x in range(10):
@@ -60,8 +59,22 @@ func _test_density_and_distribution(model) -> void:
 			var ox := float(x) * 450.0
 			var oz := float(z) * 450.0
 			model.add_urban_triangle(Vector3(ox + 20.0, 0.0, oz + 20.0), Vector3(ox + 400.0, 0.0, oz + 20.0), Vector3(ox + 20.0, 0.0, oz + 400.0))
-	_assert(first == model.local_light_points(), "same urban geometry produces identical local lights")
+	model.add_poi_density_sample(Vector3(2000.0, 0.0, 2000.0), 100)
+	_assert(first == model.local_light_points(), "same urban geometry and POI density produce identical local lights")
 	_assert(model.local_light_points(37).size() == 37, "distribution respects an explicit point budget")
+
+func _test_poi_density_weighting() -> void:
+	var sparse = CityLightModelScript.new()
+	var medium = CityLightModelScript.new()
+	var dense = CityLightModelScript.new()
+	for candidate in [sparse, medium, dense]:
+		candidate.add_urban_triangle(Vector3(20.0, 0.0, 20.0), Vector3(400.0, 0.0, 20.0), Vector3(20.0, 0.0, 400.0))
+	medium.add_poi_density_sample(Vector3(225.0, 0.0, 225.0), 4)
+	dense.add_poi_density_sample(Vector3(225.0, 0.0, 225.0), 128)
+	_assert(medium.local_light_points().size() > sparse.local_light_points().size(), "more POIs increase local light density")
+	_assert(dense.local_light_points().size() > medium.local_light_points().size(), "POI weighting remains monotonic")
+	_assert(dense.overview_points().size() > sparse.overview_points().size(), "more POIs strengthen overview glow")
+	_assert(dense.density_weight_at(Vector3(225.0, 0.0, 225.0)) < 8.0, "POI weighting is logarithmic rather than linear")
 
 func _test_production_composition() -> void:
 	var scene := load("res://scenes/main.tscn") as PackedScene
@@ -77,6 +90,8 @@ func _test_production_composition() -> void:
 		var source := main_file.get_as_text()
 		_assert(source.contains("city_lights.begin_urban_data()"), "production feeds BRM2 urban data to city lights")
 		_assert(source.contains("kind == MAP_URBAN"), "city lights derive from authoritative urban layer")
+		_assert(source.contains("_load_city_light_poi_density()"), "production also consumes derived runtime POI density")
+		_assert(source.contains("world_coordinates.absolute_to_world"), "POI density uses the shared coordinate conversion owner")
 
 func _test_environment_contrast() -> void:
 	var host := Node.new()
@@ -122,11 +137,13 @@ func _test_renderer_visual_contracts() -> void:
 			var ox := float(x) * 450.0
 			var oz := float(z) * 450.0
 			renderer.add_urban_triangle(Vector3(ox + 20.0, 0.0, oz + 20.0), Vector3(ox + 400.0, 0.0, oz + 20.0), Vector3(ox + 20.0, 0.0, oz + 400.0))
+	renderer.add_poi_density_sample(Vector3(1000.0, 0.0, 1000.0), 100)
 	renderer.finish_urban_data()
 	renderer.apply_solar_state({"valid": true, "elevation_deg": -8.0})
 	await process_frame
 	var stats: Dictionary = renderer.get_render_stats()
-	_assert(int(stats["point_count"]) >= 280, "small city fixture renders hundreds of close lights")
+	_assert(int(stats["poi_density_total"]) == 100, "renderer forwards POI density into the production model")
+	_assert(int(stats["point_count"]) > 300, "POI-dense small city fixture renders hundreds of close lights")
 	_assert(float(stats["point_diameter_m"]) <= 30.0, "close lights stay small enough to read as lamps/windows rather than blobs")
 	_assert(float(stats["glow_diameter_m"]) <= 900.0, "overview clusters cannot become giant regular dots")
 	_assert(not bool(stats["glow_visible"]) and bool(stats["points_visible"]), "5 km view uses local points only")
