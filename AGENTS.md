@@ -87,7 +87,7 @@ Repository: estecode/brur-world
 PR check command: pr-check
 Parameters: pr:positive-int
 Playtest command: playtest
-Parameters: target:enum=game,gps
+Parameters: target:enum=game,gps,driving
 ```
 
 `playtest` targets are limited to real supported targets. Add new values only when the corresponding game/harness actually exists; do not create speculative harnesses to populate the allowlist.

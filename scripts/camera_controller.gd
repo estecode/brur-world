@@ -1,12 +1,13 @@
 extends Node3D
 
-## Drives the map camera from an explicit real-world altitude and exposes read-only view state.
+## Drives the map camera from an explicit real-world altitude with explicit Map/Drive ownership and optional map follow.
 ##
 ## Dependencies:
 ## - camera_altitude_model.gd owns deterministic altitude state and readout formatting.
-## - Camera3D presents framing; explicitly wired presentation consumers may read focus/distance/position.
+## - Camera3D presents framing; an explicitly wired generic Node3D may be followed in Drive mode or by Map Follow car.
 
 signal view_changed(focus_world: Vector3, distance_m: float, camera_world_position: Vector3)
+signal map_follow_changed(enabled: bool)
 
 const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.gd")
 
@@ -31,6 +32,9 @@ var focus: Vector3 = Vector3.ZERO
 var dragging: bool = false
 var last_mouse: Vector2 = Vector2.ZERO
 var altitude_model = null
+var _follow_target: Node3D = null
+var _drive_mode: bool = false
+var _map_follow_enabled: bool = false
 
 @onready var camera: Camera3D = $Camera3D
 
@@ -39,6 +43,25 @@ func _ready() -> void:
 	_apply_camera()
 
 func _process(delta: float) -> void:
+	if _drive_mode and _has_follow_target():
+		_center_on_follow_target()
+		return
+
+	var input: Vector2 = _map_pan_input()
+	if input.length_squared() > 0.0:
+		_cancel_map_follow()
+		input = input.normalized()
+		var speed: float = maxf(250.0, get_distance() * move_speed_factor)
+		focus += Vector3(input.x, 0.0, input.y) * speed * delta
+		_apply_camera()
+		return
+
+	if _map_follow_enabled and _has_follow_target():
+		_center_on_follow_target()
+
+func _map_pan_input() -> Vector2:
+	if _drive_mode:
+		return Vector2.ZERO
 	var input: Vector2 = Vector2(
 		Input.get_axis("ui_left", "ui_right"),
 		Input.get_axis("ui_up", "ui_down")
@@ -51,11 +74,7 @@ func _process(delta: float) -> void:
 		input.y -= 1.0
 	if Input.is_key_pressed(KEY_S):
 		input.y += 1.0
-	if input.length_squared() > 0.0:
-		input = input.normalized()
-		var speed: float = maxf(250.0, get_distance() * move_speed_factor)
-		focus += Vector3(input.x, 0.0, input.y) * speed * delta
-		_apply_camera()
+	return input
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
@@ -81,6 +100,9 @@ func _input(event: InputEvent) -> void:
 			_zoom_by(1.0 / magnify_event.factor, magnify_event.position)
 
 func _pan_pixels(delta_px: Vector2) -> void:
+	if _drive_mode:
+		return
+	_cancel_map_follow()
 	var meters_per_px: float = get_distance() / 900.0
 	focus += Vector3(-delta_px.x, 0.0, -delta_px.y) * meters_per_px
 	_apply_camera()
@@ -209,6 +231,53 @@ func set_view_altitude(new_focus: Vector3, new_altitude_m: float) -> void:
 
 func set_altitude(new_altitude_m: float) -> void:
 	altitude_model.set_altitude(new_altitude_m)
+	_apply_camera()
+
+func set_follow_target(target: Node3D) -> void:
+	_follow_target = target
+	if (_drive_mode or _map_follow_enabled) and is_inside_tree() and _has_follow_target():
+		_center_on_follow_target()
+
+func clear_follow_target() -> void:
+	_follow_target = null
+	set_map_follow_enabled(false)
+
+func set_drive_mode(enabled: bool) -> void:
+	if _drive_mode == enabled:
+		return
+	_drive_mode = enabled
+	if enabled:
+		set_map_follow_enabled(false)
+	if is_inside_tree() and _drive_mode and _has_follow_target():
+		_center_on_follow_target()
+
+func is_driving_view() -> bool:
+	return _drive_mode
+
+func set_map_follow_enabled(enabled: bool) -> void:
+	var next_enabled: bool = enabled and not _drive_mode and _has_follow_target()
+	if _map_follow_enabled == next_enabled:
+		return
+	_map_follow_enabled = next_enabled
+	map_follow_changed.emit(_map_follow_enabled)
+	if _map_follow_enabled and is_inside_tree():
+		_center_on_follow_target()
+
+func is_map_follow_enabled() -> bool:
+	return _map_follow_enabled
+
+func _cancel_map_follow() -> void:
+	if _map_follow_enabled:
+		set_map_follow_enabled(false)
+
+func _has_follow_target() -> bool:
+	return _follow_target != null and is_instance_valid(_follow_target)
+
+func _center_on_follow_target() -> void:
+	if not _has_follow_target():
+		return
+	var target_position: Vector3 = _follow_target.global_position
+	focus = Vector3(target_position.x, 0.0, target_position.z)
 	_apply_camera()
 
 func get_focus_world() -> Vector3:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prepares the runtime dependencies required by a supported manual playtest target and launches Godot.
-# Dependencies: project-owned world/native builders, local generated world_data, and a local Godot executable.
+# Dependencies: project-owned world/native builders, local generated world_data where required, and a local Godot executable.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,7 +9,7 @@ WORLD_DATA="$ROOT/world_data"
 PBF="${BRUR_WORLD_PBF:-}"
 
 usage() {
-  printf 'Usage: %s <game|gps>\n' "$0" >&2
+  printf 'Usage: %s <game|gps|driving>\n' "$0" >&2
 }
 
 fail() {
@@ -18,7 +18,7 @@ fail() {
 }
 
 case "$TARGET" in
-  game|gps) ;;
+  game|gps|driving) ;;
   "") usage; exit 64 ;;
   *) printf 'PLAYTEST=FAIL unsupported target: %s\n' "$TARGET" >&2; usage; exit 64 ;;
 esac
@@ -164,6 +164,7 @@ ensure_gps_data() {
     local python
     python="$(ensure_python_dependencies)"
     printf 'PLAYTEST=PREPARE routing-snap rebuild\n'
+    python="$(ensure_python_dependencies)"
     "$python" "$ROOT/tools/build_snap_index.py" "$graph" --output "$snap"
   else
     printf 'PLAYTEST=READY routing-snap\n'
@@ -233,6 +234,11 @@ case "$TARGET" in
     ensure_gps_data
     ensure_native brur-gps-server
     SCENE="$ROOT/harness/gps/gps_harness.tscn"
+    ;;
+  driving)
+    # The driving harness is intentionally synthetic at the world boundary and
+    # uses production vehicle/camera code, so it needs no Sweden data or native GPS process.
+    SCENE="$ROOT/harness/driving/driving_harness.tscn"
     ;;
 esac
 

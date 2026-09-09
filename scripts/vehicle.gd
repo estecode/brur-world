@@ -1,12 +1,15 @@
 extends Node3D
 class_name Vehicle
 
-## Shared runtime object for anything that moves as a vehicle.
+## Adapts portable vehicle state/dynamics to a Godot Node3D vehicle instance.
 ##
 ## Dependencies:
-## - Has no dependency on player input, traffic AI, police AI, routing, or rendering.
-## - Controllers provide throttle/brake/steering commands through set_control_inputs().
-## - Owns common vehicle data and simple flat-world motion integration.
+## - Owns portable vehicle state and delegates deterministic motion to VehicleDynamics.
+## - Accepts generic controls from exactly one explicit control owner at a time.
+## - Has no dependency on player input, GPS routing policy, traffic AI, police AI, or camera code.
+
+const VehicleStateScript = preload("res://scripts/vehicle_state.gd")
+const VehicleDynamicsScript = preload("res://scripts/vehicle_dynamics.gd")
 
 enum Kind {
 	CAR,
@@ -20,6 +23,11 @@ enum Kind {
 	E_SCOOTER,
 }
 
+enum ControlOwner {
+	PLAYER,
+	GPS,
+}
+
 @export var kind: Kind = Kind.CAR
 @export var vehicle_id: StringName = &""
 @export var length_m: float = 4.5
@@ -30,77 +38,121 @@ enum Kind {
 @export var braking_mps2: float = 7.0
 @export var max_reverse_speed_mps: float = 5.0
 @export var max_steer_degrees: float = 32.0
+@export var active: bool = true
 
-var speed_mps: float = 0.0
-var target_speed_mps: float = 0.0
-var steering: float = 0.0
-var throttle_input: float = 0.0
-var brake_input: float = 0.0
-var active: bool = true
 var emergency_lights_active: bool = false
+
+var _state = VehicleStateScript.new()
+var _dynamics = VehicleDynamicsScript.new()
+var _state_initialized: bool = false
+var _control_owner: int = ControlOwner.PLAYER
+var _throttle_input: float = 0.0
+var _brake_input: float = 0.0
+var _steering_input: float = 0.0
 
 func _physics_process(delta: float) -> void:
 	if not active:
 		return
-	_integrate_speed(delta)
-	_integrate_heading(delta)
-	_integrate_position(delta)
+	_ensure_state_from_transform()
+	_dynamics.call(
+		"step",
+		_state,
+		_throttle_input,
+		_brake_input,
+		_steering_input,
+		delta,
+		length_m,
+		max_speed_mps,
+		acceleration_mps2,
+		braking_mps2,
+		max_reverse_speed_mps,
+		max_steer_degrees
+	)
+	_apply_state_to_transform()
 
 func configure(new_kind: Kind) -> void:
 	kind = new_kind
 	_apply_default_profile()
 
-func set_control_inputs(throttle: float, brake: float, new_steering: float) -> void:
-	throttle_input = clampf(throttle, -1.0, 1.0)
-	brake_input = clampf(brake, 0.0, 1.0)
-	steering = clampf(new_steering, -1.0, 1.0)
+func set_control_owner(owner: int) -> void:
+	if _control_owner == owner:
+		return
+	_control_owner = owner
+	_clear_inputs_unchecked()
 
-func clear_control_inputs() -> void:
-	set_control_inputs(0.0, 0.0, 0.0)
+func control_owner() -> int:
+	return _control_owner
 
-func set_target_speed(new_target_mps: float) -> void:
-	target_speed_mps = clampf(new_target_mps, -max_reverse_speed_mps, max_speed_mps)
+func set_control_inputs(owner: int, throttle: float, brake: float, steering: float) -> bool:
+	if owner != _control_owner:
+		return false
+	_throttle_input = clampf(throttle, -1.0, 1.0)
+	_brake_input = clampf(brake, 0.0, 1.0)
+	_steering_input = clampf(steering, -1.0, 1.0)
+	return true
 
-func set_motion_state(new_speed_mps: float, new_steering: float = 0.0) -> void:
-	speed_mps = clampf(new_speed_mps, -max_reverse_speed_mps, max_speed_mps)
-	steering = clampf(new_steering, -1.0, 1.0)
+func clear_control_inputs(owner: int) -> bool:
+	if owner != _control_owner:
+		return false
+	_clear_inputs_unchecked()
+	return true
+
+func set_world_position(new_position: Vector3) -> void:
+	_state.x_m = new_position.x
+	_state.z_m = new_position.z
+	_state_initialized = true
+	global_position = Vector3(new_position.x, new_position.y, new_position.z)
+
+func set_heading_rad(new_heading_rad: float) -> void:
+	_state.heading_rad = wrapf(new_heading_rad, -PI, PI)
+	_state_initialized = true
+	rotation.y = _state.heading_rad
+
+func set_motion_state(new_speed_mps: float, new_heading_rad: float = INF) -> void:
+	_ensure_state_from_transform()
+	_state.speed_mps = clampf(new_speed_mps, -max_reverse_speed_mps, max_speed_mps)
+	if is_finite(new_heading_rad):
+		_state.heading_rad = wrapf(new_heading_rad, -PI, PI)
+	_apply_state_to_transform()
 
 func stop() -> void:
-	target_speed_mps = 0.0
-	speed_mps = 0.0
-	clear_control_inputs()
+	_ensure_state_from_transform()
+	_state.speed_mps = 0.0
+	_clear_inputs_unchecked()
+
+func speed_mps() -> float:
+	return _state.speed_mps
+
+func speed_kmh() -> float:
+	return _state.speed_mps * 3.6
+
+func heading_rad() -> float:
+	return _state.heading_rad
+
+func state_snapshot():
+	_ensure_state_from_transform()
+	return _state.duplicate_state()
 
 func is_emergency_vehicle() -> bool:
 	return kind in [Kind.POLICE_CAR, Kind.FIRE_ENGINE, Kind.AMBULANCE]
 
-func speed_kmh() -> float:
-	return speed_mps * 3.6
-
-func _integrate_speed(delta: float) -> void:
-	if brake_input > 0.0:
-		speed_mps = move_toward(speed_mps, 0.0, braking_mps2 * brake_input * delta)
+func _ensure_state_from_transform() -> void:
+	if _state_initialized:
 		return
-	if throttle_input > 0.0:
-		speed_mps = minf(max_speed_mps, speed_mps + acceleration_mps2 * throttle_input * delta)
-	elif throttle_input < 0.0:
-		if speed_mps > 0.0:
-			speed_mps = move_toward(speed_mps, 0.0, braking_mps2 * -throttle_input * delta)
-		else:
-			speed_mps = maxf(-max_reverse_speed_mps, speed_mps - acceleration_mps2 * -throttle_input * delta)
+	_state.x_m = global_position.x
+	_state.z_m = global_position.z
+	_state.heading_rad = rotation.y
+	_state_initialized = true
 
-func _integrate_heading(delta: float) -> void:
-	if absf(speed_mps) < 0.05 or absf(steering) < 0.001:
-		return
-	var wheelbase_m: float = maxf(length_m * 0.6, 0.8)
-	var steer_angle: float = deg_to_rad(max_steer_degrees) * steering
-	var yaw_rate: float = speed_mps / wheelbase_m * tan(steer_angle)
-	rotate_y(yaw_rate * delta)
+func _apply_state_to_transform() -> void:
+	global_position.x = _state.x_m
+	global_position.z = _state.z_m
+	rotation.y = _state.heading_rad
 
-func _integrate_position(delta: float) -> void:
-	if absf(speed_mps) < 0.001:
-		return
-	var forward: Vector3 = -global_transform.basis.z.normalized()
-	global_position += forward * speed_mps * delta
+func _clear_inputs_unchecked() -> void:
+	_throttle_input = 0.0
+	_brake_input = 0.0
+	_steering_input = 0.0
 
 func _apply_default_profile() -> void:
 	match kind:

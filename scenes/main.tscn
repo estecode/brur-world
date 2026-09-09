@@ -1,4 +1,4 @@
-[gd_scene load_steps=14 format=3]
+[gd_scene load_steps=15 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -13,6 +13,7 @@
 [ext_resource path="res://scripts/camera_altitude_ui.gd" type="Script" id="11_altitude_ui"]
 [ext_resource path="res://scripts/overlay_window_header.gd" type="Script" id="12_overlay_header"]
 [ext_resource path="res://scripts/cloud_field_renderer.gd" type="Script" id="13_clouds"]
+[ext_resource path="res://scripts/map_controls_ui.gd" type="Script" id="14_map_controls"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -47,6 +48,12 @@ script = ExtResource("6_search_ui")
 script = ExtResource("7_search_adapter")
 search_ui_path = NodePath("../GpsSearchUi")
 route_layer_path = NodePath("../GpsRouteLayer")
+
+[node name="MapControlsUi" type="CanvasLayer" parent="."]
+script = ExtResource("14_map_controls")
+poi_layer_path = NodePath("../PoiLayer")
+gps_route_layer_path = NodePath("../GpsRouteLayer")
+camera_rig_path = NodePath("../CameraRig")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 visible = false
