@@ -4,11 +4,11 @@
 #include <cstdint>
 #include <memory>
 
-// Portable zero-allocation CH query core over immutable BCH1 bytes.
+// Portable zero-allocation CH query core over immutable BCH2 bytes.
 //
 // Dependencies:
 // - Standard C++20 only.
-// - Caller owns immutable BCH1 bytes and output buffers.
+// - Caller owns immutable BCH2 bytes and output buffers.
 // - Construction may allocate fixed workspace once; route queries do not allocate.
 
 namespace brur::gps::ch {
@@ -55,7 +55,7 @@ struct ContextConfig {
 
 class RoutingContext {
 public:
-    RoutingContext(ByteView bch1, ContextConfig config = {});
+    RoutingContext(ByteView bch2, ContextConfig config = {});
     ~RoutingContext();
     RoutingContext(RoutingContext &&) noexcept;
     RoutingContext &operator=(RoutingContext &&) noexcept;
@@ -66,6 +66,7 @@ public:
     std::uint32_t node_count() const noexcept;
     std::uint32_t edge_count() const noexcept;
     std::uint32_t preference_code() const noexcept;
+    std::uint32_t weight_scale() const noexcept;
     float avoid_penalty() const noexcept;
 
     QueryResult route_nodes(
