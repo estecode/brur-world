@@ -57,8 +57,9 @@ func finish_urban_data() -> void:
 	var points: Array[Vector3] = _model.light_points(MAX_LIGHT_POINTS)
 	var lights_multimesh := _points_instance.multimesh
 	lights_multimesh.instance_count = points.size()
+	var point_basis := Basis.IDENTITY.scaled(Vector3(POINT_DIAMETER_M, POINT_HEIGHT_M, POINT_DIAMETER_M))
 	for index in range(points.size()):
-		var transform := Transform3D(Basis.IDENTITY, points[index] + Vector3(0.0, POINT_HEIGHT_M, 0.0))
+		var transform := Transform3D(point_basis, points[index] + Vector3(0.0, POINT_HEIGHT_M * 0.5, 0.0))
 		lights_multimesh.set_instance_transform(index, transform)
 	_data_ready = true
 	_update_visibility()
@@ -121,7 +122,6 @@ func _create_render_resources() -> void:
 	_points_instance = MultiMeshInstance3D.new()
 	_points_instance.name = "LocalLightPoints"
 	_points_instance.multimesh = lights_multimesh
-	_points_instance.scale = Vector3(POINT_DIAMETER_M, POINT_HEIGHT_M, POINT_DIAMETER_M)
 	_points_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_points_instance)
 	_apply_material_intensity()
