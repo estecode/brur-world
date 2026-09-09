@@ -9,14 +9,14 @@ class_name CityLightRenderer
 ## - Reads camera distance from an explicitly configured CameraRig for presentation LOD only.
 
 const CityLightModelScript = preload("res://scripts/city_light_model.gd")
-const MAX_GLOW_CLUSTERS: int = 6000
-const MAX_LOCAL_LIGHTS: int = 12000
+const MAX_GLOW_CLUSTERS: int = 12000
+const MAX_LOCAL_LIGHTS: int = 60000
 const LOCAL_POINTS_MAX_DISTANCE_M: float = 220000.0
 const GLOW_MIN_DISTANCE_M: float = 140000.0
-const GLOW_DIAMETER_M: float = 1800.0
-const GLOW_HEIGHT_M: float = 35.0
-const LOCAL_POINT_DIAMETER_M: float = 85.0
-const LOCAL_POINT_HEIGHT_M: float = 45.0
+const GLOW_DIAMETER_M: float = 700.0
+const GLOW_HEIGHT_M: float = 20.0
+const LOCAL_POINT_DIAMETER_M: float = 24.0
+const LOCAL_POINT_HEIGHT_M: float = 18.0
 
 @export_node_path("Node") var sun_controller_path: NodePath
 @export_node_path("Node3D") var camera_rig_path: NodePath
@@ -59,23 +59,14 @@ func add_urban_triangle(a: Vector3, b: Vector3, c: Vector3) -> void:
 	_model.add_urban_triangle(a, b, c)
 
 func finish_urban_data() -> void:
-	_build_multimesh(
-		_glow_instance.multimesh,
-		_model.overview_points(MAX_GLOW_CLUSTERS),
-		Vector3(GLOW_DIAMETER_M, GLOW_HEIGHT_M, GLOW_DIAMETER_M)
-	)
-	_build_multimesh(
-		_points_instance.multimesh,
-		_model.local_light_points(MAX_LOCAL_LIGHTS),
-		Vector3(LOCAL_POINT_DIAMETER_M, LOCAL_POINT_HEIGHT_M, LOCAL_POINT_DIAMETER_M)
-	)
+	_build_multimesh(_glow_instance.multimesh, _model.overview_points(MAX_GLOW_CLUSTERS), Vector3(GLOW_DIAMETER_M, GLOW_HEIGHT_M, GLOW_DIAMETER_M))
+	_build_multimesh(_points_instance.multimesh, _model.local_light_points(MAX_LOCAL_LIGHTS), Vector3(LOCAL_POINT_DIAMETER_M, LOCAL_POINT_HEIGHT_M, LOCAL_POINT_DIAMETER_M))
 	_data_ready = true
 	_update_visibility()
 
 func set_urban_mesh(_mesh: Mesh) -> void:
-	# Kept as a compatibility hook for the current world composition. The polygon
-	# itself is intentionally not rendered as light; that looked like a GIS fill
-	# rather than a city at night. Both LODs now derive from the same urban cells.
+	# Compatibility hook only. Filled urban polygons are intentionally never used
+	# as lights; both LODs derive from deterministic urban cells instead.
 	pass
 
 func set_base_height(height_m: float) -> void:
@@ -97,6 +88,8 @@ func get_render_stats() -> Dictionary:
 		"point_count": _instance_count(_points_instance),
 		"max_glow_count": MAX_GLOW_CLUSTERS,
 		"max_point_count": MAX_LOCAL_LIGHTS,
+		"glow_diameter_m": GLOW_DIAMETER_M,
+		"point_diameter_m": LOCAL_POINT_DIAMETER_M,
 		"glow_visible": _glow_instance != null and _glow_instance.visible,
 		"points_visible": _points_instance != null and _points_instance.visible,
 	}
@@ -106,14 +99,13 @@ func _create_render_resources() -> void:
 	_glow_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_glow_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_glow_material.emission_enabled = true
-	_glow_instance = _create_multimesh_instance("UrbanGlowClusters", _glow_material, 8, 4)
+	_glow_instance = _create_multimesh_instance("UrbanGlowClusters", _glow_material, 6, 3)
 	add_child(_glow_instance)
-
 	_point_material = StandardMaterial3D.new()
 	_point_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_point_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_point_material.emission_enabled = true
-	_points_instance = _create_multimesh_instance("LocalLightPoints", _point_material, 6, 3)
+	_points_instance = _create_multimesh_instance("LocalLightPoints", _point_material, 4, 2)
 	add_child(_points_instance)
 	_apply_material_intensity()
 
@@ -138,20 +130,19 @@ func _build_multimesh(multimesh: MultiMesh, points: Array[Vector3], scale_value:
 	multimesh.instance_count = points.size()
 	var basis := Basis.IDENTITY.scaled(scale_value)
 	for index in range(points.size()):
-		var transform := Transform3D(basis, points[index] + Vector3(0.0, scale_value.y * 0.5, 0.0))
-		multimesh.set_instance_transform(index, transform)
+		multimesh.set_instance_transform(index, Transform3D(basis, points[index] + Vector3(0.0, scale_value.y * 0.5, 0.0)))
 
 func _apply_material_intensity() -> void:
 	if _glow_material == null or _point_material == null:
 		return
-	var glow_alpha := 0.18 * _night_intensity
-	_glow_material.albedo_color = Color(1.0, 0.52, 0.16, glow_alpha)
-	_glow_material.emission = Color(1.0, 0.38, 0.10)
-	_glow_material.emission_energy_multiplier = 0.85 * _night_intensity
-	var point_alpha := 0.92 * _night_intensity
-	_point_material.albedo_color = Color(1.0, 0.78, 0.42, point_alpha)
-	_point_material.emission = Color(1.0, 0.60, 0.22)
-	_point_material.emission_energy_multiplier = 2.6 * _night_intensity
+	var glow_alpha := 0.10 * _night_intensity
+	_glow_material.albedo_color = Color(1.0, 0.50, 0.14, glow_alpha)
+	_glow_material.emission = Color(1.0, 0.34, 0.08)
+	_glow_material.emission_energy_multiplier = 0.55 * _night_intensity
+	var point_alpha := 0.82 * _night_intensity
+	_point_material.albedo_color = Color(1.0, 0.78, 0.44, point_alpha)
+	_point_material.emission = Color(1.0, 0.62, 0.25)
+	_point_material.emission_energy_multiplier = 1.9 * _night_intensity
 
 func _update_visibility() -> void:
 	if _glow_instance == null or _points_instance == null:
