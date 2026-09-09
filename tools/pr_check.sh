@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Validates an exact PR revision against local production data before launching Godot for any remaining human check.
-# Dependencies: git, GitHub CLI auth, Python 3, tools/pr_check_scope.py, tools/pr_check_status.py, a local Godot executable, a C++20 compiler, ignored world_data, and Sweden PBF for stale/invalid routing rebuilds.
+# Dependencies: git, GitHub CLI auth, Python 3, tools/pr_check_scope.py, tools/pr_check_status.py, tools/run_pr_owned_check.sh, a local Godot executable, a C++20 compiler, ignored world_data, and Sweden PBF for stale/invalid routing rebuilds.
 set -euo pipefail
 
 PR="${1:-}"
@@ -10,6 +10,7 @@ ROOT="$(git rev-parse --show-toplevel)"
 WORLD_DATA="$ROOT/world_data"
 [[ -f "$ROOT/tools/pr_check_scope.py" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_scope.py\n' >&2; exit 66; }
 [[ -f "$ROOT/tools/pr_check_status.py" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_status.py\n' >&2; exit 66; }
+[[ -f "$ROOT/tools/run_pr_owned_check.sh" ]] || { printf 'PR_CHECK=FAIL missing tools/run_pr_owned_check.sh\n' >&2; exit 66; }
 
 if [[ -x "$ROOT/.venv/bin/python" ]]; then
   PYTHON_BIN="$ROOT/.venv/bin/python"
@@ -209,6 +210,9 @@ if [[ -f "$TMP/tools/check_route_geometry_dataset.py" ]]; then
     printf 'PR_CHECK=SKIP_ROUTE_GEOMETRY_DATASET pr=%s reason=unrelated-changes\n' "$PR"
   fi
 fi
+
+CURRENT_STAGE="pr-owned-objective-checks"
+bash "$ROOT/tools/run_pr_owned_check.sh" "$TMP" "$PR" "$WORLD_DATA" "$PYTHON_BIN" "$GODOT"
 
 CURRENT_STAGE="objective-checks-complete"
 "$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" record \
