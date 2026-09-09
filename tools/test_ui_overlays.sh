@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs deterministic persistent-overlay structure, layout, and collapse/restore contracts.
+# Runs deterministic persistent-overlay structure, layout, collapse/restore, and Lund-control contracts.
 # Dependencies: Godot 4 (GODOT_BIN can override the default executable lookup).
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,24 +17,31 @@ else
   exit 2
 fi
 
-SCRIPT="tests/godot/test_ui_overlays.gd"
-MARKER="godot UI overlay tests: OK"
+run_test() {
+  local script="$1"
+  local marker="$2"
 
-set +e
-output="$($GODOT --headless --path "$ROOT" --script "$SCRIPT" 2>&1)"
-status=$?
-set -e
-printf '%s\n' "$output"
+  set +e
+  local output
+  output="$($GODOT --headless --path "$ROOT" --script "$script" 2>&1)"
+  local status=$?
+  set -e
+  printf '%s\n' "$output"
 
-error_output="$(grep -E 'SCRIPT ERROR:|Parse Error:|Failed to load script|(^|[[:space:]])ERROR:' <<<"$output" | grep -Ev '^ERROR: [0-9]+ resources still in use at exit' || true)"
-if [[ $status -ne 0 ]] || [[ -n "$error_output" ]]; then
-  echo "UI overlay Godot tests: FAILED ($SCRIPT)" >&2
-  exit 1
-fi
+  local error_output
+  error_output="$(grep -E 'SCRIPT ERROR:|Parse Error:|Failed to load script|(^|[[:space:]])ERROR:' <<<"$output" | grep -Ev '^ERROR: [0-9]+ resources still in use at exit' || true)"
+  if [[ $status -ne 0 ]] || [[ -n "$error_output" ]]; then
+    echo "UI overlay Godot tests: FAILED ($script)" >&2
+    exit 1
+  fi
 
-if ! grep -Fq "$MARKER" <<<"$output"; then
-  echo "UI overlay tests did not reach success marker: $MARKER" >&2
-  exit 1
-fi
+  if ! grep -Fq "$marker" <<<"$output"; then
+    echo "UI overlay tests did not reach success marker: $marker" >&2
+    exit 1
+  fi
+}
+
+run_test "tests/godot/test_ui_overlays.gd" "godot UI overlay tests: OK"
+run_test "tests/godot/test_lund_layout.gd" "godot Lund layout tests: OK"
 
 echo "UI overlay automated tests: OK"
