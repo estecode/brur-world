@@ -5,6 +5,7 @@ extends CanvasLayer
 ## Dependencies:
 ## - gps_search_client.gd owns native process/TCP transport.
 ## - Native BSI2 search owns Sweden-scale matching/ranking.
+## - overlay_window_header.gd owns presentation-only layout/collapse behavior.
 ## - Emits selected projected coordinates only; it does not know routing, waypoints,
 ##   the player, native routing transport or map rendering.
 
@@ -12,6 +13,7 @@ signal destination_selected(point: Vector2)
 signal waypoint_selected(point: Vector2)
 
 const GpsSearchClientScript = preload("res://scripts/gps_search_client.gd")
+const OverlayWindowHeaderScript = preload("res://scripts/overlay_window_header.gd")
 const RESULT_LIMIT: int = 8
 
 var search_client = null
@@ -36,11 +38,7 @@ func _ready() -> void:
 
 func _create_ui() -> void:
 	var panel: PanelContainer = PanelContainer.new()
-	panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	panel.offset_left = 14.0
-	panel.offset_top = 330.0
-	panel.offset_right = 500.0
-	panel.offset_bottom = 600.0
+	panel.name = "Panel"
 	add_child(panel)
 
 	var content: VBoxContainer = VBoxContainer.new()
@@ -80,6 +78,15 @@ func _create_ui() -> void:
 	status_label = Label.new()
 	status_label.text = "Native search starting…"
 	content.add_child(status_label)
+
+	var header: Button = Button.new()
+	header.name = "WindowHeader"
+	header.set_script(OverlayWindowHeaderScript)
+	header.set("target_path", NodePath("../Panel"))
+	header.set("title_text", "GPS / SEARCH")
+	header.set("slot", 1)
+	header.set("panel_width", 486.0)
+	add_child(header)
 
 func _on_native_ready_changed(ready: bool) -> void:
 	search_field.editable = ready
