@@ -95,19 +95,22 @@ func _test_renderer_structure(model) -> void:
 	_assert(int(stats["cloud_count"]) >= 1400, "reference full-zoom view keeps the denser cloud population")
 	_assert(int(stats["puff_instance_count"]) > 0, "renderer creates puff instances")
 	_assert(int(stats["puff_instance_count"]) <= int(stats["max_puff_instances"]), "renderer respects explicit instance budget")
-	_assert(int(stats["max_puff_instances"]) == 7200, "bounded-lobe banks keep one explicit MultiMesh budget")
+	_assert(int(stats["max_puff_instances"]) == 7200, "shaped-lobe clouds keep one explicit MultiMesh budget")
 	_assert(float(stats["max_formation_size_m"]) > 220000.0, "reference view contains at least one continental-scale formation")
-	_assert(float(stats["max_puff_width_m"]) <= 36000.0 + 0.01, "local puff width remains bounded even for continental formations")
-	_assert(float(stats["max_puff_width_m"]) < float(stats["max_formation_size_m"]) * 0.20, "formation footprint is decoupled from local puff size")
+	_assert(float(stats["max_puff_width_m"]) <= 36000.0 + 0.01, "local lobe major axis remains bounded even for continental formations")
+	_assert(float(stats["max_puff_width_m"]) < float(stats["max_formation_size_m"]) * 0.20, "formation footprint is decoupled from local lobe size")
+	_assert(int(stats["anisotropic_puff_count"]) > int(stats["puff_instance_count"]) / 2, "most cloud lobes have a non-round horizontal footprint")
+	_assert(float(stats["max_horizontal_aspect"]) > 1.30, "renderer creates visibly irregular horizontal silhouettes")
+	_assert(float(stats["max_horizontal_aspect"]) <= 2.35 + 0.01, "horizontal lobe elongation stays bounded")
 	_assert(is_equal_approx(float(stats["coverage"]), 0.64), "coverage remains at the tuned value")
 	_assert(renderer.multimesh != null and renderer.multimesh.instance_count == int(stats["puff_instance_count"]), "one MultiMesh owns all puff instances")
 	_assert(renderer.multimesh.use_colors, "MultiMesh enables per-puff opacity without creating nodes")
 	_assert(renderer.get_child_count() == 0, "renderer does not create one Godot node per puff")
 
 	var mesh := renderer.multimesh.mesh as SphereMesh
-	_assert(mesh != null and mesh.radial_segments <= 8 and mesh.rings <= 4, "puff mesh stays deliberately low-poly")
+	_assert(mesh != null and mesh.radial_segments <= 8 and mesh.rings <= 4, "lobe mesh stays deliberately low-poly")
 	var mesh_bounds: AABB = mesh.get_aabb()
-	_assert(mesh_bounds.size.x > 0.0 and mesh_bounds.size.y > 0.0 and mesh_bounds.size.z > 0.0, "puff base mesh has real 3D volume")
+	_assert(mesh_bounds.size.x > 0.0 and mesh_bounds.size.y > 0.0 and mesh_bounds.size.z > 0.0, "lobe base mesh has real 3D volume")
 
 	var before_count: int = renderer.multimesh.instance_count
 	renderer.set_view_state(Vector3.ZERO, 700000.0, Vector3(0.0, 700000.0, 0.0))
@@ -119,11 +122,11 @@ func _test_renderer_structure(model) -> void:
 	renderer.set_view_state(Vector3.ZERO, 700000.0, inside_position)
 	renderer.set_simulation_seconds(0.0)
 	var inside_stats: Dictionary = renderer.get_render_stats()
-	_assert(int(inside_stats["faded_puff_count"]) > 0, "camera inside a cloud fades nearby puffs for map visibility")
+	_assert(int(inside_stats["faded_puff_count"]) > 0, "camera inside a cloud fades nearby lobes for map visibility")
 	_assert(int(inside_stats["faded_puff_count"]) < int(inside_stats["puff_instance_count"]), "inside fade is local and leaves distant clouds opaque")
 
 	var material := mesh.material as StandardMaterial3D
-	_assert(material != null, "cloud puffs share one lightweight material")
+	_assert(material != null, "cloud lobes share one lightweight material")
 	_assert(material.shading_mode != BaseMaterial3D.SHADING_MODE_UNSHADED, "clouds use shared scene lighting instead of duplicated sun math")
 	_assert(material.vertex_color_use_as_albedo, "shared material consumes per-instance alpha for interior fading")
 
