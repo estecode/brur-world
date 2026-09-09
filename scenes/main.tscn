@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -10,6 +10,7 @@
 [ext_resource path="res://scripts/sun_runtime_controller.gd" type="Script" id="8_sun_runtime"]
 [ext_resource path="res://scripts/world_clock_runtime.gd" type="Script" id="9_world_clock_runtime"]
 [ext_resource path="res://scripts/sun_debug_time_ui.gd" type="Script" id="10_sun_debug_time_ui"]
+[ext_resource path="res://scripts/camera_altitude_ui.gd" type="Script" id="11_altitude_ui"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -65,6 +66,26 @@ latitude_deg = 59.3293
 longitude_deg = 18.0686
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+
+[node name="CameraAltitudeUi" type="CanvasLayer" parent="."]
+layer = 20
+script = ExtResource("11_altitude_ui")
+camera_rig_path = NodePath("../CameraRig")
+
+[node name="Panel" type="PanelContainer" parent="CameraAltitudeUi"]
+anchors_preset = 10
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -95.0
+offset_top = 14.0
+offset_right = 95.0
+offset_bottom = 50.0
+grow_horizontal = 2
+mouse_filter = 2
+
+[node name="Label" type="Label" parent="CameraAltitudeUi/Panel"]
+text = "Camera: 760.0 km"
+horizontal_alignment = 1
 
 [node name="DebugOverlay" type="CanvasLayer" parent="."]
 script = ExtResource("3_debug")
