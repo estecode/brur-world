@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3]
+[gd_scene load_steps=13 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -11,6 +11,7 @@
 [ext_resource path="res://scripts/world_clock_runtime.gd" type="Script" id="9_world_clock_runtime"]
 [ext_resource path="res://scripts/sun_debug_time_ui.gd" type="Script" id="10_sun_debug_time_ui"]
 [ext_resource path="res://scripts/camera_altitude_ui.gd" type="Script" id="11_altitude_ui"]
+[ext_resource path="res://scripts/overlay_window_header.gd" type="Script" id="12_overlay_header"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -61,7 +62,7 @@ script = ExtResource("8_sun_runtime")
 world_clock_path = NodePath("../WorldClockRuntime")
 astronomical_light_path = NodePath("../AstronomicalSun")
 legacy_light_path = NodePath("../DirectionalLight3D")
-legacy_toggle_path = NodePath("../DebugOverlay/LegacyLightToggle")
+legacy_toggle_path = NodePath("../DebugOverlay/SunTimeOverride/LegacyLightToggle")
 latitude_deg = 59.3293
 longitude_deg = 18.0686
 
@@ -92,32 +93,28 @@ script = ExtResource("3_debug")
 
 [node name="Panel" type="PanelContainer" parent="DebugOverlay"]
 offset_left = 14.0
-offset_top = 14.0
+offset_top = 52.0
 offset_right = 520.0
-offset_bottom = 156.0
+offset_bottom = 194.0
 
 [node name="Label" type="Label" parent="DebugOverlay/Panel"]
 text = "BRUR WORLD DEBUG"
 
-[node name="LegacyLightToggle" type="CheckButton" parent="DebugOverlay"]
-offset_left = 14.0
-offset_top = 166.0
-offset_right = 210.0
-offset_bottom = 202.0
-text = "Old light"
-button_pressed = false
+[node name="WindowHeader" type="Button" parent="DebugOverlay"]
+script = ExtResource("12_overlay_header")
+target_path = NodePath("../Panel")
+title_text = "BRUR WORLD DEBUG"
+slot = 0
+panel_width = 506.0
 
 [node name="SunTimeOverride" type="VBoxContainer" parent="DebugOverlay"]
-anchors_preset = 2
-anchor_top = 1.0
-anchor_bottom = 1.0
-offset_left = 14.0
-offset_top = -92.0
-offset_right = 660.0
-offset_bottom = -14.0
-grow_vertical = 0
 script = ExtResource("10_sun_debug_time_ui")
 sun_controller_path = NodePath("../../SunRuntimeController")
+
+[node name="LegacyLightToggle" type="CheckButton" parent="DebugOverlay/SunTimeOverride"]
+layout_mode = 2
+text = "Old light"
+button_pressed = false
 
 [node name="OverrideToggle" type="CheckButton" parent="DebugOverlay/SunTimeOverride"]
 layout_mode = 2
@@ -181,3 +178,10 @@ allow_greater = false
 allow_lesser = false
 prefix = "Min "
 editable = false
+
+[node name="SunTimeHeader" type="Button" parent="DebugOverlay"]
+script = ExtResource("12_overlay_header")
+target_path = NodePath("../SunTimeOverride")
+title_text = "SUN / TIME"
+slot = 2
+panel_width = 646.0
