@@ -173,9 +173,8 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 		major_m = minf(major_m, height_m * MAX_VERTICAL_ASPECT)
 		major_m = maxf(major_m, minf(700.0, size_m * 0.30))
 
-		# Horizontal anisotropy restores the irregular cloud silhouette from above.
-		# Rotation plus a separate minor axis prevents the same bounded 3D lobe
-		# from reading as a round ball while its real vertical thickness remains.
+		# Separate horizontal axes restore an irregular cloud silhouette from above.
+		# The bounded vertical axis keeps the same lobes volumetric as the camera tilts.
 		var horizontal_aspect: float = rng.randf_range(1.18, MAX_HORIZONTAL_ASPECT)
 		if puff_index == 0:
 			horizontal_aspect = rng.randf_range(1.30, 1.85)
@@ -183,8 +182,8 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 		minor_m = minf(minor_m, major_m)
 		var yaw: float = rng.randf_range(0.0, TAU)
 		if puff_index > 0:
-			# Bias lobe orientation partly along its offset so neighbouring puffs
-			# overlap into one formation rather than a set of disconnected spheres.
+			# Bias orientation partly along the local offset so neighbouring lobes
+			# overlap into one irregular formation instead of separate round beads.
 			yaw = atan2(offset.z, offset.x) + rng.randf_range(-0.65, 0.65)
 
 		_max_puff_major_m = maxf(_max_puff_major_m, major_m)
