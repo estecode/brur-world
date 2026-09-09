@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene load_steps=11 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -9,6 +9,7 @@
 [ext_resource path="res://scripts/gps_search_route_adapter.gd" type="Script" id="7_search_adapter"]
 [ext_resource path="res://scripts/sun_runtime_controller.gd" type="Script" id="8_sun_runtime"]
 [ext_resource path="res://scripts/world_clock_runtime.gd" type="Script" id="9_world_clock_runtime"]
+[ext_resource path="res://scripts/sun_debug_time_ui.gd" type="Script" id="10_sun_debug_time_ui"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -84,3 +85,74 @@ offset_right = 210.0
 offset_bottom = 202.0
 text = "Old light"
 button_pressed = false
+
+[node name="SunTimeOverride" type="VBoxContainer" parent="DebugOverlay"]
+offset_left = 14.0
+offset_top = 208.0
+offset_right = 660.0
+offset_bottom = 286.0
+script = ExtResource("10_sun_debug_time_ui")
+sun_controller_path = NodePath("../../SunRuntimeController")
+
+[node name="OverrideToggle" type="CheckButton" parent="DebugOverlay/SunTimeOverride"]
+layout_mode = 2
+text = "Override sun time (UTC)"
+button_pressed = false
+
+[node name="TimeRow" type="HBoxContainer" parent="DebugOverlay/SunTimeOverride"]
+layout_mode = 2
+
+[node name="Year" type="SpinBox" parent="DebugOverlay/SunTimeOverride/TimeRow"]
+custom_minimum_size = Vector2(112, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 9999.0
+value = 2026.0
+allow_greater = false
+allow_lesser = false
+prefix = "Y "
+editable = false
+
+[node name="Month" type="SpinBox" parent="DebugOverlay/SunTimeOverride/TimeRow"]
+custom_minimum_size = Vector2(88, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 12.0
+value = 6.0
+allow_greater = false
+allow_lesser = false
+prefix = "M "
+editable = false
+
+[node name="Day" type="SpinBox" parent="DebugOverlay/SunTimeOverride/TimeRow"]
+custom_minimum_size = Vector2(88, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 31.0
+value = 21.0
+allow_greater = false
+allow_lesser = false
+prefix = "D "
+editable = false
+
+[node name="Hour" type="SpinBox" parent="DebugOverlay/SunTimeOverride/TimeRow"]
+custom_minimum_size = Vector2(88, 0)
+layout_mode = 2
+min_value = 0.0
+max_value = 23.0
+value = 12.0
+allow_greater = false
+allow_lesser = false
+prefix = "H "
+editable = false
+
+[node name="Minute" type="SpinBox" parent="DebugOverlay/SunTimeOverride/TimeRow"]
+custom_minimum_size = Vector2(96, 0)
+layout_mode = 2
+min_value = 0.0
+max_value = 59.0
+value = 0.0
+allow_greater = false
+allow_lesser = false
+prefix = "Min "
+editable = false
