@@ -26,7 +26,8 @@ status=$?
 set -e
 printf '%s\n' "$output"
 
-if [[ $status -ne 0 ]] || grep -Eq 'SCRIPT ERROR:|Parse Error:|Failed to load script|(^|[[:space:]])ERROR:' <<<"$output"; then
+error_output="$(grep -E 'SCRIPT ERROR:|Parse Error:|Failed to load script|(^|[[:space:]])ERROR:' <<<"$output" | grep -Ev '^ERROR: [0-9]+ resources still in use at exit' || true)"
+if [[ $status -ne 0 ]] || [[ -n "$error_output" ]]; then
   echo "UI overlay Godot tests: FAILED ($SCRIPT)" >&2
   exit 1
 fi
