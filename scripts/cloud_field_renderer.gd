@@ -145,18 +145,20 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 	var nominal_width: float = _nominal_lobe_width(profile_name, size_m, thickness_m)
 
 	for puff_index in range(puff_count):
-		var angle: float = rng.randf_range(0.0, TAU)
-		var radial: float = 0.0 if puff_index == 0 else sqrt(rng.randf()) * footprint_radius
-		var vertical_layer: float = rng.randf_range(-0.38, 0.48)
-		if puff_index % 5 == 0:
-			vertical_layer = rng.randf_range(0.18, 0.55)
-		elif puff_index % 7 == 0:
-			vertical_layer = rng.randf_range(-0.48, -0.14)
-		var offset := Vector3(
-			cos(angle) * radial,
-			vertical_layer * thickness_m,
-			sin(angle) * radial
-		)
+		var offset := Vector3.ZERO
+		if puff_index > 0:
+			var angle: float = rng.randf_range(0.0, TAU)
+			var radial: float = sqrt(rng.randf()) * footprint_radius
+			var vertical_layer: float = rng.randf_range(-0.38, 0.48)
+			if puff_index % 5 == 0:
+				vertical_layer = rng.randf_range(0.18, 0.55)
+			elif puff_index % 7 == 0:
+				vertical_layer = rng.randf_range(-0.48, -0.14)
+			offset = Vector3(
+				cos(angle) * radial,
+				vertical_layer * thickness_m,
+				sin(angle) * radial
+			)
 
 		var height_m: float = maxf(300.0, thickness_m * rng.randf_range(0.42, 0.78))
 		var width_m: float = nominal_width * rng.randf_range(0.72, 1.18)
