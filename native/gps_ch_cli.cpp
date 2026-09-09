@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-// Small file/CLI adapter for the portable CH query core.
+// Small file/CLI adapter for the portable BCH2 query core.
 //
 // Dependencies:
 // - gps_ch_runtime owns routing decisions and fixed query workspace.
@@ -19,13 +19,13 @@ namespace {
 
 std::vector<std::uint8_t> read_file(const std::string &path) {
     std::ifstream input(path, std::ios::binary | std::ios::ate);
-    if (!input) throw std::runtime_error("failed to open BCH file");
+    if (!input) throw std::runtime_error("failed to open BCH2 file");
     const std::streamsize size = input.tellg();
-    if (size <= 0) throw std::runtime_error("empty BCH file");
+    if (size <= 0) throw std::runtime_error("empty BCH2 file");
     input.seekg(0);
     std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
     if (!input.read(reinterpret_cast<char *>(bytes.data()), size)) {
-        throw std::runtime_error("failed to read BCH file");
+        throw std::runtime_error("failed to read BCH2 file");
     }
     return bytes;
 }
@@ -35,7 +35,7 @@ std::vector<std::uint8_t> read_file(const std::string &path) {
 int main(int argc, char **argv) {
     using namespace brur::gps::ch;
     if (argc != 6) {
-        std::cerr << "usage: gps_ch_cli <bch> <start> <target> <preference-code> <avoid-penalty>\n";
+        std::cerr << "usage: gps_ch_cli <bch2> <start> <target> <preference-code> <avoid-penalty>\n";
         return 2;
     }
 
@@ -47,16 +47,11 @@ int main(int argc, char **argv) {
         const float penalty = std::stof(argv[5]);
 
         RoutingContext context({bytes.data(), bytes.size()});
-        if (!context.valid()) throw std::runtime_error("invalid BCH1 data");
+        if (!context.valid()) throw std::runtime_error("invalid BCH2 data");
 
         std::array<std::uint32_t, 65536> route_edges{};
         const QueryResult result = context.route_nodes(
-            start,
-            target,
-            preference,
-            penalty,
-            route_edges.data(),
-            route_edges.size());
+            start, target, preference, penalty, route_edges.data(), route_edges.size());
 
         std::cout << std::setprecision(17)
                   << "{\"success\":" << (result.success ? "true" : "false")
