@@ -26,6 +26,7 @@ cd "$ROOT"
   tests.test_search_postcode_enrichment \
   tests.test_routing_graph_view \
   tests.test_gps_snap_index \
+  tests.test_gps_snap_index_v3 \
   tests.test_gps_astar \
   tests.test_gps_bidirectional \
   tests.test_gps_ch \
@@ -33,6 +34,7 @@ cd "$ROOT"
   tests.test_routing_runtime_contract \
   tests.test_native_route_plan \
   tests.test_native_gps_core \
+  tests.test_native_gps_snap_runtime \
   tests.test_native_gps_ch_runtime \
   tests.test_native_gps_ch_parity \
   tests.test_native_search_index
