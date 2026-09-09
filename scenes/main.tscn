@@ -87,10 +87,14 @@ text = "Old light"
 button_pressed = false
 
 [node name="SunTimeOverride" type="VBoxContainer" parent="DebugOverlay"]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
 offset_left = 14.0
-offset_top = 208.0
+offset_top = -92.0
 offset_right = 660.0
-offset_bottom = 286.0
+offset_bottom = -14.0
+grow_vertical = 0
 script = ExtResource("10_sun_debug_time_ui")
 sun_controller_path = NodePath("../../SunRuntimeController")
 
