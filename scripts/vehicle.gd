@@ -6,10 +6,12 @@ class_name Vehicle
 ## Dependencies:
 ## - Owns portable vehicle state and delegates deterministic motion to VehicleDynamics.
 ## - Accepts generic controls from exactly one explicit control owner at a time.
-## - Has no dependency on player input, GPS routing policy, traffic AI, police AI, or camera code.
+## - Receives surface classification explicitly and applies portable VehicleSurfacePolicy modifiers during manual control.
+## - Has no dependency on player input, GPS routing policy, world rendering, traffic AI, police AI, or camera code.
 
 const VehicleStateScript = preload("res://scripts/vehicle_state.gd")
 const VehicleDynamicsScript = preload("res://scripts/vehicle_dynamics.gd")
+const VehicleSurfacePolicyScript = preload("res://scripts/vehicle_surface_policy.gd")
 
 enum Kind {
 	CAR,
@@ -44,6 +46,8 @@ var emergency_lights_active: bool = false
 
 var _state = VehicleStateScript.new()
 var _dynamics = VehicleDynamicsScript.new()
+var _surface_policy = VehicleSurfacePolicyScript.new()
+var _surface_kind: StringName = VehicleSurfacePolicyScript.ROAD
 var _state_initialized: bool = false
 var _control_owner: int = ControlOwner.PLAYER
 var _throttle_input: float = 0.0
@@ -54,6 +58,7 @@ func _physics_process(delta: float) -> void:
 	if not active:
 		return
 	_ensure_state_from_transform()
+	var active_surface: StringName = _surface_kind if _control_owner == ControlOwner.PLAYER else VehicleSurfacePolicyScript.ROAD
 	_dynamics.call(
 		"step",
 		_state,
@@ -66,13 +71,20 @@ func _physics_process(delta: float) -> void:
 		acceleration_mps2,
 		braking_mps2,
 		max_reverse_speed_mps,
-		max_steer_degrees
+		max_steer_degrees,
+		_surface_policy.modifiers(active_surface)
 	)
 	_apply_state_to_transform()
 
 func configure(new_kind: Kind) -> void:
 	kind = new_kind
 	_apply_default_profile()
+
+func set_surface_kind(surface_kind: StringName) -> void:
+	_surface_kind = surface_kind
+
+func surface_kind() -> StringName:
+	return _surface_kind
 
 func set_control_owner(owner: int) -> void:
 	if _control_owner == owner:
