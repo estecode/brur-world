@@ -1,9 +1,10 @@
 extends SceneTree
 
 ## Verifies production city-light composition against the local authoritative Sweden runtime dataset.
-## Dependencies: scenes/main.tscn, ignored world_data/manifest.json + background.brmap, production CityLightRenderer and CameraRig.
+## Dependencies: scenes/main.tscn, ignored world_data including BRM2 + derived POI density, production CityLightRenderer and CameraRig.
 
 const MIN_SWEDEN_SOURCE_CELLS: int = 250
+const MIN_POI_DENSITY_CELLS: int = 100
 const GRID_SIZE_M: float = 450.0
 
 func _init() -> void:
@@ -12,6 +13,7 @@ func _init() -> void:
 func _run() -> void:
 	_assert(FileAccess.file_exists("res://world_data/manifest.json"), "real-data manifest is available")
 	_assert(FileAccess.file_exists("res://world_data/background.brmap"), "real-data BRM2 background is available")
+	_assert(FileAccess.file_exists("res://world_data/city_light_density.jsonl"), "derived runtime POI density is available")
 
 	var scene := load("res://scenes/main.tscn") as PackedScene
 	_assert(scene != null, "production main scene loads")
@@ -34,13 +36,19 @@ func _run() -> void:
 
 	var stats: Dictionary = city_lights.get_render_stats()
 	var source_cells := int(stats.get("source_cell_count", 0))
+	var poi_density_cells := int(stats.get("poi_density_cell_count", 0))
+	var poi_density_total := int(stats.get("poi_density_total", 0))
 	var glow_count := int(stats.get("glow_count", 0))
 	var point_count := int(stats.get("point_count", 0))
 	var max_glow_count := int(stats.get("max_glow_count", 0))
 	var max_point_count := int(stats.get("max_point_count", 0))
 	_assert(source_cells >= MIN_SWEDEN_SOURCE_CELLS, "real Sweden urban data produces a substantial source-cell set")
-	_assert(glow_count == mini(source_cells, max_glow_count), "overview glow consumes the real source-cell set up to its explicit budget")
-	_assert(point_count == mini(source_cells * 8, max_point_count), "local lights consume the real source-cell set at the configured density")
+	_assert(poi_density_cells >= MIN_POI_DENSITY_CELLS, "real Sweden runtime POIs produce broad density coverage")
+	_assert(poi_density_total > poi_density_cells, "POI density contains real multi-POI activity rather than one marker per cell")
+	_assert(glow_count >= mini(source_cells, max_glow_count), "every sampled urban cell keeps baseline glow while POI density may strengthen it")
+	_assert(glow_count <= max_glow_count, "overview glow respects its explicit budget")
+	_assert(point_count >= mini(source_cells * 4, max_point_count), "local lights keep a baseline urban density before POI weighting")
+	_assert(point_count <= max_point_count, "local lights respect their explicit budget")
 	_assert(point_count >= 2000, "real Sweden data produces thousands of local emissive lights")
 	_assert(bool(stats.get("points_visible", false)), "close real-data view shows local lights")
 	_assert(not bool(stats.get("glow_visible", true)), "close real-data view hides overview glow")
@@ -72,7 +80,7 @@ func _run() -> void:
 	stats = city_lights.get_render_stats()
 	_assert(not bool(stats.get("glow_visible", true)) and not bool(stats.get("points_visible", true)), "daylight removes real-data nighttime presentation")
 
-	print("godot city light real-data tests: OK | source_cells=%d glow=%d points=%d" % [source_cells, glow_count, point_count])
+	print("godot city light real-data tests: OK | source_cells=%d poi_cells=%d pois=%d glow=%d points=%d" % [source_cells, poi_density_cells, poi_density_total, glow_count, point_count])
 	game.queue_free()
 	await process_frame
 	quit(0)
