@@ -87,6 +87,6 @@ func _deterministic_local_offset(center: Vector3, local_index: int) -> Vector3:
 	var cell_z := int(round(center.z / LIGHT_CELL_SIZE_M - 0.5))
 	var seed := absi(cell_x * 73856093 + cell_z * 19349663 + local_index * 83492791)
 	var x_unit := float(seed % 997) / 996.0
-	var z_unit := float((seed / 997) % 991) / 990.0
+	var z_unit := float((int(seed / 997)) % 991) / 990.0
 	var spread := LIGHT_CELL_SIZE_M * 0.58
 	return Vector3((x_unit - 0.5) * spread, 0.0, (z_unit - 0.5) * spread)
