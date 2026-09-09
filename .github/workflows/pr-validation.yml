@@ -45,6 +45,19 @@ jobs:
       - name: Validate playtest launcher
         run: bash tests/test_playtest_launcher.sh
 
+      - name: Validate PR check scope
+        run: python tests/test_pr_check_scope.py
+
+      - name: Validate persistent local PR-check status
+        run: |
+          bash -n tools/pr_check.sh
+          python tests/test_pr_check_status.py
+
+      - name: Validate PR-owned local check hook
+        run: |
+          bash -n tools/run_pr_owned_check.sh
+          bash tests/test_pr_owned_check.sh
+
       - name: Run portable vehicle dynamics tests
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_dynamics.gd
