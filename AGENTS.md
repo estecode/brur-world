@@ -115,6 +115,10 @@ A prior merge recommendation is evidence about the revision and integration cont
 
 The repository keeps one permanent open issue titled `BRUR — Needs You`. It is the project leader's small inbox, not a second source of truth. Its entries summarize the current underlying issues/PRs and link back to them.
 
+Before resuming tracked work, answering project-leader-facing status or merge requests, or answering `vad behöver jag göra?`, synchronize waiting candidates from current GitHub state. Re-check the relevant PR head, validation/status state, mergeability/blockers, and current `main` where integration relevance matters. Update `BRUR — Needs You` from that synchronized state before reporting project-leader actions in chat. CI-in-progress and other agent-owned waiting states stay out of the inbox until they become a real `TEST`, `READY`, `DECIDE`, or `MAIN` action.
+
+Cross-repository candidates that belong to the BRUR workflow must be identified in `Needs You` and project-leader handoffs with their repository-qualified PR, for example `estecode/safe-command-links#6`. A short request such as `merge #6`, `status #6`, or `test ok #6` may be accepted only when exactly one candidate is unambiguous from current GitHub/project state; otherwise ask for the repository-qualified candidate instead of guessing.
+
 Agents must keep `BRUR — Needs You` useful whenever their work creates or resolves a project-leader action:
 
 - `TEST` — a meaningful human check is required; include the exact PR and Safe Command Link when available.
