@@ -34,6 +34,7 @@ cd "$ROOT"
   tests.test_native_route_plan \
   tests.test_native_gps_core \
   tests.test_native_gps_ch_runtime \
+  tests.test_native_gps_ch_parity \
   tests.test_native_search_index
 
 bash tools/build_native_gps.sh
