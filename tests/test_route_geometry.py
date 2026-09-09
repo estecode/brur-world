@@ -32,7 +32,7 @@ from route_geometry import (
     validate_route_geometry_alignment,
 )
 from routing_graph_view import RoutingGraphView
-from world_common import project
+from world_common import project, unproject
 
 
 FIXTURE_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -72,6 +72,13 @@ def free_local_port() -> int:
 
 
 class RouteGeometryTests(unittest.TestCase):
+    def test_web_mercator_round_trip_matches_source_coordinates(self) -> None:
+        lon, lat = 18.123456, 67.234567
+        x, y = project(lon, lat)
+        actual_lon, actual_lat = unproject(x, y)
+        self.assertAlmostEqual(actual_lon, lon, places=9)
+        self.assertAlmostEqual(actual_lat, lat, places=9)
+
     def test_compressed_curved_edge_preserves_shape_in_both_directions(self) -> None:
         with tempfile.TemporaryDirectory(prefix="brur-route-geometry-") as temp_dir:
             temp = Path(temp_dir)
