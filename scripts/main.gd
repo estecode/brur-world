@@ -5,9 +5,11 @@ extends Node3D
 ## Dependencies:
 ## - world_coordinates.gd owns projected/world/tile coordinate conversion.
 ## - CameraRig supplies visible world bounds and zoom distance.
+## - city_light_renderer.gd consumes the already-loaded authoritative BRM2 urban geometry.
 ## - world_data manifest, BRT1 tiles, and BRM2 background provide runtime map data.
 
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
+const CityLightRendererScript = preload("res://scripts/city_light_renderer.gd")
 const WORLD_DIR: String = "res://world_data"
 const ROAD_MAGIC: String = "BRT1"
 const MAP_MAGIC: String = "BRM2"
@@ -35,6 +37,7 @@ var loaded: Dictionary = {}
 var mesh_cache: Dictionary = {}
 var mesh_cache_order: Array[String] = []
 var background_instances: Dictionary = {}
+var city_lights: Node3D
 
 var current_lod: int = -1
 var last_min_tile: Vector2i = Vector2i(999999, 999999)
@@ -60,6 +63,7 @@ func _ready() -> void:
 		push_error("No world_data/manifest.json. Run ./build_sweden.sh first.")
 		return
 	_setup_lighting()
+	_setup_city_lights()
 	_create_ground()
 	_load_background()
 	_update_depth_layout(true)
@@ -109,6 +113,13 @@ func _setup_lighting() -> void:
 	environment.ambient_light_color = Color(0.78, 0.86, 0.95)
 	environment.ambient_light_energy = 1.05
 	world_environment.environment = environment
+
+func _setup_city_lights() -> void:
+	city_lights = CityLightRendererScript.new()
+	city_lights.name = "CityLights"
+	city_lights.sun_controller_path = NodePath("../SunRuntimeController")
+	city_lights.camera_rig_path = NodePath("../CameraRig")
+	add_child(city_lights)
 
 func _choose_lod(distance: float) -> int:
 	if current_lod < 0:
@@ -164,6 +175,8 @@ func _update_depth_layout(force: bool) -> void:
 		var instance: MeshInstance3D = background_instances[kind] as MeshInstance3D
 		if instance != null:
 			instance.position.y = _background_height(kind)
+	if city_lights != null:
+		city_lights.set_base_height(_background_height(MAP_URBAN) + current_layer_spacing * 0.20)
 	var road_y: float = _road_height()
 	for key in loaded.keys():
 		var road_instance: MeshInstance3D = loaded[key] as MeshInstance3D
@@ -363,6 +376,8 @@ func _load_background() -> void:
 		var tool: SurfaceTool = SurfaceTool.new()
 		tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 		tools.append(tool)
+	if city_lights != null:
+		city_lights.begin_urban_data()
 	var accepted: int = 0
 	for _triangle_index in range(triangle_count):
 		var kind: int = file.get_8()
@@ -378,6 +393,8 @@ func _load_background() -> void:
 		st.add_vertex(p2)
 		st.set_normal(Vector3.UP)
 		st.add_vertex(p3)
+		if kind == MAP_URBAN and city_lights != null:
+			city_lights.add_urban_triangle(p1, p2, p3)
 		accepted += 1
 	for kind in range(tools.size()):
 		var mesh: ArrayMesh = tools[kind].commit()
@@ -392,6 +409,10 @@ func _load_background() -> void:
 		instance.material_override = mat
 		world.add_child(instance)
 		background_instances[kind] = instance
+		if kind == MAP_URBAN and city_lights != null:
+			city_lights.set_urban_mesh(mesh)
+	if city_lights != null:
+		city_lights.finish_urban_data()
 	print("Background triangles rendered: ", accepted, " | ocean base enabled")
 
 func _map_color(kind: int) -> Color:
