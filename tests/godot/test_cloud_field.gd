@@ -37,10 +37,11 @@ func _test_profile_bounds_and_weighting(model) -> void:
 	var small_count: int = 0
 	var medium_count: int = 0
 	var large_count: int = 0
+	var giant_count: int = 0
 	var smallest_size: float = INF
 	var largest_size: float = 0.0
-	for y in range(-8, 9):
-		for x in range(-8, 9):
+	for y in range(-10, 11):
+		for x in range(-10, 11):
 			var clouds: Array[Dictionary] = model.generate_cell(Vector2i(x, y), 0.78, 9981)
 			for cloud in clouds:
 				var profile_name := String(cloud["profile"])
@@ -63,10 +64,14 @@ func _test_profile_bounds_and_weighting(model) -> void:
 						medium_count += 1
 					"large_low_mid":
 						large_count += 1
+					"giant_cloud_bank":
+						giant_count += 1
 	_assert(small_count > medium_count, "small clouds remain the most common profile")
-	_assert(medium_count > large_count, "medium clouds are more common than rare large formations")
-	_assert(large_count > 0, "weighted distribution still includes rare large formations")
-	_assert(largest_size / smallest_size > 10.0, "generated field has strong overview-scale size variation")
+	_assert(medium_count > large_count, "medium clouds are more common than large formations")
+	_assert(large_count > giant_count, "large formations are more common than giant cloud banks")
+	_assert(giant_count > 0, "weighted distribution includes rare giant cloud banks")
+	_assert(float(model.profile_bounds("giant_cloud_bank")["size_max_m"]) == 88000.0, "giant banks can reach four times the previous 22 km maximum")
+	_assert(largest_size / smallest_size > 40.0, "generated field has very strong overview-scale size variation")
 
 func _test_world_space_motion(model) -> void:
 	var cloud: Dictionary = {}
@@ -97,10 +102,10 @@ func _test_renderer_structure(model) -> void:
 	await process_frame
 
 	var stats: Dictionary = renderer.get_render_stats()
-	_assert(int(stats["cloud_count"]) >= 500, "reference full-zoom view contains many distinct cloud formations")
+	_assert(int(stats["cloud_count"]) >= 1400, "reference full-zoom view contains roughly three times the previous cloud population")
 	_assert(int(stats["puff_instance_count"]) > 0, "renderer creates puff instances")
 	_assert(int(stats["puff_instance_count"]) <= int(stats["max_puff_instances"]), "renderer respects explicit instance budget")
-	_assert(int(stats["max_puff_instances"]) == 2200, "fuller field keeps the same explicit lightweight puff budget")
+	_assert(int(stats["max_puff_instances"]) == 4800, "denser overview keeps one explicit MultiMesh puff budget")
 	_assert(is_equal_approx(float(stats["coverage"]), 0.64), "density increase does not require raising coverage above the tuned value")
 	_assert(renderer.multimesh != null and renderer.multimesh.instance_count == int(stats["puff_instance_count"]), "one MultiMesh owns all puff instances")
 	_assert(renderer.multimesh.use_colors, "MultiMesh enables per-puff opacity without creating nodes")
