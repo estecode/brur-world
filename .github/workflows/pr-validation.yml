@@ -64,3 +64,6 @@ jobs:
 
       - name: Run objective UI overlay tests
         run: bash tools/test_ui_overlays.sh
+
+      - name: Run objective cloud field tests
+        run: bash tools/test_clouds.sh

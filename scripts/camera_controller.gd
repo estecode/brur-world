@@ -1,10 +1,12 @@
 extends Node3D
 
-## Drives the map camera from an explicit real-world altitude while preserving overview/gameplay framing.
+## Drives the map camera from an explicit real-world altitude and exposes read-only view state.
 ##
 ## Dependencies:
 ## - camera_altitude_model.gd owns deterministic altitude state and readout formatting.
-## - Camera3D presents the derived position/FOV; no world-coordinate, cloud, or weather logic lives here.
+## - Camera3D presents framing; explicitly wired presentation consumers may read focus/distance/position.
+
+signal view_changed(focus_world: Vector3, distance_m: float, camera_world_position: Vector3)
 
 const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.gd")
 
@@ -150,6 +152,7 @@ func _apply_camera() -> void:
 	camera.near = clampf(distance * 0.0025, 5.0, 2500.0)
 	var normal_far: float = maxf(25000.0, distance * 3.5)
 	camera.far = maxf(normal_far, _required_ground_far(distance) * 1.12)
+	view_changed.emit(focus, distance, camera.global_position)
 
 func _required_ground_far(distance: float) -> float:
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size

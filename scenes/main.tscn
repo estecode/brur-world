@@ -1,4 +1,4 @@
-[gd_scene load_steps=13 format=3]
+[gd_scene load_steps=14 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -12,6 +12,7 @@
 [ext_resource path="res://scripts/sun_debug_time_ui.gd" type="Script" id="10_sun_debug_time_ui"]
 [ext_resource path="res://scripts/camera_altitude_ui.gd" type="Script" id="11_altitude_ui"]
 [ext_resource path="res://scripts/overlay_window_header.gd" type="Script" id="12_overlay_header"]
+[ext_resource path="res://scripts/cloud_field_renderer.gd" type="Script" id="13_clouds"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -26,6 +27,9 @@ current = true
 fov = 40.0
 near = 10.0
 far = 2000000.0
+
+[node name="CloudField" type="MultiMeshInstance3D" parent="."]
+script = ExtResource("13_clouds")
 
 [node name="PoiLayer" type="Node3D" parent="."]
 script = ExtResource("4_poi")
@@ -185,3 +189,5 @@ target_path = NodePath("../SunTimeOverride")
 title_text = "SUN / TIME"
 slot = 2
 panel_width = 646.0
+
+[connection signal="view_changed" from="CameraRig" to="CloudField" method="set_view_state"]
