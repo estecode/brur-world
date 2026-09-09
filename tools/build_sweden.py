@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build all Sweden world data: roads, routing, background, POIs, search and buildings."""
+"""Build all Sweden world data: roads, routing, snap data, background, POIs, search and buildings."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from build_roads import build_roads
 from build_routing import build_routing
 from build_search_binary import build_search_binary
 from build_search_index import build_search_index
+from gps_snap_index_v3 import build_snap_index_v3
+from routing_graph_view import RoutingGraphView
 from world_common import ensure_pbf
 
 
@@ -29,6 +31,12 @@ def main() -> None:
     print()
     print("=== BUILD ROUTING ===")
     build_routing(args.pbf, args.output)
+
+    print()
+    print("=== BUILD FIXED-POINT ROUTING SNAP INDEX ===")
+    routing_path = args.output / "routing.brg"
+    with RoutingGraphView(routing_path) as routing_graph:
+        build_snap_index_v3(routing_graph, args.output / "routing_snap_v3.brs")
 
     print()
     print("=== BUILD BACKGROUND ===")
