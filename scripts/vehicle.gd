@@ -6,7 +6,7 @@ class_name Vehicle
 ## Dependencies:
 ## - Owns portable vehicle state and delegates deterministic motion to VehicleDynamics.
 ## - Accepts generic controls from exactly one explicit control owner at a time.
-## - Receives surface classification explicitly and applies portable VehicleSurfacePolicy modifiers.
+## - Receives surface classification explicitly and applies portable VehicleSurfacePolicy modifiers during manual control.
 ## - Has no dependency on player input, GPS routing policy, world rendering, traffic AI, police AI, or camera code.
 
 const VehicleStateScript = preload("res://scripts/vehicle_state.gd")
@@ -58,6 +58,7 @@ func _physics_process(delta: float) -> void:
 	if not active:
 		return
 	_ensure_state_from_transform()
+	var active_surface: StringName = _surface_kind if _control_owner == ControlOwner.PLAYER else VehicleSurfacePolicyScript.ROAD
 	_dynamics.call(
 		"step",
 		_state,
@@ -71,7 +72,7 @@ func _physics_process(delta: float) -> void:
 		braking_mps2,
 		max_reverse_speed_mps,
 		max_steer_degrees,
-		_surface_policy.modifiers(_surface_kind)
+		_surface_policy.modifiers(active_surface)
 	)
 	_apply_state_to_transform()
 
