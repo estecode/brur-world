@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 from typing import Iterable
 
@@ -17,7 +17,7 @@ FORMAT = "BTS1"
 SUPPORTED_DIRECTIONS = {"forward", "backward", "both"}
 
 
-class DirectionSource(StrEnum):
+class DirectionSource(str, Enum):
     EXPLICIT = "explicit"
     LEGACY = "legacy"
     INFERRED = "inferred"
