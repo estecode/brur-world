@@ -19,11 +19,12 @@ func _apply_controls() -> void:
 	if Input.is_physical_key_pressed(KEY_S):
 		throttle -= 1.0
 
+	# VehicleDynamics uses negative steering for a right turn in world-space heading.
 	var steer: float = 0.0
 	if Input.is_physical_key_pressed(KEY_D):
-		steer += 1.0
-	if Input.is_physical_key_pressed(KEY_A):
 		steer -= 1.0
+	if Input.is_physical_key_pressed(KEY_A):
+		steer += 1.0
 
 	var brake: float = 1.0 if Input.is_physical_key_pressed(KEY_SPACE) else 0.0
 	if not is_zero_approx(throttle) or not is_zero_approx(steer) or brake > 0.0:
