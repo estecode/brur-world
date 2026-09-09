@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene load_steps=10 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -8,6 +8,7 @@
 [ext_resource path="res://scripts/gps_search_ui.gd" type="Script" id="6_search_ui"]
 [ext_resource path="res://scripts/gps_search_route_adapter.gd" type="Script" id="7_search_adapter"]
 [ext_resource path="res://scripts/sun_runtime_controller.gd" type="Script" id="8_sun_runtime"]
+[ext_resource path="res://scripts/world_clock_runtime.gd" type="Script" id="9_world_clock_runtime"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -50,8 +51,12 @@ light_color = Color(1, 0.965, 0.9, 1)
 light_energy = 0.0
 shadow_enabled = false
 
+[node name="WorldClockRuntime" type="Node" parent="."]
+script = ExtResource("9_world_clock_runtime")
+
 [node name="SunRuntimeController" type="Node" parent="."]
 script = ExtResource("8_sun_runtime")
+world_clock_path = NodePath("../WorldClockRuntime")
 astronomical_light_path = NodePath("../AstronomicalSun")
 legacy_light_path = NodePath("../DirectionalLight3D")
 legacy_toggle_path = NodePath("../DebugOverlay/LegacyLightToggle")
