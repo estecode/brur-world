@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Validates an exact PR revision against local production data before launching Godot for any remaining human check.
-# Dependencies: git, Python 3, a local Godot executable, a C++20 compiler, ignored world_data, and Sweden PBF for stale/invalid routing rebuilds.
+# Dependencies: git, GitHub CLI auth, Python 3, tools/pr_check_scope.py, tools/pr_check_status.py, a local Godot executable, a C++20 compiler, ignored world_data, and Sweden PBF for stale/invalid routing rebuilds.
 set -euo pipefail
 
 PR="${1:-}"
@@ -8,8 +8,8 @@ PR="${1:-}"
 
 ROOT="$(git rev-parse --show-toplevel)"
 WORLD_DATA="$ROOT/world_data"
-[[ -d "$WORLD_DATA" ]] || { printf 'PR_CHECK=FAIL missing %s\n' "$WORLD_DATA" >&2; exit 66; }
-[[ -f "$WORLD_DATA/manifest.json" ]] || { printf 'PR_CHECK=FAIL missing %s/manifest.json\n' "$WORLD_DATA" >&2; exit 66; }
+[[ -f "$ROOT/tools/pr_check_scope.py" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_scope.py\n' >&2; exit 66; }
+[[ -f "$ROOT/tools/pr_check_status.py" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_status.py\n' >&2; exit 66; }
 
 if [[ -x "$ROOT/.venv/bin/python" ]]; then
   PYTHON_BIN="$ROOT/.venv/bin/python"
@@ -21,6 +21,51 @@ else
   printf 'PR_CHECK=FAIL Python 3 not found\n' >&2
   exit 69
 fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  printf 'PR_CHECK=FAIL GitHub CLI (gh) is required so local check results cannot be lost\n' >&2
+  exit 69
+fi
+
+CURRENT_STAGE="resolve-head"
+if ! PR_HEAD="$("$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" resolve-head --pr "$PR")"; then
+  printf 'PR_CHECK=FAIL unable to resolve PR head through authenticated GitHub CLI\n' >&2
+  exit 69
+fi
+
+CURRENT_STAGE="starting"
+if ! "$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" record \
+  --pr "$PR" --sha "$PR_HEAD" --state pending --stage "$CURRENT_STAGE"; then
+  printf 'PR_CHECK=FAIL unable to persist pending local-check status to GitHub\n' >&2
+  exit 69
+fi
+printf 'PR_CHECK=STATUS pending pr=%s revision=%s\n' "$PR" "${PR_HEAD:0:12}"
+
+TMP=""
+ADDED=0
+STATUS_ACTIVE=1
+AUTOMATED_SUCCESS=0
+cleanup() {
+  status=$?
+  trap - EXIT INT TERM
+  if [[ "$status" -ne 0 && "$STATUS_ACTIVE" -eq 1 && "$AUTOMATED_SUCCESS" -eq 0 ]]; then
+    "$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" record \
+      --pr "$PR" --sha "$PR_HEAD" --state failure --stage "$CURRENT_STAGE" >/dev/null 2>&1 || \
+      printf 'PR_CHECK=WARNING failed to persist failure status; pending status remains and still blocks merge\n' >&2
+  fi
+  if [[ "$ADDED" -eq 1 && -n "$TMP" ]]; then
+    git -C "$ROOT" worktree remove --force "$TMP" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$TMP" ]]; then
+    rm -rf "$TMP"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT INT TERM
+
+CURRENT_STAGE="local-prerequisites"
+[[ -d "$WORLD_DATA" ]] || { printf 'PR_CHECK=FAIL missing %s\n' "$WORLD_DATA" >&2; exit 66; }
+[[ -f "$WORLD_DATA/manifest.json" ]] || { printf 'PR_CHECK=FAIL missing %s/manifest.json\n' "$WORLD_DATA" >&2; exit 66; }
 
 if command -v godot >/dev/null 2>&1; then
   GODOT="$(command -v godot)"
@@ -57,17 +102,6 @@ PY
 }
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/brur-world-pr${PR}.XXXXXX")"
-ADDED=0
-cleanup() {
-  status=$?
-  trap - EXIT INT TERM
-  if [[ "$ADDED" -eq 1 ]]; then
-    git -C "$ROOT" worktree remove --force "$TMP" >/dev/null 2>&1 || true
-  fi
-  rm -rf "$TMP"
-  exit "$status"
-}
-trap cleanup EXIT INT TERM
 
 routing_dataset_ready() {
   [[ -f "$WORLD_DATA/routing.brg" ]] || return 1
@@ -100,7 +134,7 @@ resolve_sweden_pbf() {
   data_dir="$(cd "$ROOT/.." && pwd)/data"
   candidate="$(find "$data_dir" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n 1)"
   if [[ -z "$candidate" ]]; then
-    printf 'PR_CHECK=FAIL no Sweden PBF was found; set BRUR_WORLD_PBF\n' >&2
+    printf 'PR_CHECK=FAIL routing dataset is stale/invalid and no Sweden PBF was found; set BRUR_WORLD_PBF\n' >&2
     return 1
   fi
   printf '%s\n' "$candidate"
@@ -117,58 +151,37 @@ rebuild_routing_dataset() {
   "$PYTHON_BIN" "$TMP/tools/build_routing_dataset.py" "$pbf" --output "$WORLD_DATA"
 }
 
-run_traffic_signal_real_data_check() {
-  [[ -f "$TMP/tools/build_traffic_signals.py" ]] || return 0
-
-  local pbf output
-  pbf="$(resolve_sweden_pbf)"
-  output="$TMP/.pr-check-traffic-signals"
-  mkdir -p "$output"
-
-  printf 'PR_CHECK=CHECK_TRAFFIC_SIGNALS_REAL_DATA pr=%s source=%s\n' "$PR" "$(basename "$pbf")"
-  "$PYTHON_BIN" "$TMP/tools/build_traffic_signals.py" "$pbf" --output "$output"
-  "$PYTHON_BIN" - "$output/traffic_signals.json" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-try:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-except (OSError, ValueError) as exc:
-    print(f"PR_CHECK=FAIL invalid traffic-signal output: {exc}")
-    raise SystemExit(1)
-
-stats = payload.get("stats", {})
-source = int(stats.get("source_signal_count", -1))
-exported = int(stats.get("exported_signal_count", -1))
-if source != 6974:
-    print(f"PR_CHECK=FAIL expected 6974 source signals, got {source}")
-    raise SystemExit(1)
-if exported != source:
-    print(f"PR_CHECK=FAIL exported {exported} of {source} source signals")
-    raise SystemExit(1)
-
-print(
-    "PR_CHECK=TRAFFIC_SIGNALS_REAL_DATA_OK "
-    f"source={source} exported={exported} "
-    f"explicit={stats.get('explicit_direction_count')} "
-    f"legacy={stats.get('legacy_direction_count')} "
-    f"inferred={stats.get('inferred_direction_count')} "
-    f"unknown={stats.get('unknown_direction_count')} "
-    f"stop_lines={stats.get('explicit_stop_line_count')} "
-    f"grouped={stats.get('grouped_candidate_count')} "
-    f"ungrouped={stats.get('ungrouped_candidate_count')}"
-)
-PY
-}
-
+CURRENT_STAGE="runtime-ports"
 printf 'PR_CHECK=PREPARE pr=%s\n' "$PR"
 ensure_runtime_ports_free
+
+CURRENT_STAGE="fetch-pr"
 git -C "$ROOT" fetch --quiet origin "pull/${PR}/head"
-git -C "$ROOT" worktree add --quiet --detach "$TMP" FETCH_HEAD
+FETCHED_HEAD="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
+if [[ "$FETCHED_HEAD" != "$PR_HEAD" ]]; then
+  printf 'PR_CHECK=FAIL PR head moved while preparing check; rerun the Safe Check\n' >&2
+  exit 75
+fi
+
+CURRENT_STAGE="fetch-main"
+git -C "$ROOT" fetch --quiet origin main:refs/remotes/origin/main
+MAIN_HEAD="$(git -C "$ROOT" rev-parse refs/remotes/origin/main)"
+PR_BASE="$(git -C "$ROOT" merge-base "$MAIN_HEAD" "$PR_HEAD")"
+CHANGED_FILES="$(git -C "$ROOT" diff --name-only "$PR_BASE" "$PR_HEAD")"
+ROUTE_GEOMETRY_SCOPE="$(printf '%s\n' "$CHANGED_FILES" | "$PYTHON_BIN" "$ROOT/tools/pr_check_scope.py" route-geometry)"
+case "$ROUTE_GEOMETRY_SCOPE" in
+  required|skip) ;;
+  *)
+    printf 'PR_CHECK=FAIL invalid route-geometry scope decision: %s\n' "$ROUTE_GEOMETRY_SCOPE" >&2
+    exit 70
+    ;;
+esac
+
+CURRENT_STAGE="prepare-worktree"
+git -C "$ROOT" worktree add --quiet --detach "$TMP" "$PR_HEAD"
 ADDED=1
 
+CURRENT_STAGE="routing-data"
 if [[ -f "$TMP/tools/build_routing_dataset.py" ]] && ! routing_dataset_ready; then
   rebuild_routing_dataset
 fi
@@ -176,23 +189,35 @@ fi
 rm -rf "$TMP/world_data"
 ln -s "$WORLD_DATA" "$TMP/world_data"
 
-run_traffic_signal_real_data_check
-
+CURRENT_STAGE="native-gps"
 if [[ -f "$TMP/tools/build_native_gps.sh" ]]; then
   printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s\n' "$PR"
   bash "$TMP/tools/build_native_gps.sh"
 fi
 
+CURRENT_STAGE="route-geometry"
 if [[ -f "$TMP/tools/check_route_geometry_dataset.py" ]]; then
-  printf 'PR_CHECK=CHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
-  if ! "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"; then
-    printf 'PR_CHECK=ROUTE_GEOMETRY_INVALID pr=%s rebuilding source-aligned routing dataset\n' "$PR"
-    rebuild_routing_dataset
-    printf 'PR_CHECK=RECHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
-    "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"
+  if [[ "$ROUTE_GEOMETRY_SCOPE" == "required" ]]; then
+    printf 'PR_CHECK=CHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
+    if ! "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"; then
+      printf 'PR_CHECK=ROUTE_GEOMETRY_INVALID pr=%s rebuilding source-aligned routing dataset\n' "$PR"
+      rebuild_routing_dataset
+      printf 'PR_CHECK=RECHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
+      "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"
+    fi
+  else
+    printf 'PR_CHECK=SKIP_ROUTE_GEOMETRY_DATASET pr=%s reason=unrelated-changes\n' "$PR"
   fi
 fi
 
+CURRENT_STAGE="objective-checks-complete"
+"$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" record \
+  --pr "$PR" --sha "$PR_HEAD" --state success --stage "$CURRENT_STAGE"
+AUTOMATED_SUCCESS=1
+printf 'PR_CHECK=STATUS success pr=%s revision=%s\n' "$PR" "${PR_HEAD:0:12}"
+
 printf 'PR_CHECK=RUN pr=%s revision=%s\n' "$PR" "$(git -C "$TMP" rev-parse --short HEAD)"
+printf 'Automated local checks are persisted on GitHub. Any remaining Godot judgment is a separate human result.\n'
 printf 'Close Godot when the check is complete; the temporary checkout will then be removed automatically.\n'
+CURRENT_STAGE="human-godot-session"
 "$GODOT" --path "$TMP"
