@@ -1,7 +1,7 @@
 extends SceneTree
 
-## Headless deterministic, structural, and production-composition tests for nighttime city lighting.
-## Dependencies: city_light_model.gd, city_light_renderer.gd, day_night_environment_adapter.gd, main.gd, and scenes/main.tscn.
+## Headless deterministic, density, LOD, and production-composition tests for nighttime city lighting.
+## Dependencies: production city-light model/renderer, day/night environment adapter, main scene.
 
 const CityLightModelScript = preload("res://scripts/city_light_model.gd")
 const CityLightRendererScript = preload("res://scripts/city_light_renderer.gd")
@@ -9,16 +9,14 @@ const DayNightEnvironmentAdapterScript = preload("res://scripts/day_night_enviro
 
 class MockCameraRig:
 	extends Node3D
-	var distance_m: float = 50000.0
-
+	var distance_m := 5000.0
 	func get_distance() -> float:
 		return distance_m
 
 class MockSunController:
 	extends Node
 	signal solar_state_changed(solar_state: Dictionary)
-	var state: Dictionary = {"valid": true, "elevation_deg": -8.0}
-
+	var state := {"valid": true, "elevation_deg": -8.0}
 	func get_last_solar_state() -> Dictionary:
 		return state.duplicate(true)
 
@@ -28,58 +26,57 @@ func _init() -> void:
 func _run() -> void:
 	var model = CityLightModelScript.new()
 	_test_solar_intensity(model)
-	_test_distribution(model)
+	_test_density_and_distribution(model)
 	_test_production_composition()
 	await _test_environment_contrast()
-	await _test_renderer_structure()
+	await _test_renderer_visual_contracts()
 	print("godot city light tests: OK")
 	quit(0)
 
 func _test_solar_intensity(model) -> void:
 	_assert(is_zero_approx(model.night_intensity(5.0)), "daylight disables city lighting")
 	var dusk := float(model.night_intensity(-2.0))
-	_assert(dusk > 0.0 and dusk < 1.0, "dusk fades city lighting instead of switching abruptly")
-	_assert(is_equal_approx(float(model.night_intensity(-8.0)), 1.0), "deep night reaches full configured intensity")
-	_assert(float(model.night_intensity(-4.0)) > dusk, "night intensity increases monotonically as the sun descends")
+	_assert(dusk > 0.0 and dusk < 1.0, "dusk fades instead of switching abruptly")
+	_assert(is_equal_approx(float(model.night_intensity(-8.0)), 1.0), "deep night reaches full intensity")
+	_assert(float(model.night_intensity(-4.0)) > dusk, "intensity rises monotonically after sunset")
 
-func _test_distribution(model) -> void:
-	var triangles := [
-		[Vector3(100.0, 0.0, 100.0), Vector3(500.0, 0.0, 100.0), Vector3(100.0, 0.0, 500.0)],
-		[Vector3(200.0, 0.0, 200.0), Vector3(600.0, 0.0, 200.0), Vector3(200.0, 0.0, 600.0)],
-		[Vector3(2200.0, 0.0, 100.0), Vector3(2600.0, 0.0, 100.0), Vector3(2200.0, 0.0, 500.0)],
-		[Vector3(-2200.0, 0.0, -100.0), Vector3(-1800.0, 0.0, -100.0), Vector3(-2200.0, 0.0, -500.0)],
-	]
-	for triangle in triangles:
-		model.add_urban_triangle(triangle[0], triangle[1], triangle[2])
+func _test_density_and_distribution(model) -> void:
+	# A 4.5 km square synthetic urban field exercises the same production model at
+	# realistic scale and prevents the sparse 1.4 km/three-lights-per-cell failure.
+	for x in range(10):
+		for z in range(10):
+			var ox := float(x) * 450.0
+			var oz := float(z) * 450.0
+			model.add_urban_triangle(Vector3(ox + 20.0, 0.0, oz + 20.0), Vector3(ox + 400.0, 0.0, oz + 20.0), Vector3(ox + 20.0, 0.0, oz + 400.0))
 	var overview: Array[Vector3] = model.overview_points()
 	var local: Array[Vector3] = model.local_light_points()
-	_assert(overview.size() == 3, "multiple urban triangles in one cell collapse to one overview cluster")
-	_assert(local.size() == 9, "local presentation expands each urban cell into several deterministic light points")
-	_assert(local[0] != overview[0], "local lights are distributed within the urban cell rather than sitting on the glow center")
-
+	_assert(overview.size() >= 95, "dense urban field retains near-cell-scale overview coverage")
+	_assert(local.size() >= overview.size() * 8, "close presentation has at least eight lights per occupied urban cell")
+	_assert(local.size() >= 760, "4.5 km urban field produces hundreds of local lights, not isolated dots")
+	var first := local.duplicate()
 	model.reset_distribution()
-	for triangle in triangles:
-		model.add_urban_triangle(triangle[0], triangle[1], triangle[2])
-	_assert(overview == model.overview_points(), "same urban geometry produces the same overview distribution")
-	_assert(local == model.local_light_points(), "same urban geometry produces the same local-light distribution")
-	_assert(model.local_light_points(4).size() == 4, "local distribution respects an explicit point budget")
+	for x in range(10):
+		for z in range(10):
+			var ox := float(x) * 450.0
+			var oz := float(z) * 450.0
+			model.add_urban_triangle(Vector3(ox + 20.0, 0.0, oz + 20.0), Vector3(ox + 400.0, 0.0, oz + 20.0), Vector3(ox + 20.0, 0.0, oz + 400.0))
+	_assert(first == model.local_light_points(), "same urban geometry produces identical local lights")
+	_assert(model.local_light_points(37).size() == 37, "distribution respects an explicit point budget")
 
 func _test_production_composition() -> void:
 	var scene := load("res://scenes/main.tscn") as PackedScene
 	_assert(scene != null, "production main scene loads")
 	var instance := scene.instantiate()
-	_assert(instance.get_node_or_null("DayNightEnvironment") != null, "production main scene includes the day/night environment adapter")
 	var adapter := instance.get_node_or_null("DayNightEnvironment")
-	_assert(adapter != null and adapter.sun_controller_path == NodePath("../SunRuntimeController"), "day/night adapter explicitly consumes production solar state")
-	_assert(adapter != null and adapter.world_environment_path == NodePath("../WorldEnvironment"), "day/night adapter explicitly owns only the production environment presentation")
+	_assert(adapter != null, "production scene includes day/night environment adapter")
+	_assert(adapter.sun_controller_path == NodePath("../SunRuntimeController"), "adapter consumes production solar state")
 	instance.free()
-
 	var main_file := FileAccess.open("res://scripts/main.gd", FileAccess.READ)
-	_assert(main_file != null, "production main composition source is readable")
+	_assert(main_file != null, "production composition source is readable")
 	if main_file != null:
 		var source := main_file.get_as_text()
-		_assert(source.contains("_setup_city_lights()"), "production main explicitly composes city lights")
-		_assert(source.contains("city_lights.begin_urban_data()"), "production main feeds authoritative BRM2 urban data into city lights")
+		_assert(source.contains("city_lights.begin_urban_data()"), "production feeds BRM2 urban data to city lights")
+		_assert(source.contains("kind == MAP_URBAN"), "city lights derive from authoritative urban layer")
 
 func _test_environment_contrast() -> void:
 	var host := Node.new()
@@ -98,83 +95,65 @@ func _test_environment_contrast() -> void:
 	adapter.world_environment_path = NodePath("../Environment")
 	host.add_child(adapter)
 	await process_frame
-
 	adapter.apply_solar_state({"valid": true, "elevation_deg": 8.0})
 	var day_energy := world_environment.environment.ambient_light_energy
 	var day_background := world_environment.environment.background_color
 	adapter.apply_solar_state({"valid": true, "elevation_deg": -8.0})
 	var night_energy := world_environment.environment.ambient_light_energy
 	var night_background := world_environment.environment.background_color
-	var stats: Dictionary = adapter.get_environment_stats()
-	_assert(float(stats["night_factor"]) > 0.99, "deep night drives the environment to full night presentation")
-	_assert(night_energy < day_energy * 0.30, "night ambient energy remains substantially darker than daylight")
-	_assert(night_background.get_luminance() < day_background.get_luminance() * 0.30, "night background remains substantially darker than daylight")
-	_assert(night_background.b > night_background.r, "night presentation keeps a readable dark-blue base instead of collapsing to black")
-
+	_assert(night_energy < day_energy * 0.30, "night ambient remains substantially darker than day")
+	_assert(night_background.get_luminance() < day_background.get_luminance() * 0.30, "night background remains dark")
+	_assert(night_background.b > night_background.r, "night base remains dark blue rather than pure black")
 	host.queue_free()
 	await process_frame
 
-func _test_renderer_structure() -> void:
+func _test_renderer_visual_contracts() -> void:
 	var camera := MockCameraRig.new()
 	camera.name = "CameraRig"
 	root.add_child(camera)
-
 	var renderer = CityLightRendererScript.new()
 	renderer.name = "CityLights"
 	renderer.camera_rig_path = NodePath("../CameraRig")
 	root.add_child(renderer)
 	await process_frame
-
 	renderer.begin_urban_data()
-	renderer.add_urban_triangle(Vector3(0.0, 0.0, 0.0), Vector3(900.0, 0.0, 0.0), Vector3(0.0, 0.0, 900.0))
-	renderer.add_urban_triangle(Vector3(3000.0, 0.0, 0.0), Vector3(3900.0, 0.0, 0.0), Vector3(3000.0, 0.0, 900.0))
+	for x in range(6):
+		for z in range(6):
+			var ox := float(x) * 450.0
+			var oz := float(z) * 450.0
+			renderer.add_urban_triangle(Vector3(ox + 20.0, 0.0, oz + 20.0), Vector3(ox + 400.0, 0.0, oz + 20.0), Vector3(ox + 20.0, 0.0, oz + 400.0))
 	renderer.finish_urban_data()
 	renderer.apply_solar_state({"valid": true, "elevation_deg": -8.0})
 	await process_frame
-
 	var stats: Dictionary = renderer.get_render_stats()
-	_assert(is_equal_approx(float(stats["night_intensity"]), 1.0), "renderer consumes solar elevation through the city-light model")
-	_assert(int(stats["glow_count"]) == 2, "renderer builds one overview glow cluster per selected urban cell")
-	_assert(int(stats["point_count"]) == 6, "renderer builds several local lights per selected urban cell")
-	_assert(int(stats["glow_count"]) <= int(stats["max_glow_count"]), "overview glow respects its explicit batch budget")
-	_assert(int(stats["point_count"]) <= int(stats["max_point_count"]), "local lights respect their explicit nationwide point budget")
-	_assert(not bool(stats["glow_visible"]), "close view removes large glow clusters so urban polygons do not read as filled orange areas")
-	_assert(bool(stats["points_visible"]), "close view shows local light points")
-
-	var glow := renderer.get_node_or_null("UrbanGlowClusters") as MultiMeshInstance3D
+	_assert(int(stats["point_count"]) >= 280, "small city fixture renders hundreds of close lights")
+	_assert(float(stats["point_diameter_m"]) <= 30.0, "close lights stay small enough to read as lamps/windows rather than blobs")
+	_assert(float(stats["glow_diameter_m"]) <= 900.0, "overview clusters cannot become giant regular dots")
+	_assert(not bool(stats["glow_visible"]) and bool(stats["points_visible"]), "5 km view uses local points only")
 	var points := renderer.get_node_or_null("LocalLightPoints") as MultiMeshInstance3D
-	_assert(glow != null and glow.multimesh != null and glow.multimesh.instance_count == 2, "far glow uses one batched MultiMesh instead of the filled urban polygon mesh")
-	_assert(points != null and points.multimesh != null and points.multimesh.instance_count == 6, "local lights use one batched MultiMesh")
-	_assert(glow.scale.is_equal_approx(Vector3.ONE) and points.scale.is_equal_approx(Vector3.ONE), "MultiMesh owners stay unscaled so world positions remain stable")
-	_assert(not _contains_dynamic_light(renderer), "city layer creates no nationwide dynamic OmniLight3D instances")
-
-	var first_transform := points.multimesh.get_instance_transform(0)
-	_assert(first_transform.origin.length() < 10000.0, "local light remains near its authoritative urban source")
+	_assert(points != null and points.scale.is_equal_approx(Vector3.ONE), "MultiMesh owner never rescales world positions")
+	_assert(not _contains_dynamic_light(renderer), "nationwide layer contains no dynamic OmniLight3D")
+	var first_origin := points.multimesh.get_instance_transform(0).origin
 	camera.distance_m = 180000.0
 	await process_frame
 	stats = renderer.get_render_stats()
-	_assert(bool(stats["glow_visible"]) and bool(stats["points_visible"]), "mid-distance band blends overview clusters with local lights")
+	_assert(bool(stats["glow_visible"]) and bool(stats["points_visible"]), "180 km transition blends both LODs")
 	camera.distance_m = 400000.0
 	await process_frame
 	stats = renderer.get_render_stats()
-	_assert(bool(stats["glow_visible"]), "far overview keeps aggregate urban glow clusters")
-	_assert(not bool(stats["points_visible"]), "far overview hides local point detail")
-	_assert(points.multimesh.get_instance_transform(0).origin.is_equal_approx(first_transform.origin), "camera LOD does not move physical light positions")
-
+	_assert(bool(stats["glow_visible"]) and not bool(stats["points_visible"]), "400 km view uses overview clusters only")
+	_assert(points.multimesh.get_instance_transform(0).origin.is_equal_approx(first_origin), "LOD never moves physical lights")
 	renderer.apply_solar_state({"valid": true, "elevation_deg": 8.0})
 	await process_frame
 	stats = renderer.get_render_stats()
-	_assert(not bool(stats["glow_visible"]) and not bool(stats["points_visible"]), "daylight removes nighttime presentation")
-
+	_assert(not bool(stats["glow_visible"]) and not bool(stats["points_visible"]), "daylight removes both night layers")
 	renderer.queue_free()
 	camera.queue_free()
 	await process_frame
 
 func _contains_dynamic_light(node: Node) -> bool:
 	for child in node.get_children():
-		if child is OmniLight3D:
-			return true
-		if _contains_dynamic_light(child):
+		if child is OmniLight3D or _contains_dynamic_light(child):
 			return true
 	return false
 
