@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs the issue #4 GPS correctness contracts plus native-core and Godot adapter regression coverage.
+# Runs GPS correctness contracts plus native-core and Godot adapter regression coverage.
 # Dependencies: Python 3, a C++20 compiler, and Godot (GODOT_BIN can override macOS default).
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -33,7 +33,9 @@ cd "$ROOT"
   tests.test_routing_runtime_contract \
   tests.test_native_route_plan \
   tests.test_native_gps_core \
-  tests.test_native_search_index
+  tests.test_native_search_index \
+  tests.test_route_geometry \
+  tests.test_routing_dataset
 
 bash tools/build_native_gps.sh
 
@@ -56,12 +58,12 @@ run_godot_contract() {
   printf '%s\n' "$output"
 
   if [[ $status -ne 0 ]] || grep -Eq 'SCRIPT ERROR:|Parse Error:|Failed to load script' <<<"$output"; then
-    echo "issue #4 Godot GPS tests: FAILED ($script)" >&2
+    echo "Godot GPS tests: FAILED ($script)" >&2
     exit 1
   fi
 
   if ! grep -Fq "$marker" <<<"$output"; then
-    echo "issue #4 Godot GPS tests did not reach success marker: $marker" >&2
+    echo "Godot GPS tests did not reach success marker: $marker" >&2
     exit 1
   fi
 }
@@ -75,4 +77,4 @@ run_godot_contract tests/godot/test_gps_search_route_adapter.gd "godot gps searc
 run_godot_contract tests/godot/test_gps_search_native_adapter.gd "godot gps native-search adapter tests: OK"
 run_godot_contract tests/godot/test_gps_failure_metrics.gd "godot gps failure-metrics tests: OK"
 
-echo "issue #4 automated GPS tests: OK"
+echo "automated GPS tests: OK"
