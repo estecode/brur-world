@@ -62,11 +62,16 @@ A PR check requires:
 
 - macOS with Safe Command Links installed;
 - this repository mapped and `pr-check` approved as above;
+- authenticated GitHub CLI (`gh`) access for this repository so local objective results can be persisted on the exact PR head;
 - Godot available as `godot` or installed at `/Applications/Godot.app`;
 - local `world_data/manifest.json` in the mapped checkout;
 - `tools/pr_check.sh` present in the mapped checkout.
 
-If the browser reports that the approved command was started, Safe Command Links itself accepted the request. Any subsequent error is from the project-owned `tools/pr_check.sh` and is shown in Terminal.
+The project-owned PR check records a GitHub commit status named `brur-world/local-pr-check` on the exact PR head. It records `pending` when the local run starts, `failure` if objective validation fails, and `success` only after the local objective checks complete. Earlier failed attempts remain in GitHub's status history even if a later run passes. Human visual/feel approval is separate and is never implied by this machine status.
+
+If GitHub status recording cannot be initialized, the PR check fails closed. A missing or failed required local-check status therefore cannot be replaced by a remembered terminal result or by saying that the test looked fine.
+
+If the browser reports that the approved command was started, Safe Command Links itself accepted the request. Any subsequent error is from the project-owned `tools/pr_check.sh` and is shown in Terminal; objective failures are also persisted to GitHub once status recording has started.
 
 Project/agent rules for generating the clickable link are defined in `AGENTS.md`. Safe Command Links itself stays generic; this repository owns the Godot-specific PR-check behavior.
 

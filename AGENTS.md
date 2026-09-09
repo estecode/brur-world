@@ -155,7 +155,11 @@ Never put a developer's absolute checkout path in a PR. Safe Command Links maps 
 
 `brur-world` owns what `pr-check` and `playtest` actually do. `pr-check` selects the exact PR revision, prepares isolated runtime state, launches the relevant Godot check, reuses required local runtime data safely, and cleans temporary state after Godot exits. `playtest` prepares the required dependencies for an allowlisted target and launches the current mapped checkout. Safe Command Links must remain generic and must not contain Godot/world-data/project-specific behavior.
 
-If the local Safe Command installation/mapping/approval is missing, the link may fail locally; agents must not infer installation state from GitHub. Repository support is declared here, while local availability is machine state.
+Local `pr-check` objective results are persistent project state, not terminal-only evidence. The project-owned launcher records the stable GitHub commit-status context `brur-world/local-pr-check` on the exact PR head: `pending` when the run starts, `failure` if local objective validation fails, and `success` only after those objective checks complete. Earlier attempts remain in GitHub status history. Human perception/feel approval is separate and must never be encoded as this machine status.
+
+When a PR requires local `pr-check` validation, agents must fail closed at merge time: the current PR head must have a successful `brur-world/local-pr-check` status. Missing, pending, failed, or stale-head status means do not merge. A user's `test ok`, remembered terminal output, or later successful run must not erase the evidence that an earlier run failed; inspect status history when a previous failure could indicate flakiness or a real defect. If status persistence cannot initialize locally, the Safe Check itself must stop rather than run an unverifiable objective check.
+
+If the local Safe Command installation/mapping/approval or authenticated GitHub CLI is missing, the link may fail locally; agents must not infer installation state from GitHub. Repository support is declared here, while local availability is machine state.
 
 ### Manual test handoff
 
