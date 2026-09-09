@@ -1,8 +1,10 @@
 extends Node
 class_name SunRuntimeController
 
-## Drives the game's astronomical sun from the authoritative WorldClock and controls the optional legacy light.
+## Drives the game's astronomical sun from the authoritative WorldClock and exposes the current solar state.
 ## Dependencies: sun_light_adapter.gd plus explicitly configured WorldClockRuntime, DirectionalLight3D, and Button scene nodes.
+
+signal solar_state_changed(solar_state: Dictionary)
 
 const SunLightAdapterScript = preload("res://scripts/sun_light_adapter.gd")
 
@@ -22,6 +24,7 @@ var _legacy_toggle: BaseButton
 var _time_source: Callable
 var _time_override: Dictionary = {}
 var _elapsed_seconds := 0.0
+var _last_solar_state: Dictionary = {"valid": false}
 
 func _ready() -> void:
 	_world_clock_runtime = get_node_or_null(world_clock_path)
@@ -76,13 +79,19 @@ func set_legacy_light_enabled(enabled: bool) -> void:
 func legacy_light_enabled() -> bool:
 	return _legacy_light != null and _legacy_light.visible
 
+func get_last_solar_state() -> Dictionary:
+	return _last_solar_state.duplicate(true)
+
 func refresh_now() -> Dictionary:
 	if _astronomical_light == null:
 		return {"valid": false}
 	var snapshot := _read_time_snapshot()
 	if not bool(snapshot.get("valid", true)):
 		return {"valid": false}
-	return _adapter.apply_time_snapshot(snapshot, latitude_deg, longitude_deg)
+	_last_solar_state = _adapter.apply_time_snapshot(snapshot, latitude_deg, longitude_deg)
+	if bool(_last_solar_state.get("valid", false)):
+		solar_state_changed.emit(_last_solar_state.duplicate(true))
+	return _last_solar_state.duplicate(true)
 
 func _read_time_snapshot() -> Dictionary:
 	if not _time_override.is_empty():
