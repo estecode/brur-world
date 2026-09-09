@@ -5,8 +5,8 @@ extends Node3D
 ## Dependencies:
 ## - world_coordinates.gd owns projected/world/tile coordinate conversion.
 ## - CameraRig supplies visible world bounds and zoom distance.
-## - city_light_renderer.gd consumes the already-loaded authoritative BRM2 urban geometry.
-## - world_data manifest, BRT1 tiles, and BRM2 background provide runtime map data.
+## - city_light_renderer.gd consumes authoritative BRM2 urban geometry plus derived runtime POI density.
+## - world_data manifest, BRT1 tiles, BRM2 background, and city-light density provide runtime map data.
 
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 const CityLightRendererScript = preload("res://scripts/city_light_renderer.gd")
@@ -412,8 +412,34 @@ func _load_background() -> void:
 		if kind == MAP_URBAN and city_lights != null:
 			city_lights.set_urban_mesh(mesh)
 	if city_lights != null:
+		_load_city_light_poi_density()
 		city_lights.finish_urban_data()
 	print("Background triangles rendered: ", accepted, " | ocean base enabled")
+
+func _load_city_light_poi_density() -> void:
+	var path := WORLD_DIR + "/city_light_density.jsonl"
+	if not FileAccess.file_exists(path):
+		print("No city_light_density.jsonl yet. Re-run the Sweden build for POI-weighted city lights.")
+		return
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return
+	var samples := 0
+	while not file.eof_reached():
+		var line := file.get_line().strip_edges()
+		if line.is_empty():
+			continue
+		var parsed: Variant = JSON.parse_string(line)
+		if typeof(parsed) != TYPE_DICTIONARY:
+			continue
+		var record := parsed as Dictionary
+		var count := int(record.get("count", 0))
+		if count <= 0:
+			continue
+		var absolute := Vector2(float(record.get("x", 0.0)), float(record.get("y", 0.0)))
+		city_lights.add_poi_density_sample(world_coordinates.absolute_to_world(absolute), count)
+		samples += 1
+	print("City-light POI density samples loaded: ", samples)
 
 func _map_color(kind: int) -> Color:
 	match kind:
