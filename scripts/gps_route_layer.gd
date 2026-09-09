@@ -6,6 +6,7 @@ extends Node3D
 ## - GpsClient owns native process/TCP lifecycle and response delivery.
 ## - GpsRouteModel owns destination/waypoint/preference state.
 ## - GpsRouteRenderer/GpsRouteUi own GPS presentation; the player vehicle owns motion state/dynamics.
+## - VehicleRouteFollower consumes routed world points/speeds and emits reroute intent; this layer owns route requests.
 ## - Main exposes WorldCoordinates; RoadSurfaceQuery reads authoritative BRT1 world data for the player vehicle.
 ## - CameraRig receives the player as an explicit follow target.
 
@@ -22,6 +23,7 @@ const WORLD_DIR := "res://world_data"
 const EARTH_RADIUS := 6378137.0
 const START_LON := 18.0686
 const START_LAT := 59.3293
+const DEFAULT_ROUTE_SPEED_MPS := 13.9
 
 @export var main_path: NodePath
 @export var camera_rig_path: NodePath
@@ -145,6 +147,12 @@ func _on_follow_changed(enabled: bool) -> void:
 	if not set_follow_enabled(enabled) and route_ui != null: route_ui.call("set_follow_enabled", false)
 func _on_manual_vehicle_input() -> void:
 	if _follow_enabled: set_follow_enabled(false)
+func _on_route_reroute_requested() -> void:
+	# Navigation remains active after manual takeover, but this composition layer
+	# owns rerouting. Requesting a fresh plan never changes vehicle control owner.
+	if not route_model.has_destination() or gps_client == null: return
+	if not bool(gps_client.call("is_ready")) or bool(gps_client.call("is_busy")): return
+	request_current_plan()
 func _refresh_waypoint_ui() -> void:
 	if route_ui != null: route_ui.call("set_waypoints", route_model.waypoints())
 
@@ -164,13 +172,23 @@ func _install_follow_route(response: Dictionary) -> void:
 	if _route_follower == null: return
 	var points_value: Variant = response.get("points", [])
 	if typeof(points_value) != TYPE_ARRAY: _clear_follow_route(); return
+	var speeds_value: Variant = response.get("speed_limits_mps", [])
+	var speeds: Array = speeds_value as Array if typeof(speeds_value) == TYPE_ARRAY else []
 	var world_points := PackedVector3Array()
-	for value in points_value as Array:
+	var speed_limits_mps := PackedFloat32Array()
+	var points: Array = points_value as Array
+	for index in range(points.size()):
+		var value: Variant = points[index]
 		if typeof(value) != TYPE_ARRAY: continue
 		var pair := value as Array
-		if pair.size() >= 2:
-			var world_point := _absolute_to_world(float(pair[0]), float(pair[1])); if world_point.is_finite(): world_points.append(world_point)
-	_route_follower.call("set_route", world_points); var available := world_points.size() >= 2; route_ui.call("set_follow_available", available)
+		if pair.size() < 2: continue
+		var world_point := _absolute_to_world(float(pair[0]), float(pair[1]))
+		if not world_point.is_finite(): continue
+		world_points.append(world_point)
+		var speed_mps := DEFAULT_ROUTE_SPEED_MPS
+		if index < speeds.size(): speed_mps = maxf(1.0, float(speeds[index]))
+		speed_limits_mps.append(speed_mps)
+	_route_follower.call("set_route", world_points, speed_limits_mps); var available := world_points.size() >= 2; route_ui.call("set_follow_available", available)
 	if _follow_enabled and not bool(_route_follower.call("set_follow_enabled", true)): _follow_enabled = false; route_ui.call("set_follow_enabled", false)
 func _clear_follow_route() -> void:
 	_follow_enabled = false
@@ -194,6 +212,7 @@ func _spawn_player() -> void:
 	var projected := _project_lonlat(START_LON, START_LAT); player.call("set_world_position", _absolute_to_world(projected.x, projected.y))
 	_player_controller = player.get_node_or_null("PlayerVehicleController"); _route_follower = player.get_node_or_null("VehicleRouteFollower")
 	if _player_controller != null: _player_controller.connect("manual_input_detected", _on_manual_vehicle_input)
+	if _route_follower != null and _route_follower.has_signal("reroute_requested"): _route_follower.connect("reroute_requested", _on_route_reroute_requested)
 	if _camera_rig.has_method("set_follow_target"): _camera_rig.call("set_follow_target", player)
 	_update_player_surface(); _create_player_marker(); _update_visual_height()
 func _update_player_surface() -> void:
