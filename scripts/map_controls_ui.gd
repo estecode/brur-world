@@ -7,9 +7,6 @@ extends CanvasLayer
 ## - Scene composition supplies PoiLayer, GpsRouteLayer and CameraRig paths.
 ## - Owns no POI data, vehicle state, GPS route state, coordinate conversion, or camera simulation.
 
-const LUND_FOCUS: Vector3 = Vector3(-489086.0, 0.0, 1582123.0)
-const LUND_DISTANCE: float = 12472.0
-
 @export var poi_layer_path: NodePath
 @export var gps_route_layer_path: NodePath
 @export var camera_rig_path: NodePath
@@ -20,6 +17,7 @@ var _camera_rig: Node
 var _poi_toggle: CheckButton
 var _teleport_toggle: CheckButton
 var _follow_car_toggle: CheckButton
+var _drive_mode_toggle: CheckButton
 
 func _ready() -> void:
 	layer = 70
@@ -29,6 +27,8 @@ func _ready() -> void:
 	_build_ui()
 	if _gps_route_layer != null and _gps_route_layer.has_signal("teleport_state_changed"):
 		_gps_route_layer.connect("teleport_state_changed", set_teleport_armed)
+	if _camera_rig != null and _camera_rig.has_signal("map_follow_changed"):
+		_camera_rig.connect("map_follow_changed", set_follow_car_enabled)
 
 func set_teleport_armed(armed: bool) -> void:
 	_ensure_ui()
@@ -38,6 +38,13 @@ func set_teleport_armed(armed: bool) -> void:
 func set_follow_car_enabled(enabled: bool) -> void:
 	_ensure_ui()
 	_follow_car_toggle.set_pressed_no_signal(enabled)
+
+func set_drive_mode_enabled(enabled: bool) -> void:
+	_ensure_ui()
+	_drive_mode_toggle.set_pressed_no_signal(enabled)
+	_follow_car_toggle.disabled = enabled
+	if enabled:
+		_follow_car_toggle.set_pressed_no_signal(false)
 
 func set_poi_visible(visible: bool) -> void:
 	_ensure_ui()
@@ -73,16 +80,17 @@ func _build_ui() -> void:
 
 	_follow_car_toggle = CheckButton.new()
 	_follow_car_toggle.text = "Follow car"
-	_follow_car_toggle.button_pressed = true
-	_follow_car_toggle.tooltip_text = "Center and follow the player car; independent from Follow route"
+	_follow_car_toggle.button_pressed = false
+	_follow_car_toggle.tooltip_text = "Center and follow the player car in Map mode; panning disengages follow"
 	_follow_car_toggle.toggled.connect(_on_follow_car_toggled)
 	row.add_child(_follow_car_toggle)
 
-	var lund := Button.new()
-	lund.text = "Lund"
-	lund.tooltip_text = "Focus Lund at the saved gameplay zoom"
-	lund.pressed.connect(_focus_lund)
-	row.add_child(lund)
+	_drive_mode_toggle = CheckButton.new()
+	_drive_mode_toggle.text = "Drive mode"
+	_drive_mode_toggle.button_pressed = false
+	_drive_mode_toggle.tooltip_text = "Drive mode gives W/S/A/D + Space to the car and keeps the camera on the vehicle"
+	_drive_mode_toggle.toggled.connect(_on_drive_mode_toggled)
+	row.add_child(_drive_mode_toggle)
 
 func _ensure_ui() -> void:
 	if _poi_toggle == null:
@@ -98,22 +106,11 @@ func _on_teleport_toggled(armed: bool) -> void:
 		_gps_route_layer.call("set_teleport_armed", armed)
 
 func _on_follow_car_toggled(enabled: bool) -> void:
-	if _camera_rig == null or _gps_route_layer == null:
+	if _camera_rig == null or not _camera_rig.has_method("set_map_follow_enabled"):
 		return
-	var player_value: Variant = _gps_route_layer.call("get_player_vehicle")
-	if not (player_value is Node3D):
-		return
-	var player := player_value as Node3D
-	if enabled:
-		var current_distance: float = float(_camera_rig.call("get_distance"))
-		_camera_rig.call("set_follow_target", player)
-		_camera_rig.call("set_view", player.global_position, current_distance)
-	else:
-		_camera_rig.call("clear_follow_target")
+	_camera_rig.call("set_map_follow_enabled", enabled)
 
-func _focus_lund() -> void:
-	if _camera_rig == null:
-		return
-	_follow_car_toggle.set_pressed_no_signal(false)
-	_camera_rig.call("clear_follow_target")
-	_camera_rig.call("set_view", LUND_FOCUS, LUND_DISTANCE)
+func _on_drive_mode_toggled(enabled: bool) -> void:
+	set_drive_mode_enabled(enabled)
+	if _camera_rig != null and _camera_rig.has_method("set_drive_mode"):
+		_camera_rig.call("set_drive_mode", enabled)
