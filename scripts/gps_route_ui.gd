@@ -1,7 +1,7 @@
 class_name GpsRouteUi
 extends CanvasLayer
 
-## Presents GPS status, routing preference, follow control and waypoint controls.
+## Presents GPS controls plus a compact presentation-only navigation HUD for Drive mode.
 ##
 ## Dependencies:
 ## - Emits user intent only; route-plan state remains in GpsRouteModel.
@@ -15,18 +15,8 @@ signal follow_changed(enabled: bool)
 
 const OverlayLayoutScript = preload("res://scripts/overlay_layout.gd")
 const OverlayWindowHeaderScript = preload("res://scripts/overlay_window_header.gd")
-const ROUTING_PREFERENCE_IDS: Array[String] = [
-	"fastest",
-	"shortest",
-	"avoid_small_roads",
-	"avoid_major_roads",
-]
-const ROUTING_PREFERENCE_LABELS: Array[String] = [
-	"Fastest",
-	"Shortest",
-	"Avoid small roads",
-	"Avoid major roads",
-]
+const ROUTING_PREFERENCE_IDS: Array[String] = ["fastest", "shortest", "avoid_small_roads", "avoid_major_roads"]
+const ROUTING_PREFERENCE_LABELS: Array[String] = ["Fastest", "Shortest", "Avoid small roads", "Avoid major roads"]
 
 var _status_label: Label
 var _preference_select: OptionButton
@@ -34,122 +24,72 @@ var _follow_toggle: CheckButton
 var _waypoint_list: ItemList
 var _remove_waypoint_button: Button
 var _clear_waypoints_button: Button
+var _drive_hud: PanelContainer
+var _drive_hud_label: Label
+var _route_distance_m := 0.0
+var _route_time_s := 0.0
+var _follow_enabled := false
 
-func _ready() -> void:
-	_build_ui()
-
-func set_status(text: String) -> void:
-	_ensure_ui()
-	_status_label.text = text
-
+func _ready() -> void: _build_ui()
+func set_status(text: String) -> void: _ensure_ui(); _status_label.text = text
 func set_preference(preference: String) -> void:
 	_ensure_ui()
-	var index: int = ROUTING_PREFERENCE_IDS.find(preference)
-	if index >= 0:
-		_preference_select.select(index)
-
+	var index := ROUTING_PREFERENCE_IDS.find(preference)
+	if index >= 0: _preference_select.select(index)
 func preference_label(preference: String) -> String:
-	var index: int = ROUTING_PREFERENCE_IDS.find(preference)
+	var index := ROUTING_PREFERENCE_IDS.find(preference)
 	return ROUTING_PREFERENCE_LABELS[index] if index >= 0 else preference
-
 func set_follow_available(available: bool) -> void:
-	_ensure_ui()
-	_follow_toggle.disabled = not available
-	if not available:
-		_follow_toggle.set_pressed_no_signal(false)
-
+	_ensure_ui(); _follow_toggle.disabled = not available
+	if not available: _follow_toggle.set_pressed_no_signal(false)
 func set_follow_enabled(enabled: bool) -> void:
-	_ensure_ui()
-	_follow_toggle.set_pressed_no_signal(enabled)
+	_ensure_ui(); _follow_enabled = enabled; _follow_toggle.set_pressed_no_signal(enabled); _refresh_drive_hud()
+func set_drive_mode(enabled: bool) -> void:
+	_ensure_ui(); _drive_hud.visible = enabled
+func set_route_summary(distance_m: float, travel_time_s: float) -> void:
+	_route_distance_m = maxf(0.0, distance_m); _route_time_s = maxf(0.0, travel_time_s); _refresh_drive_hud()
+func drive_hud_text() -> String:
+	var distance_text := "%.1f km" % (_route_distance_m / 1000.0) if _route_distance_m >= 1000.0 else "%.0f m" % _route_distance_m
+	return "%s · %.0f min · Follow %s" % [distance_text, _route_time_s / 60.0, "ON" if _follow_enabled else "OFF"]
+func _refresh_drive_hud() -> void:
+	if _drive_hud_label != null: _drive_hud_label.text = drive_hud_text()
 
 func set_waypoints(points: Array) -> void:
-	_ensure_ui()
-	_waypoint_list.clear()
+	_ensure_ui(); _waypoint_list.clear()
 	for index in range(points.size()):
 		var value: Variant = points[index]
-		if typeof(value) != TYPE_VECTOR2:
-			continue
-		var point: Vector2 = value
-		_waypoint_list.add_item("%d  %.0f, %.0f" % [index + 1, point.x, point.y])
-	_remove_waypoint_button.disabled = points.is_empty()
-	_clear_waypoints_button.disabled = points.is_empty()
+		if typeof(value) == TYPE_VECTOR2:
+			var point: Vector2 = value
+			_waypoint_list.add_item("%d  %.0f, %.0f" % [index + 1, point.x, point.y])
+	_remove_waypoint_button.disabled = points.is_empty(); _clear_waypoints_button.disabled = points.is_empty()
 
 func _build_ui() -> void:
-	if _status_label != null:
-		return
+	if _status_label != null: return
 	layer = 50
-	var panel := PanelContainer.new()
-	panel.name = "Panel"
-	add_child(panel)
-	var content := VBoxContainer.new()
-	panel.add_child(content)
-
-	_status_label = Label.new()
-	_status_label.text = "GPS starting…"
-	content.add_child(_status_label)
-
+	var panel := PanelContainer.new(); panel.name = "Panel"; add_child(panel)
+	var content := VBoxContainer.new(); panel.add_child(content)
+	_status_label = Label.new(); _status_label.text = "GPS starting…"; content.add_child(_status_label)
 	_preference_select = OptionButton.new()
-	for label_text in ROUTING_PREFERENCE_LABELS:
-		_preference_select.add_item(label_text)
-	_preference_select.selected = 0
-	_preference_select.tooltip_text = "Routing preference used for every GPS leg"
-	_preference_select.item_selected.connect(_on_preference_selected)
-	content.add_child(_preference_select)
-
-	_follow_toggle = CheckButton.new()
-	_follow_toggle.text = "Follow route"
-	_follow_toggle.tooltip_text = "Let GPS drive this same vehicle; WASD takes manual control back"
-	_follow_toggle.disabled = true
-	_follow_toggle.toggled.connect(_on_follow_toggled)
-	content.add_child(_follow_toggle)
-
-	var help := Label.new()
-	help.text = "Drive: W/S/A/D + Space · Shift+click destination · Cmd/Ctrl+Shift+click waypoint"
-	content.add_child(help)
-
-	_waypoint_list = ItemList.new()
-	_waypoint_list.custom_minimum_size = Vector2(0.0, 80.0)
-	_waypoint_list.select_mode = ItemList.SELECT_SINGLE
-	content.add_child(_waypoint_list)
-
-	var buttons := HBoxContainer.new()
-	content.add_child(buttons)
-	_remove_waypoint_button = Button.new()
-	_remove_waypoint_button.text = "Remove selected"
-	_remove_waypoint_button.pressed.connect(_on_remove_waypoint_pressed)
-	buttons.add_child(_remove_waypoint_button)
-	_clear_waypoints_button = Button.new()
-	_clear_waypoints_button.text = "Clear waypoints"
-	_clear_waypoints_button.pressed.connect(_on_clear_waypoints_pressed)
-	buttons.add_child(_clear_waypoints_button)
+	for label_text in ROUTING_PREFERENCE_LABELS: _preference_select.add_item(label_text)
+	_preference_select.tooltip_text = "Routing preference used for every GPS leg"; _preference_select.item_selected.connect(_on_preference_selected); content.add_child(_preference_select)
+	_follow_toggle = CheckButton.new(); _follow_toggle.text = "Follow route"; _follow_toggle.tooltip_text = "Let GPS drive this same vehicle; WASD takes manual control back"; _follow_toggle.disabled = true; _follow_toggle.toggled.connect(_on_follow_toggled); content.add_child(_follow_toggle)
+	var help := Label.new(); help.text = "Drive: W/S/A/D + Space · Shift+click destination · Cmd/Ctrl+Shift+click waypoint"; content.add_child(help)
+	_waypoint_list = ItemList.new(); _waypoint_list.custom_minimum_size = Vector2(0.0, 80.0); content.add_child(_waypoint_list)
+	var buttons := HBoxContainer.new(); content.add_child(buttons)
+	_remove_waypoint_button = Button.new(); _remove_waypoint_button.text = "Remove selected"; _remove_waypoint_button.pressed.connect(_on_remove_waypoint_pressed); buttons.add_child(_remove_waypoint_button)
+	_clear_waypoints_button = Button.new(); _clear_waypoints_button.text = "Clear waypoints"; _clear_waypoints_button.pressed.connect(_on_clear_waypoints_pressed); buttons.add_child(_clear_waypoints_button)
 	set_waypoints([])
-
-	var header := Button.new()
-	header.name = "WindowHeader"
-	header.set_script(OverlayWindowHeaderScript)
-	header.set("target_path", NodePath("../Panel"))
-	header.set("title_text", "GPS / ROUTE")
-	header.set("slot", OverlayLayoutScript.Slot.BOTTOM_RIGHT)
-	header.set("panel_width", 506.0)
-	add_child(header)
+	var header := Button.new(); header.name = "WindowHeader"; header.set_script(OverlayWindowHeaderScript); header.set("target_path", NodePath("../Panel")); header.set("title_text", "GPS / ROUTE"); header.set("slot", OverlayLayoutScript.Slot.BOTTOM_RIGHT); header.set("panel_width", 506.0); add_child(header)
+	_drive_hud = PanelContainer.new(); _drive_hud.name = "DriveHud"; _drive_hud.set_anchors_preset(Control.PRESET_CENTER_TOP); _drive_hud.position = Vector2(-150.0, 20.0); _drive_hud.custom_minimum_size = Vector2(300.0, 48.0); _drive_hud.visible = false; add_child(_drive_hud)
+	_drive_hud_label = Label.new(); _drive_hud_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; _drive_hud.add_child(_drive_hud_label); _refresh_drive_hud()
 
 func _ensure_ui() -> void:
-	if _status_label == null:
-		_build_ui()
-
+	if _status_label == null: _build_ui()
 func _on_preference_selected(index: int) -> void:
-	if index >= 0 and index < ROUTING_PREFERENCE_IDS.size():
-		preference_selected.emit(ROUTING_PREFERENCE_IDS[index])
-
-func _on_follow_toggled(enabled: bool) -> void:
-	follow_changed.emit(enabled)
-
+	if index >= 0 and index < ROUTING_PREFERENCE_IDS.size(): preference_selected.emit(ROUTING_PREFERENCE_IDS[index])
+func _on_follow_toggled(enabled: bool) -> void: follow_changed.emit(enabled)
 func _on_remove_waypoint_pressed() -> void:
-	var selected: PackedInt32Array = _waypoint_list.get_selected_items()
-	if selected.is_empty():
-		set_status("Select a waypoint to remove")
-		return
+	var selected := _waypoint_list.get_selected_items()
+	if selected.is_empty(): set_status("Select a waypoint to remove"); return
 	remove_waypoint_requested.emit(int(selected[0]))
-
-func _on_clear_waypoints_pressed() -> void:
-	clear_waypoints_requested.emit()
+func _on_clear_waypoints_pressed() -> void: clear_waypoints_requested.emit()

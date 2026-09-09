@@ -88,7 +88,7 @@ func _build_ui() -> void:
 	_drive_mode_toggle = CheckButton.new()
 	_drive_mode_toggle.text = "Drive mode"
 	_drive_mode_toggle.button_pressed = false
-	_drive_mode_toggle.tooltip_text = "Drive mode gives W/S/A/D + Space to the car and keeps the camera on the vehicle"
+	_drive_mode_toggle.tooltip_text = "Behind-car driving camera; use W/S/A/D + Space to drive and the mouse wheel to adjust camera distance"
 	_drive_mode_toggle.toggled.connect(_on_drive_mode_toggled)
 	row.add_child(_drive_mode_toggle)
 
