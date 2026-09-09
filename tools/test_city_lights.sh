@@ -1,9 +1,40 @@
 #!/usr/bin/env bash
-# Runs deterministic/headless city-light model and renderer validation.
-# Dependencies: Godot 4 and tests/godot/test_city_lights.gd.
+# Runs deterministic/headless city-light model, POI-density builder, and renderer validation.
+# Dependencies: Python 3, Godot 4, build_city_light_density.py, and tests/godot/test_city_lights.gd.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/brur-city-light-test.XXXXXX")"
+cleanup() {
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
+mkdir -p "$TMP/poi_tiles"
+printf '%s\n' \
+  '{"x":100.0,"y":100.0,"category":"shop"}' \
+  '{"x":200.0,"y":200.0,"category":"hospital"}' \
+  '{"x":4100.0,"y":100.0,"category":"fuel"}' \
+  > "$TMP/poi_tiles/0_0.jsonl"
+printf '{}\n' > "$TMP/manifest.json"
+"$PYTHON_BIN" "$ROOT/tools/build_city_light_density.py" "$TMP"
+"$PYTHON_BIN" - "$TMP" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+records = [json.loads(line) for line in (root / "city_light_density.jsonl").read_text().splitlines() if line]
+assert len(records) == 2, records
+assert sorted(record["count"] for record in records) == [1, 2], records
+manifest = json.loads((root / "manifest.json").read_text())
+meta = manifest["city_light_density"]
+assert meta["format"] == "CLD1", meta
+assert meta["runtime_pois"] == 3, meta
+assert meta["cells"] == 2, meta
+print("city light density builder tests: OK")
+PY
 
 if [[ -n "${GODOT_BIN:-}" ]]; then
   GODOT="$GODOT_BIN"
