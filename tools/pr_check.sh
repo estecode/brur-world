@@ -100,7 +100,7 @@ resolve_sweden_pbf() {
   data_dir="$(cd "$ROOT/.." && pwd)/data"
   candidate="$(find "$data_dir" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n 1)"
   if [[ -z "$candidate" ]]; then
-    printf 'PR_CHECK=FAIL routing dataset is stale/invalid and no Sweden PBF was found; set BRUR_WORLD_PBF\n' >&2
+    printf 'PR_CHECK=FAIL no Sweden PBF was found; set BRUR_WORLD_PBF\n' >&2
     return 1
   fi
   printf '%s\n' "$candidate"
@@ -117,6 +117,52 @@ rebuild_routing_dataset() {
   "$PYTHON_BIN" "$TMP/tools/build_routing_dataset.py" "$pbf" --output "$WORLD_DATA"
 }
 
+run_traffic_signal_real_data_check() {
+  [[ -f "$TMP/tools/build_traffic_signals.py" ]] || return 0
+
+  local pbf output
+  pbf="$(resolve_sweden_pbf)"
+  output="$TMP/.pr-check-traffic-signals"
+  mkdir -p "$output"
+
+  printf 'PR_CHECK=CHECK_TRAFFIC_SIGNALS_REAL_DATA pr=%s source=%s\n' "$PR" "$(basename "$pbf")"
+  "$PYTHON_BIN" "$TMP/tools/build_traffic_signals.py" "$pbf" --output "$output"
+  "$PYTHON_BIN" - "$output/traffic_signals.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, ValueError) as exc:
+    print(f"PR_CHECK=FAIL invalid traffic-signal output: {exc}")
+    raise SystemExit(1)
+
+stats = payload.get("stats", {})
+source = int(stats.get("source_signal_count", -1))
+exported = int(stats.get("exported_signal_count", -1))
+if source != 6974:
+    print(f"PR_CHECK=FAIL expected 6974 source signals, got {source}")
+    raise SystemExit(1)
+if exported != source:
+    print(f"PR_CHECK=FAIL exported {exported} of {source} source signals")
+    raise SystemExit(1)
+
+print(
+    "PR_CHECK=TRAFFIC_SIGNALS_REAL_DATA_OK "
+    f"source={source} exported={exported} "
+    f"explicit={stats.get('explicit_direction_count')} "
+    f"legacy={stats.get('legacy_direction_count')} "
+    f"inferred={stats.get('inferred_direction_count')} "
+    f"unknown={stats.get('unknown_direction_count')} "
+    f"stop_lines={stats.get('explicit_stop_line_count')} "
+    f"grouped={stats.get('grouped_candidate_count')} "
+    f"ungrouped={stats.get('ungrouped_candidate_count')}"
+)
+PY
+}
+
 printf 'PR_CHECK=PREPARE pr=%s\n' "$PR"
 ensure_runtime_ports_free
 git -C "$ROOT" fetch --quiet origin "pull/${PR}/head"
@@ -129,6 +175,8 @@ fi
 
 rm -rf "$TMP/world_data"
 ln -s "$WORLD_DATA" "$TMP/world_data"
+
+run_traffic_signal_real_data_check
 
 if [[ -f "$TMP/tools/build_native_gps.sh" ]]; then
   printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s\n' "$PR"
