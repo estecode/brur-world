@@ -12,6 +12,10 @@ signal manual_input_detected
 
 const PLAYER_OWNER: int = 0
 
+static func steering_input(left_pressed: bool, right_pressed: bool) -> float:
+	# VehicleDynamics uses positive steering for left and negative steering for right.
+	return float(int(left_pressed) - int(right_pressed))
+
 func _apply_controls() -> void:
 	var throttle: float = 0.0
 	if Input.is_physical_key_pressed(KEY_W):
@@ -19,12 +23,10 @@ func _apply_controls() -> void:
 	if Input.is_physical_key_pressed(KEY_S):
 		throttle -= 1.0
 
-	# VehicleDynamics uses negative steering for a right turn in world-space heading.
-	var steer: float = 0.0
-	if Input.is_physical_key_pressed(KEY_D):
-		steer -= 1.0
-	if Input.is_physical_key_pressed(KEY_A):
-		steer += 1.0
+	var steer: float = steering_input(
+		Input.is_physical_key_pressed(KEY_A),
+		Input.is_physical_key_pressed(KEY_D)
+	)
 
 	var brake: float = 1.0 if Input.is_physical_key_pressed(KEY_SPACE) else 0.0
 	if not is_zero_approx(throttle) or not is_zero_approx(steer) or brake > 0.0:
