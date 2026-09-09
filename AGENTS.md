@@ -118,6 +118,10 @@ The repository keeps one permanent open issue titled `BRUR — Needs You`. It is
 
 Before resuming tracked work, answering project-leader-facing status or merge requests, or answering `vad behöver jag göra?`, synchronize waiting candidates from current GitHub state. Re-check the relevant PR head, validation/status state, mergeability/blockers, and current `main` where integration relevance matters. Update `BRUR — Needs You` from that synchronized state before reporting project-leader actions in chat. CI-in-progress and other agent-owned waiting states stay out of the inbox until they become a real `TEST`, `READY`, `DECIDE`, or `MAIN` action.
 
+All project-leader action handoffs must be persisted in `BRUR — Needs You` before they are presented in chat. Chat may summarize or repeat the current action and may include the same convenience link or command, but it must explicitly direct the project leader back to `Needs You` as the authoritative action queue. Never make a chat session the only or primary place where a required `TEST`, `READY`, `DECIDE`, or `MAIN` action is communicated.
+
+When the project leader asks `vad ska jag göra nu?` or equivalent, answer from the synchronized `Needs You` inbox and direct them to the next concrete action recorded there. Do not create a parallel chat-owned task queue. If `Needs You` is empty but agent-owned work remains, say so and continue or identify that agent-owned work separately; do not imply that an empty inbox means the project has no work.
+
 Cross-repository candidates that belong to the BRUR workflow must be identified in `Needs You` and project-leader handoffs with their repository-qualified PR, for example `estecode/safe-command-links#6`. A short request such as `merge #6`, `status #6`, or `test ok #6` may be accepted only when exactly one candidate is unambiguous from current GitHub/project state; otherwise ask for the repository-qualified candidate instead of guessing.
 
 Agents must keep `BRUR — Needs You` useful whenever their work creates or resolves a project-leader action:
