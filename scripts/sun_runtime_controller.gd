@@ -20,6 +20,7 @@ var _astronomical_light: DirectionalLight3D
 var _legacy_light: DirectionalLight3D
 var _legacy_toggle: BaseButton
 var _time_source: Callable
+var _time_override: Dictionary = {}
 var _elapsed_seconds := 0.0
 
 func _ready() -> void:
@@ -52,6 +53,17 @@ func _process(delta: float) -> void:
 func set_time_source(source: Callable) -> void:
 	_time_source = source
 
+func set_time_override(snapshot: Dictionary) -> void:
+	_time_override = snapshot.duplicate(true)
+	refresh_now()
+
+func clear_time_override() -> void:
+	_time_override.clear()
+	refresh_now()
+
+func time_override_enabled() -> bool:
+	return not _time_override.is_empty()
+
 func set_location(latitude: float, longitude: float) -> void:
 	latitude_deg = latitude
 	longitude_deg = longitude
@@ -73,6 +85,8 @@ func refresh_now() -> Dictionary:
 	return _adapter.apply_time_snapshot(snapshot, latitude_deg, longitude_deg)
 
 func _read_time_snapshot() -> Dictionary:
+	if not _time_override.is_empty():
+		return _time_override
 	if _time_source.is_valid():
 		var supplied: Variant = _time_source.call()
 		if supplied is Dictionary:
