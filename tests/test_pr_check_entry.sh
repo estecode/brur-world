@@ -26,6 +26,7 @@ git -C "$SEED" add .
 git -C "$SEED" commit -qm initial
 git -C "$SEED" remote add origin "$REMOTE"
 git -C "$SEED" push -q -u origin main
+git -C "$REMOTE" symbolic-ref HEAD refs/heads/main
 
 git clone -q "$REMOTE" "$MAPPED"
 mkdir -p "$MAPPED/world_data"
