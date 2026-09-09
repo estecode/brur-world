@@ -7,10 +7,11 @@ extends RefCounted
 ## - Does not depend on SceneTree, rendering, camera state, weather, or astronomy.
 
 const CELL_SIZE_M: float = 200000.0
-const MAX_CLOUDS_PER_CELL: int = 16
+const MAX_CLOUDS_PER_CELL: int = 42
 const DEFAULT_SEED: int = 700031
-const SMALL_PROFILE_WEIGHT: float = 0.62
-const MEDIUM_PROFILE_WEIGHT: float = 0.28
+const SMALL_PROFILE_WEIGHT: float = 0.54
+const MEDIUM_PROFILE_WEIGHT: float = 0.30
+const LARGE_PROFILE_WEIGHT: float = 0.14
 
 const SMALL_PROFILE := {
 	"name": "small_cumulus",
@@ -51,6 +52,19 @@ const LARGE_PROFILE := {
 	"heading_degrees": 80.0,
 }
 
+const GIANT_PROFILE := {
+	"name": "giant_cloud_bank",
+	"size_min_m": 30000.0,
+	"size_max_m": 88000.0,
+	"thickness_min_m": 2200.0,
+	"thickness_max_m": 6200.0,
+	"altitude_min_m_asl": 2800.0,
+	"altitude_max_m_asl": 6500.0,
+	"speed_min_mps": 11.0,
+	"speed_max_mps": 20.0,
+	"heading_degrees": 84.0,
+}
+
 func normalized_coverage(coverage: float) -> float:
 	return clampf(coverage, 0.0, 1.0)
 
@@ -62,24 +76,23 @@ func generate_cell(cell: Vector2i, coverage: float, seed: int = DEFAULT_SEED) ->
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _cell_seed(cell, seed)
 
-	# Stable per-cell density produces natural gaps and denser patches instead
-	# of uniform random scatter. Higher cloud capacity creates more distinct
-	# groups at Sweden overview scale without requiring a higher coverage value.
-	var local_density: float = clampf(safe_coverage * rng.randf_range(0.42, 1.55), 0.0, 1.0)
-	if rng.randf() > minf(0.94, 0.36 + safe_coverage * 0.76):
-		local_density *= 0.10
+	# Stable per-cell density preserves gaps while the larger cloud capacity
+	# produces roughly three times as many formations at the tuned coverage.
+	var local_density: float = clampf(safe_coverage * rng.randf_range(0.48, 1.58), 0.0, 1.0)
+	if rng.randf() > minf(0.94, 0.40 + safe_coverage * 0.72):
+		local_density *= 0.08
 	var cloud_count: int = int(round(float(MAX_CLOUDS_PER_CELL) * local_density))
 	if cloud_count <= 0:
 		return []
 
-	# More, smaller local clusters make overview-scale fields read as weather
-	# rather than isolated markers while preserving clear gaps between groups.
-	var cluster_count: int = clampi(int(ceil(float(cloud_count) / 3.0)), 1, 5)
+	# Many compact cluster centres create dense weather regions while keeping
+	# distinct open gaps between neighbouring groups.
+	var cluster_count: int = clampi(int(ceil(float(cloud_count) / 4.0)), 2, 11)
 	var cluster_centers: Array[Vector2] = []
 	for _cluster_index in range(cluster_count):
 		cluster_centers.append(Vector2(
-			rng.randf_range(0.10, 0.90) * CELL_SIZE_M,
-			rng.randf_range(0.10, 0.90) * CELL_SIZE_M
+			rng.randf_range(0.08, 0.92) * CELL_SIZE_M,
+			rng.randf_range(0.08, 0.92) * CELL_SIZE_M
 		))
 
 	var result: Array[Dictionary] = []
@@ -87,7 +100,7 @@ func generate_cell(cell: Vector2i, coverage: float, seed: int = DEFAULT_SEED) ->
 		var profile: Dictionary = _pick_profile(rng.randf())
 		var center: Vector2 = cluster_centers[cloud_index % cluster_centers.size()]
 		var angle: float = rng.randf_range(0.0, TAU)
-		var radius: float = sqrt(rng.randf()) * CELL_SIZE_M * 0.14
+		var radius: float = sqrt(rng.randf()) * CELL_SIZE_M * 0.10
 		var local: Vector2 = center + Vector2(cos(angle), sin(angle)) * radius
 		local.x = fposmod(local.x, CELL_SIZE_M)
 		local.y = fposmod(local.y, CELL_SIZE_M)
@@ -126,6 +139,8 @@ func profile_bounds(profile_name: String) -> Dictionary:
 		return MEDIUM_PROFILE
 	if profile_name == String(LARGE_PROFILE["name"]):
 		return LARGE_PROFILE
+	if profile_name == String(GIANT_PROFILE["name"]):
+		return GIANT_PROFILE
 	return {}
 
 func _pick_profile(value: float) -> Dictionary:
@@ -133,7 +148,9 @@ func _pick_profile(value: float) -> Dictionary:
 		return SMALL_PROFILE
 	if value < SMALL_PROFILE_WEIGHT + MEDIUM_PROFILE_WEIGHT:
 		return MEDIUM_PROFILE
-	return LARGE_PROFILE
+	if value < SMALL_PROFILE_WEIGHT + MEDIUM_PROFILE_WEIGHT + LARGE_PROFILE_WEIGHT:
+		return LARGE_PROFILE
+	return GIANT_PROFILE
 
 func _cell_seed(cell: Vector2i, seed: int) -> int:
 	var key := "%d:%d:%d" % [seed, cell.x, cell.y]
