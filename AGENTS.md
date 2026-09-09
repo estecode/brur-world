@@ -97,6 +97,7 @@ The workflow must remain resumable and fail closed. The project leader may forge
 Multiple agents or ChatGPT tabs may work on different issues concurrently.
 
 - Before starting tracked work, check GitHub for an existing active branch/PR or other clear implementation of the same issue. Do not accidentally create competing implementations for one issue.
+- Before recommending an issue as available, free, isolated, or suitable for new work, verify current GitHub state for that issue: check for an active issue branch, open PR, or other clear implementation already in progress. Issue-open state alone is never evidence that the issue is available. If implementation state is ambiguous or only partially visible, fail closed and treat the issue as occupied until resolved. Do not recommend it as new work.
 - Each concurrent issue uses its own isolated branch/worktree or equivalent isolated checkout. Never use the project leader's normal checkout as a shared branch-switching workspace for concurrent agent work.
 - Prefer dependencies to flow through `main`: merge the dependency, then refresh/revalidate the dependent PR. Do not create stacked branch chains by default.
 - Development and objective validation may run in parallel when their resources are independent. Interactive Godot checks that share local runtime resources should normally run one at a time unless safe isolation is explicitly known.
