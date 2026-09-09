@@ -33,7 +33,7 @@ func _test_main_scene_wiring() -> void:
 	var world_clock_runtime := scene.get_node_or_null("WorldClockRuntime")
 	var controller := scene.get_node_or_null("SunRuntimeController")
 	var legacy_toggle := scene.get_node_or_null("DebugOverlay/LegacyLightToggle") as CheckButton
-	var time_ui := scene.get_node_or_null("DebugOverlay/SunTimeOverride")
+	var time_ui := scene.get_node_or_null("DebugOverlay/SunTimeOverride") as Control
 	var override_toggle := scene.get_node_or_null("DebugOverlay/SunTimeOverride/OverrideToggle") as CheckButton
 	var hour_input := scene.get_node_or_null("DebugOverlay/SunTimeOverride/TimeRow/Hour") as SpinBox
 	_assert(legacy != null, "legacy DirectionalLight3D remains in the game scene")
@@ -44,6 +44,8 @@ func _test_main_scene_wiring() -> void:
 	_assert(controller != null and controller.world_clock_path == NodePath("../WorldClockRuntime"), "sun controller explicitly consumes WorldClockRuntime")
 	_assert(legacy_toggle != null and not legacy_toggle.button_pressed, "legacy light toggle exists and starts off")
 	_assert(time_ui != null, "sun time override UI exists")
+	_assert(time_ui != null and is_equal_approx(time_ui.anchor_top, 1.0) and is_equal_approx(time_ui.anchor_bottom, 1.0), "sun time override is anchored to the bottom edge away from top debug/GPS panels")
+	_assert(time_ui != null and time_ui.offset_top < 0.0 and time_ui.offset_bottom < 0.0, "sun time override stays inside the bottom viewport edge")
 	_assert(override_toggle != null and not override_toggle.button_pressed, "sun time override starts disabled")
 	_assert(hour_input != null and not hour_input.editable, "sun time inputs start locked while WorldClock is authoritative")
 	scene.free()
