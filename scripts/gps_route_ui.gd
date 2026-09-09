@@ -5,12 +5,15 @@ extends CanvasLayer
 ##
 ## Dependencies:
 ## - Emits user intent only; route-plan state remains in GpsRouteModel.
+## - overlay_window_header.gd owns presentation-only layout/collapse behavior.
 ## - Has no TCP, rendering, search-ranking or routing dependency.
 
 signal preference_selected(preference: String)
 signal remove_waypoint_requested(index: int)
 signal clear_waypoints_requested
 
+const OverlayLayoutScript = preload("res://scripts/overlay_layout.gd")
+const OverlayWindowHeaderScript = preload("res://scripts/overlay_window_header.gd")
 const ROUTING_PREFERENCE_IDS: Array[String] = [
 	"fastest",
 	"shortest",
@@ -64,11 +67,7 @@ func _build_ui() -> void:
 		return
 	layer = 50
 	var panel := PanelContainer.new()
-	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	panel.offset_left = -520.0
-	panel.offset_top = 14.0
-	panel.offset_right = -14.0
-	panel.offset_bottom = 250.0
+	panel.name = "Panel"
 	add_child(panel)
 	var content := VBoxContainer.new()
 	panel.add_child(content)
@@ -105,6 +104,15 @@ func _build_ui() -> void:
 	_clear_waypoints_button.pressed.connect(_on_clear_waypoints_pressed)
 	buttons.add_child(_clear_waypoints_button)
 	set_waypoints([])
+
+	var header := Button.new()
+	header.name = "WindowHeader"
+	header.set_script(OverlayWindowHeaderScript)
+	header.set("target_path", NodePath("../Panel"))
+	header.set("title_text", "GPS / ROUTE")
+	header.set("slot", OverlayLayoutScript.Slot.BOTTOM_RIGHT)
+	header.set("panel_width", 506.0)
+	add_child(header)
 
 func _ensure_ui() -> void:
 	if _status_label == null:
