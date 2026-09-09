@@ -117,8 +117,15 @@ rebuild_routing_dataset() {
   "$PYTHON_BIN" "$TMP/tools/build_routing_dataset.py" "$pbf" --output "$WORLD_DATA"
 }
 
+route_geometry_check_needed() {
+  git -C "$TMP" diff --name-only "$PR_BASE_SHA...HEAD" | grep -Eq '^((native/gps_route[^/]*\.(cpp|h))|(tools/(build_routing(_dataset)?|build_sweden|check_route_geometry_dataset|compressed_routing|route_geometry|routing_graph[^/]*|world_common)\.py))$'
+}
+
 printf 'PR_CHECK=PREPARE pr=%s\n' "$PR"
 ensure_runtime_ports_free
+# Fetch main separately so scope checks compare the exact PR head with the current remote base.
+git -C "$ROOT" fetch --quiet origin main
+PR_BASE_SHA="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
 git -C "$ROOT" fetch --quiet origin "pull/${PR}/head"
 git -C "$ROOT" worktree add --quiet --detach "$TMP" FETCH_HEAD
 ADDED=1
@@ -136,12 +143,16 @@ if [[ -f "$TMP/tools/build_native_gps.sh" ]]; then
 fi
 
 if [[ -f "$TMP/tools/check_route_geometry_dataset.py" ]]; then
-  printf 'PR_CHECK=CHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
-  if ! "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"; then
-    printf 'PR_CHECK=ROUTE_GEOMETRY_INVALID pr=%s rebuilding source-aligned routing dataset\n' "$PR"
-    rebuild_routing_dataset
-    printf 'PR_CHECK=RECHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
-    "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"
+  if route_geometry_check_needed; then
+    printf 'PR_CHECK=CHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
+    if ! "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"; then
+      printf 'PR_CHECK=ROUTE_GEOMETRY_INVALID pr=%s rebuilding source-aligned routing dataset\n' "$PR"
+      rebuild_routing_dataset
+      printf 'PR_CHECK=RECHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
+      "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"
+    fi
+  else
+    printf 'PR_CHECK=SKIP_ROUTE_GEOMETRY_DATASET pr=%s reason=unrelated_changes\n' "$PR"
   fi
 fi
 
