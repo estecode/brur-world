@@ -92,6 +92,12 @@ GitHub is the persistent source of truth for project state. Chat sessions are di
 
 The workflow must remain resumable and fail closed. The project leader may forget, delay, repeat, or miss a handoff without risking correctness, local work, or merge safety. Missing or ambiguous approval means wait; never infer that a test passed or that a merge was approved.
 
+### Agent-owned continuation
+
+When the next step is agent-owned, do not hand control back merely by describing future work. Continue and perform that work in the same active session whenever the available tools and current task allow it. A statement such as "I will investigate/fix/check this next" must not silently mean that the project leader is expected to send another message before anything happens.
+
+If execution genuinely cannot continue without a new user message, say so explicitly and state the exact message or action required. Never rely on a hidden convention such as the project leader knowing to type `fortsätt`. This rule does not imply background execution: if work cannot continue after the current response without an automation or a new message, do not claim or imply that it will.
+
 ### Parallel sessions and isolated work
 
 Multiple agents or ChatGPT tabs may work on different issues concurrently.
