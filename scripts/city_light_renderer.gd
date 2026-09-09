@@ -11,9 +11,9 @@ class_name CityLightRenderer
 const CityLightModelScript = preload("res://scripts/city_light_model.gd")
 const MAX_LIGHT_POINTS: int = 12000
 const POINTS_MAX_DISTANCE_M: float = 180000.0
-const POINT_DIAMETER_M: float = 190.0
-const POINT_HEIGHT_M: float = 120.0
-const GLOW_ALPHA: float = 0.42
+const POINT_DIAMETER_M: float = 120.0
+const POINT_HEIGHT_M: float = 80.0
+const GLOW_ALPHA: float = 0.68
 
 @export_node_path("Node") var sun_controller_path: NodePath
 @export_node_path("Node3D") var camera_rig_path: NodePath
@@ -129,14 +129,14 @@ func _create_render_resources() -> void:
 func _apply_material_intensity() -> void:
 	if _glow_material == null or _point_material == null:
 		return
-	var glow_color := Color(1.0, 0.58, 0.20, GLOW_ALPHA * _night_intensity)
+	var glow_color := Color(1.0, 0.48, 0.12, GLOW_ALPHA * _night_intensity)
 	_glow_material.albedo_color = glow_color
-	_glow_material.emission = Color(1.0, 0.42, 0.12)
-	_glow_material.emission_energy_multiplier = 1.65 * _night_intensity
-	var point_color := Color(1.0, 0.72, 0.34, 0.92 * _night_intensity)
+	_glow_material.emission = Color(1.0, 0.34, 0.08)
+	_glow_material.emission_energy_multiplier = 2.8 * _night_intensity
+	var point_color := Color(1.0, 0.78, 0.38, 0.96 * _night_intensity)
 	_point_material.albedo_color = point_color
-	_point_material.emission = Color(1.0, 0.56, 0.20)
-	_point_material.emission_energy_multiplier = 2.4 * _night_intensity
+	_point_material.emission = Color(1.0, 0.62, 0.18)
+	_point_material.emission_energy_multiplier = 3.2 * _night_intensity
 
 func _update_visibility() -> void:
 	if _glow_instance == null or _points_instance == null:
