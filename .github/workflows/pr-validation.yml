@@ -26,6 +26,9 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -r requirements.txt
 
+      - name: Run traffic signal compiler tests
+        run: python -m unittest tests.test_traffic_signals
+
       - name: Install Godot 4 headless runtime
         shell: bash
         run: |
