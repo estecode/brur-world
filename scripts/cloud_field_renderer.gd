@@ -8,7 +8,7 @@ extends MultiMeshInstance3D
 ## - Uses normal Godot scene lighting, so #66 can move the shared sun without cloud astronomy.
 
 const CloudFieldModelScript = preload("res://scripts/cloud_field_model.gd")
-const MAX_PUFF_INSTANCES: int = 2200
+const MAX_PUFF_INSTANCES: int = 4800
 const DEFAULT_COVERAGE: float = 0.64
 const INSIDE_FADE_MIN_ALPHA: float = 0.10
 const INSIDE_FADE_START: float = 1.30
@@ -220,8 +220,8 @@ func _cell_radius_for_lod(lod: int) -> int:
 func _puffs_per_cloud_for_lod(lod: int) -> int:
 	match lod:
 		0:
-			# At Sweden overview scale, silhouette/size carries the cloud shape.
-			# Three puffs lets the fixed GPU budget show many more distinct groups.
+			# Sweden overview keeps three-puff silhouettes while a larger single
+			# MultiMesh budget carries roughly three times as many formations.
 			return 3
 		1:
 			return 6
