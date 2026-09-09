@@ -76,10 +76,9 @@ func _physics_process(_delta: float) -> void:
 	if vehicle == null or not has_route():
 		return
 	_update_progress()
-	if not enabled:
-		_monitor_manual_deviation()
-		return
-	_drive_route()
+	_monitor_deviation()
+	if enabled:
+		_drive_route()
 
 func _drive_route() -> void:
 	var current := vehicle.global_position
@@ -88,7 +87,6 @@ func _drive_route() -> void:
 	var target := _points[target_index]
 	var dx := target.x - current.x
 	var dz := target.z - current.z
-	var distance_m := sqrt(dx * dx + dz * dz)
 	var desired_heading := atan2(-dx, -dz)
 	var heading_error := wrapf(desired_heading - float(vehicle.call("heading_rad")), -PI, PI)
 	var max_steer_degrees: float = float(vehicle.get("max_steer_degrees"))
@@ -114,13 +112,9 @@ func _drive_route() -> void:
 
 func _update_progress() -> void:
 	while _target_index < _points.size() - 1:
-		var point := _points[_target_index]
-		if _flat_distance(vehicle.global_position, point) > waypoint_radius_m:
+		if _flat_distance(vehicle.global_position, _points[_target_index]) > waypoint_radius_m:
 			break
 		_target_index += 1
-	var forward := _forward_target_index()
-	if forward > _target_index:
-		_target_index = forward
 
 func _lookahead_index(distance_m: float) -> int:
 	var index := _target_index
@@ -140,9 +134,9 @@ func _forward_target_index() -> int:
 		return 0
 	var heading: float = float(vehicle.call("heading_rad"))
 	var forward := Vector2(-sin(heading), -cos(heading))
-	var best_index := clampi(_target_index, 0, _points.size() - 1)
+	var best_index := 0
 	var best_distance_sq := INF
-	for index in range(best_index, _points.size()):
+	for index in range(_points.size()):
 		var offset := Vector2(_points[index].x - vehicle.global_position.x, _points[index].z - vehicle.global_position.z)
 		if offset.length_squared() > 1.0 and offset.normalized().dot(forward) < -0.25:
 			continue
@@ -151,7 +145,7 @@ func _forward_target_index() -> int:
 			best_index = index
 	return mini(best_index + 1, _points.size() - 1)
 
-func _monitor_manual_deviation() -> void:
+func _monitor_deviation() -> void:
 	var distance := _distance_to_upcoming_route()
 	if distance > deviation_distance_m and not _deviation_reported:
 		_deviation_reported = true
