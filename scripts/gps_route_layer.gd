@@ -6,7 +6,8 @@ extends Node3D
 ## - GpsClient owns native process/TCP lifecycle and response delivery.
 ## - GpsRouteModel owns destination/waypoint/preference state.
 ## - GpsRouteRenderer/GpsRouteUi own GPS presentation; the player vehicle owns motion state/dynamics.
-## - Main exposes WorldCoordinates; CameraRig receives the player as an explicit follow target.
+## - Main exposes WorldCoordinates; RoadSurfaceQuery reads authoritative BRT1 world data for the player vehicle.
+## - CameraRig receives the player as an explicit follow target.
 
 signal teleport_state_changed(armed: bool)
 
@@ -16,6 +17,8 @@ const GpsProtocolScript = preload("res://scripts/gps_protocol.gd")
 const GpsRouteModelScript = preload("res://scripts/gps_route_model.gd")
 const GpsRouteRendererScript = preload("res://scripts/gps_route_renderer.gd")
 const GpsRouteUiScript = preload("res://scripts/gps_route_ui.gd")
+const RoadSurfaceQueryScript = preload("res://scripts/road_surface_query.gd")
+const WORLD_DIR := "res://world_data"
 const EARTH_RADIUS := 6378137.0
 const START_LON := 18.0686
 const START_LAT := 59.3293
@@ -34,6 +37,7 @@ var _camera_rig: Node3D
 var _camera: Camera3D
 var _player_controller: Node
 var _route_follower: Node
+var _road_surface_query = RoadSurfaceQueryScript.new()
 var _player_marker: MeshInstance3D
 var _follow_enabled := false
 var _teleport_armed := false
@@ -61,7 +65,7 @@ func _ready() -> void:
 	call_deferred("_finish_setup")
 func _process(delta: float) -> void:
 	if gps_client != null: gps_client.call("poll", delta)
-	_update_driving_input_mode(); _update_visual_height()
+	_update_player_surface(); _update_driving_input_mode(); _update_visual_height()
 func _input(event: InputEvent) -> void:
 	if _camera == null or player == null or not (event is InputEventMouseButton): return
 	var mouse_event := event as InputEventMouseButton
@@ -86,7 +90,7 @@ func set_teleport_armed(armed: bool) -> void:
 func is_teleport_armed() -> bool: return _teleport_armed
 func teleport_player_to_world(world_position: Vector3) -> bool:
 	if player == null or not world_position.is_finite(): return false
-	player.call("set_world_position", Vector3(world_position.x, player.global_position.y, world_position.z)); player.call("stop"); _update_visual_height(); return true
+	player.call("set_world_position", Vector3(world_position.x, player.global_position.y, world_position.z)); player.call("stop"); _update_player_surface(); _update_visual_height(); return true
 func set_destination(point: Vector2) -> bool:
 	if not point.is_finite(): return false
 	route_model.set_destination(point); request_current_plan(); return true
@@ -126,7 +130,7 @@ func _create_modules() -> void:
 	route_ui.call("set_preference", route_model.preference()); route_ui.call("set_follow_available", false); _refresh_waypoint_ui()
 func _finish_setup() -> void:
 	if _setup_started or _main == null or _camera_rig == null or _camera == null or gps_client == null: return
-	_setup_started = true; _spawn_player(); gps_client.call("start")
+	_setup_started = true; _road_surface_query.setup(WORLD_DIR, _world_coordinates()); _spawn_player(); gps_client.call("start")
 func _apply_input_command(command: Dictionary) -> void:
 	var point: Vector2 = command.get("point", Vector2(INF, INF)); var command_type := str(command.get("type", ""))
 	if command_type == GpsInputAdapterScript.COMMAND_WAYPOINT: add_waypoint(point)
@@ -191,7 +195,10 @@ func _spawn_player() -> void:
 	_player_controller = player.get_node_or_null("PlayerVehicleController"); _route_follower = player.get_node_or_null("VehicleRouteFollower")
 	if _player_controller != null: _player_controller.connect("manual_input_detected", _on_manual_vehicle_input)
 	if _camera_rig.has_method("set_follow_target"): _camera_rig.call("set_follow_target", player)
-	_create_player_marker(); _update_visual_height()
+	_update_player_surface(); _create_player_marker(); _update_visual_height()
+func _update_player_surface() -> void:
+	if player == null or not player.has_method("set_surface_kind"): return
+	player.call("set_surface_kind", _road_surface_query.surface_at(player.global_position))
 func _create_player_marker() -> void:
 	_player_marker = MeshInstance3D.new(); _player_marker.name = "PlayerDirectionMarker"
 	var mesh := PrismMesh.new(); mesh.size = Vector3(120.0, 20.0, 180.0); _player_marker.mesh = mesh
