@@ -55,7 +55,8 @@ func _apply_environment() -> void:
 	environment.ambient_light_energy = lerpf(DAY_AMBIENT_ENERGY, NIGHT_AMBIENT_ENERGY, night_factor)
 
 func _night_factor(elevation_deg: float) -> float:
-	return smoothstep(2.0, -8.0, elevation_deg)
+	var t := clampf((2.0 - elevation_deg) / 10.0, 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
 
 func _on_solar_state_changed(solar_state: Dictionary) -> void:
 	apply_solar_state(solar_state)
