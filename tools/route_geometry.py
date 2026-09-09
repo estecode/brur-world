@@ -1,7 +1,7 @@
 """Read and validate compact per-edge route geometry sidecars.
 
 Dependencies:
-- Pure Python and the standard library only.
+- Uses shared world projection conversion and routing graph distance semantics.
 - The offline routing compiler writes BRH1; tests and tooling may read it.
 - Runtime C++ has an equivalent read-only view in native/gps_route_geometry.h.
 """
@@ -15,12 +15,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from world_common import unproject
+
 
 MAGIC = b"BRH1"
 HEADER = struct.Struct("<4sII")
 EDGE_RECORD = struct.Struct("<IIB3x")
 POINT_RECORD = struct.Struct("<ff")
-EARTH_RADIUS = 6_378_137.0
 
 
 @dataclass(frozen=True)
@@ -88,18 +89,6 @@ def validate_route_geometry(path: Path, edge_count: int) -> tuple[int, int]:
     return written_edges, point_count
 
 
-def _mercator_latitude(y: float) -> float:
-    return math.degrees(2.0 * math.atan(math.exp(y / EARTH_RADIUS)) - math.pi / 2.0)
-
-
-def _ground_segment_length(a: tuple[float, float], b: tuple[float, float]) -> float:
-    """Convert a short Web-Mercator segment to approximate ground metres."""
-    dx = b[0] - a[0]
-    dy = b[1] - a[1]
-    midpoint_lat = _mercator_latitude((a[1] + b[1]) * 0.5)
-    return math.hypot(dx, dy) * math.cos(math.radians(midpoint_lat))
-
-
 def validate_route_geometry_alignment(
     graph_path: Path,
     geometry_path: Path,
@@ -119,6 +108,7 @@ def validate_route_geometry_alignment(
     from routing_graph import HEADER as GRAPH_HEADER
     from routing_graph import MAGIC as GRAPH_MAGIC
     from routing_graph import NODE_RECORD as GRAPH_NODE_RECORD
+    from routing_graph import geodesic_distance_m
 
     graph_path = Path(graph_path)
     geometry_path = Path(geometry_path)
@@ -204,11 +194,13 @@ def validate_route_geometry_alignment(
 
                 if not reversed_flag:
                     previous = stored_point(point_offset)
+                    previous_lonlat = unproject(*previous)
                     geometry_length_m = 0.0
                     for point_index in range(point_offset + 1, point_offset + point_count_for_edge):
                         current = stored_point(point_index)
-                        geometry_length_m += _ground_segment_length(previous, current)
-                        previous = current
+                        current_lonlat = unproject(*current)
+                        geometry_length_m += geodesic_distance_m(previous_lonlat, current_lonlat)
+                        previous_lonlat = current_lonlat
                     length_error = abs(geometry_length_m - edge_length_m)
                     max_length_error = max(max_length_error, length_error)
                     tolerance = max(
