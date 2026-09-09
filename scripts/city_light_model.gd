@@ -7,11 +7,11 @@ class_name CityLightModel
 ## - Consumes world-space urban triangle positions supplied by the world adapter.
 ## - Owns only presentation distribution and solar-elevation intensity policy.
 
-const LIGHT_CELL_SIZE_M: float = 1400.0
+const LIGHT_CELL_SIZE_M: float = 450.0
 const DAYLIGHT_OFF_ELEVATION_DEG: float = 0.5
 const FULL_NIGHT_ELEVATION_DEG: float = -6.0
-const DEFAULT_MAX_POINTS: int = 12000
-const LOCAL_POINTS_PER_CELL: int = 3
+const DEFAULT_MAX_POINTS: int = 60000
+const LOCAL_POINTS_PER_CELL: int = 8
 
 var _cell_points: Dictionary = {}
 
@@ -68,19 +68,22 @@ func _sample_cells(max_points: int) -> Array[Vector3]:
 	if max_points <= 0 or _cell_points.is_empty():
 		return []
 	var keys: Array = _cell_points.keys()
-	keys.sort()
+	keys.sort_custom(_compare_cell_hash)
 	var count := mini(max_points, keys.size())
 	var result: Array[Vector3] = []
 	result.resize(count)
-	if keys.size() <= max_points:
-		for index in range(keys.size()):
-			result[index] = _cell_points[keys[index]] as Vector3
-		return result
-	var step := float(keys.size()) / float(count)
 	for index in range(count):
-		var source_index := mini(keys.size() - 1, int(floor(float(index) * step)))
-		result[index] = _cell_points[keys[source_index]] as Vector3
+		result[index] = _cell_points[keys[index]] as Vector3
 	return result
+
+func _compare_cell_hash(a: Variant, b: Variant) -> bool:
+	return _stable_key_hash(String(a)) < _stable_key_hash(String(b))
+
+func _stable_key_hash(key: String) -> int:
+	var value: int = 2166136261
+	for byte in key.to_utf8_buffer():
+		value = int((value ^ int(byte)) * 16777619) & 0x7fffffff
+	return value
 
 func _deterministic_local_offset(center: Vector3, local_index: int) -> Vector3:
 	var cell_x := int(round(center.x / LIGHT_CELL_SIZE_M - 0.5))
@@ -88,5 +91,5 @@ func _deterministic_local_offset(center: Vector3, local_index: int) -> Vector3:
 	var seed := absi(cell_x * 73856093 + cell_z * 19349663 + local_index * 83492791)
 	var x_unit := float(seed % 997) / 996.0
 	var z_unit := float((int(seed / 997)) % 991) / 990.0
-	var spread := LIGHT_CELL_SIZE_M * 0.58
+	var spread := LIGHT_CELL_SIZE_M * 0.82
 	return Vector3((x_unit - 0.5) * spread, 0.0, (z_unit - 0.5) * spread)
