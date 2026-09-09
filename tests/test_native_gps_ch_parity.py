@@ -1,8 +1,8 @@
-"""Compare the portable C++ CH runtime against the exact Python CH reference.
+"""Compare the portable C++ BCH2 runtime against the exact Python CH reference.
 
 Dependencies:
 - Compiles native/gps_ch_runtime.cpp plus its file/CLI adapter.
-- Uses fixture-scale gps_ch + gps_bch builders only; no Sweden data or Godot.
+- Uses fixture-scale gps_ch + gps_bch2 builders only; no Sweden data or Godot.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from gps_bch import write_bch
+from gps_bch2 import weight_scale, write_bch2
 from gps_ch import CHGraphRouter, build_ch
 from gps_routing import EdgeCostPolicy, RoutingPreference
 from routing_graph import RoutingProfile, WayInput, build_graph
@@ -82,9 +82,10 @@ class NativeGpsChParityTests(unittest.TestCase):
             for preference in RoutingPreference:
                 policy = EdgeCostPolicy(preference)
                 index = build_ch(graph, RoutingProfile.NORMAL, policy)
-                bch_path = temp / f"{preference.value}.bch"
-                write_bch(index, bch_path)
+                bch_path = temp / f"{preference.value}.bch2"
+                write_bch2(index, bch_path)
                 reference = CHGraphRouter(graph, RoutingProfile.NORMAL, index)
+                tolerance = 8.0 / weight_scale(preference)
 
                 for start in range(len(graph.nodes)):
                     for target in range(len(graph.nodes)):
@@ -109,7 +110,7 @@ class NativeGpsChParityTests(unittest.TestCase):
                             if not expected.success:
                                 self.assertEqual(actual["failure"], "unreachable")
                                 continue
-                            self.assertAlmostEqual(actual["cost"], expected.cost, delta=1e-9)
+                            self.assertAlmostEqual(actual["cost"], expected.cost, delta=tolerance)
                             self.assertEqual(actual["edges"], [step.edge_index for step in expected.steps])
                             self.assertGreaterEqual(actual["settled"], 0)
                             self.assertGreaterEqual(actual["relaxed"], 0)
