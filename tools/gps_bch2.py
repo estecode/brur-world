@@ -30,8 +30,12 @@ PREFERENCE_CODE = {
 
 
 def weight_scale(preference: RoutingPreference) -> int:
-    """Return deterministic fixed-point units per policy cost unit."""
-    return 1_000 if preference == RoutingPreference.SHORTEST else 1_000_000
+    """Return deterministic fixed-point units per policy cost unit.
+
+    Millimetres cover more than 4,000 km and milliseconds cover more than
+    49 days in uint32, while keeping hot target+weight relaxation data at 8 bytes.
+    """
+    return 1_000
 
 
 def quantize_cost(cost: float, scale: int) -> int:
