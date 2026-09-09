@@ -1,0 +1,51 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://harness/sun/sun_harness.gd" id="1_harness"]
+
+[sub_resource type="Environment" id="Environment_sun"]
+background_mode = 1
+background_color = Color(0.11, 0.18, 0.28, 1)
+ambient_light_source = 3
+ambient_light_color = Color(0.35, 0.42, 0.52, 1)
+ambient_light_energy = 0.55
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ground"]
+size = Vector2(80, 80)
+
+[sub_resource type="BoxMesh" id="BoxMesh_marker"]
+size = Vector3(4, 12, 4)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial_ground"]
+albedo_color = Color(0.36, 0.42, 0.30, 1)
+
+[node name="SunHarness" type="Node3D"]
+script = ExtResource("1_harness")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_sun")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+shadow_enabled = true
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+mesh = SubResource("PlaneMesh_ground")
+material_override = SubResource("StandardMaterial_ground")
+
+[node name="Marker" type="MeshInstance3D" parent="."]
+position = Vector3(0, 6, 0)
+mesh = SubResource("BoxMesh_marker")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.92388, 0.382683, 0, -0.382683, 0.92388, 0, 24, 42)
+current = true
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="PanelContainer" type="PanelContainer" parent="CanvasLayer"]
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 520.0
+offset_bottom = 92.0
+
+[node name="Label" type="Label" parent="CanvasLayer/PanelContainer"]
+text = "SUN HARNESS"

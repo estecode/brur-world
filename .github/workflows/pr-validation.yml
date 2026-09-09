@@ -58,3 +58,6 @@ jobs:
 
       - name: Run objective camera altitude tests
         run: bash tools/test_camera_altitude.sh
+
+      - name: Run objective astronomical sun tests
+        run: bash tools/test_sun.sh

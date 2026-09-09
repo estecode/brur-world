@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -7,7 +7,10 @@
 [ext_resource path="res://scripts/gps_route_layer.gd" type="Script" id="5_gps"]
 [ext_resource path="res://scripts/gps_search_ui.gd" type="Script" id="6_search_ui"]
 [ext_resource path="res://scripts/gps_search_route_adapter.gd" type="Script" id="7_search_adapter"]
-[ext_resource path="res://scripts/camera_altitude_ui.gd" type="Script" id="8_altitude_ui"]
+[ext_resource path="res://scripts/sun_runtime_controller.gd" type="Script" id="8_sun_runtime"]
+[ext_resource path="res://scripts/world_clock_runtime.gd" type="Script" id="9_world_clock_runtime"]
+[ext_resource path="res://scripts/sun_debug_time_ui.gd" type="Script" id="10_sun_debug_time_ui"]
+[ext_resource path="res://scripts/camera_altitude_ui.gd" type="Script" id="11_altitude_ui"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -41,14 +44,32 @@ search_ui_path = NodePath("../GpsSearchUi")
 route_layer_path = NodePath("../GpsRouteLayer")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+visible = false
 rotation_degrees = Vector3(-60, -25, 0)
 shadow_enabled = false
+
+[node name="AstronomicalSun" type="DirectionalLight3D" parent="."]
+light_color = Color(1, 0.965, 0.9, 1)
+light_energy = 0.0
+shadow_enabled = false
+
+[node name="WorldClockRuntime" type="Node" parent="."]
+script = ExtResource("9_world_clock_runtime")
+
+[node name="SunRuntimeController" type="Node" parent="."]
+script = ExtResource("8_sun_runtime")
+world_clock_path = NodePath("../WorldClockRuntime")
+astronomical_light_path = NodePath("../AstronomicalSun")
+legacy_light_path = NodePath("../DirectionalLight3D")
+legacy_toggle_path = NodePath("../DebugOverlay/LegacyLightToggle")
+latitude_deg = 59.3293
+longitude_deg = 18.0686
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 
 [node name="CameraAltitudeUi" type="CanvasLayer" parent="."]
 layer = 20
-script = ExtResource("8_altitude_ui")
+script = ExtResource("11_altitude_ui")
 camera_rig_path = NodePath("../CameraRig")
 
 [node name="Panel" type="PanelContainer" parent="CameraAltitudeUi"]
@@ -77,3 +98,86 @@ offset_bottom = 156.0
 
 [node name="Label" type="Label" parent="DebugOverlay/Panel"]
 text = "BRUR WORLD DEBUG"
+
+[node name="LegacyLightToggle" type="CheckButton" parent="DebugOverlay"]
+offset_left = 14.0
+offset_top = 166.0
+offset_right = 210.0
+offset_bottom = 202.0
+text = "Old light"
+button_pressed = false
+
+[node name="SunTimeOverride" type="VBoxContainer" parent="DebugOverlay"]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 14.0
+offset_top = -92.0
+offset_right = 660.0
+offset_bottom = -14.0
+grow_vertical = 0
+script = ExtResource("10_sun_debug_time_ui")
+sun_controller_path = NodePath("../../SunRuntimeController")
+
+[node name="OverrideToggle" type="CheckButton" parent="DebugOverlay/SunTimeOverride"]
+layout_mode = 2
+text = "Override sun time (UTC)"
+button_pressed = false
+
+[node name="TimeRow" type="HBoxContainer" parent="DebugOverlay/SunTimeOverride"]
+layout_mode = 2
+
+[node name="Year" type="SpinBox" parent="DebugOverlay/SunTimeOverride/TimeRow"]
+custom_minimum_size = Vector2(112, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 9999.0
+value = 2026.0
+allow_greater = false
+allow_lesser = false
+prefix = "Y "
+editable = false
+
+[node name="Month" type="SpinBox" parent="DebugOverlay/SunTimeOverride/TimeRow"]
+custom_minimum_size = Vector2(88, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 12.0
+value = 6.0
+allow_greater = false
+allow_lesser = false
+prefix = "M "
+editable = false
+
+[node name="Day" type="SpinBox" parent="DebugOverlay/SunTimeOverride/TimeRow"]
+custom_minimum_size = Vector2(88, 0)
+layout_mode = 2
+min_value = 1.0
+max_value = 31.0
+value = 21.0
+allow_greater = false
+allow_lesser = false
+prefix = "D "
+editable = false
+
+[node name="Hour" type="SpinBox" parent="DebugOverlay/SunTimeOverride/TimeRow"]
+custom_minimum_size = Vector2(88, 0)
+layout_mode = 2
+min_value = 0.0
+max_value = 23.0
+value = 12.0
+allow_greater = false
+allow_lesser = false
+prefix = "H "
+editable = false
+
+[node name="Minute" type="SpinBox" parent="DebugOverlay/SunTimeOverride/TimeRow"]
+custom_minimum_size = Vector2(96, 0)
+layout_mode = 2
+min_value = 0.0
+max_value = 59.0
+value = 0.0
+allow_greater = false
+allow_lesser = false
+prefix = "Min "
+editable = false
