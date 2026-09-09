@@ -1,10 +1,16 @@
 extends Node3D
 
-# Continuous map-to-gameplay camera: high overview when zoomed out, cinematic drone view when zoomed in.
+## Drives the map camera from an explicit real-world altitude while preserving overview/gameplay framing.
+##
+## Dependencies:
+## - camera_altitude_model.gd owns deterministic altitude state and readout formatting.
+## - Camera3D presents the derived position/FOV; no world-coordinate, cloud, or weather logic lives here.
 
-@export var min_distance: float = 1500.0
-@export var max_distance: float = 1400000.0
-@export var start_distance: float = 800000.0
+const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.gd")
+
+@export var min_altitude_m: float = 1000.0
+@export var max_altitude_m: float = 1400000.0
+@export var start_altitude_m: float = 760000.0
 @export var move_speed_factor: float = 0.8
 
 # Zoomed-out Sweden overview.
@@ -16,18 +22,18 @@ extends Node3D
 @export var gameplay_fov: float = 52.0
 @export var gameplay_forward_look: float = 0.42
 
-# Camera starts blending toward gameplay below this distance and is fully there near min_distance.
-@export var gameplay_blend_start: float = 110000.0
+# Camera starts blending toward gameplay below this altitude and is fully there near min_altitude_m.
+@export var gameplay_blend_start_altitude_m: float = 105000.0
 
 var focus: Vector3 = Vector3.ZERO
-var distance: float = 800000.0
 var dragging: bool = false
 var last_mouse: Vector2 = Vector2.ZERO
+var altitude_model = null
 
 @onready var camera: Camera3D = $Camera3D
 
 func _ready() -> void:
-	distance = start_distance
+	altitude_model = CameraAltitudeModelScript.new(min_altitude_m, max_altitude_m, start_altitude_m)
 	_apply_camera()
 
 func _process(delta: float) -> void:
@@ -45,7 +51,7 @@ func _process(delta: float) -> void:
 		input.y += 1.0
 	if input.length_squared() > 0.0:
 		input = input.normalized()
-		var speed: float = maxf(250.0, distance * move_speed_factor)
+		var speed: float = maxf(250.0, get_distance() * move_speed_factor)
 		focus += Vector3(input.x, 0.0, input.y) * speed * delta
 		_apply_camera()
 
@@ -73,18 +79,17 @@ func _input(event: InputEvent) -> void:
 			_zoom_by(1.0 / magnify_event.factor, magnify_event.position)
 
 func _pan_pixels(delta_px: Vector2) -> void:
-	var meters_per_px: float = distance / 900.0
+	var meters_per_px: float = get_distance() / 900.0
 	focus += Vector3(-delta_px.x, 0.0, -delta_px.y) * meters_per_px
 	_apply_camera()
 
 func _zoom_by(factor: float, screen_position: Vector2) -> void:
-	# Keep the map point under the mouse/fingers anchored while zooming. First
-	# project the pointer onto the ground, apply the new camera distance, then
-	# compensate the logical focus by the movement of that same screen ray.
+	# Keep the map point under the mouse/fingers anchored while zooming. Altitude
+	# is the authoritative zoom value; camera boom distance is derived from it.
 	var before: Vector3 = _ground_point(screen_position)
-	var old_distance: float = distance
-	distance = clampf(distance * factor, min_distance, max_distance)
-	if is_equal_approx(distance, old_distance):
+	var old_altitude_m: float = get_altitude()
+	altitude_model.zoom_by(factor)
+	if is_equal_approx(get_altitude(), old_altitude_m):
 		return
 
 	_apply_camera()
@@ -111,19 +116,30 @@ func _ground_point(screen_position: Vector2) -> Vector3:
 	return ray_origin + ray_direction * t
 
 func _gameplay_blend() -> float:
-	if distance >= gameplay_blend_start:
+	var altitude_m: float = get_altitude()
+	if altitude_m >= gameplay_blend_start_altitude_m:
 		return 0.0
-	var raw: float = 1.0 - inverse_lerp(min_distance, gameplay_blend_start, distance)
+	var raw: float = 1.0 - inverse_lerp(min_altitude_m, gameplay_blend_start_altitude_m, altitude_m)
 	return raw * raw * (3.0 - 2.0 * raw)
+
+func _pitch_radians() -> float:
+	return deg_to_rad(lerpf(overview_pitch_degrees, gameplay_pitch_degrees, _gameplay_blend()))
+
+func _derived_distance() -> float:
+	var sine_pitch: float = sin(_pitch_radians())
+	if sine_pitch <= 0.000001:
+		return get_altitude()
+	return get_altitude() / sine_pitch
 
 func _apply_camera() -> void:
 	position = focus
 	var blend: float = _gameplay_blend()
 	var pitch_degrees: float = lerpf(overview_pitch_degrees, gameplay_pitch_degrees, blend)
 	var pitch: float = deg_to_rad(pitch_degrees)
+	var distance: float = _derived_distance()
 	camera.fov = lerpf(overview_fov, gameplay_fov, blend)
 
-	camera.position = Vector3(0.0, sin(pitch) * distance, cos(pitch) * distance)
+	camera.position = Vector3(0.0, get_altitude(), cos(pitch) * distance)
 	var forward_distance: float = distance * gameplay_forward_look * blend
 	var look_target: Vector3 = global_position + Vector3(0.0, 0.0, -forward_distance)
 	camera.look_at(look_target, Vector3.UP)
@@ -133,9 +149,9 @@ func _apply_camera() -> void:
 	# top screen corners can hit the map much farther away than camera distance.
 	camera.near = clampf(distance * 0.0025, 5.0, 2500.0)
 	var normal_far: float = maxf(25000.0, distance * 3.5)
-	camera.far = maxf(normal_far, _required_ground_far() * 1.12)
+	camera.far = maxf(normal_far, _required_ground_far(distance) * 1.12)
 
-func _required_ground_far() -> float:
+func _required_ground_far(distance: float) -> float:
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
 	if viewport_size.x <= 1.0 or viewport_size.y <= 1.0:
 		return distance * 3.5
@@ -183,13 +199,27 @@ func get_ground_view_corners() -> PackedVector3Array:
 		result.append(ray_origin + ray_direction * t)
 	return result
 
-func set_view(new_focus: Vector3, new_distance: float) -> void:
+func set_view_altitude(new_focus: Vector3, new_altitude_m: float) -> void:
 	focus = Vector3(new_focus.x, 0.0, new_focus.z)
-	distance = clampf(new_distance, min_distance, max_distance)
+	altitude_model.set_altitude(new_altitude_m)
+	_apply_camera()
+
+func set_altitude(new_altitude_m: float) -> void:
+	altitude_model.set_altitude(new_altitude_m)
 	_apply_camera()
 
 func get_focus_world() -> Vector3:
 	return focus
 
+func get_altitude() -> float:
+	if altitude_model == null:
+		return clampf(start_altitude_m, min_altitude_m, max_altitude_m)
+	return altitude_model.get_altitude()
+
+func format_altitude_readout() -> String:
+	if altitude_model == null:
+		return CameraAltitudeModelScript.format_altitude(get_altitude())
+	return altitude_model.format_readout()
+
 func get_distance() -> float:
-	return distance
+	return _derived_distance()
