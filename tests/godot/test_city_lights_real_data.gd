@@ -1,0 +1,111 @@
+extends SceneTree
+
+## Verifies production city-light composition against the local authoritative Sweden runtime dataset.
+## Dependencies: scenes/main.tscn, ignored world_data/manifest.json + background.brmap, production CityLightRenderer and CameraRig.
+
+const MIN_SWEDEN_SOURCE_CELLS: int = 250
+const GRID_SIZE_M: float = 450.0
+
+func _init() -> void:
+	call_deferred("_run")
+
+func _run() -> void:
+	_assert(FileAccess.file_exists("res://world_data/manifest.json"), "real-data manifest is available")
+	_assert(FileAccess.file_exists("res://world_data/background.brmap"), "real-data BRM2 background is available")
+
+	var scene := load("res://scenes/main.tscn") as PackedScene
+	_assert(scene != null, "production main scene loads")
+	var game := scene.instantiate()
+	root.add_child(game)
+	await process_frame
+	await process_frame
+
+	var city_lights := game.get_node_or_null("CityLights")
+	var camera_rig := game.get_node_or_null("CameraRig")
+	_assert(city_lights != null, "production composition created CityLights")
+	_assert(camera_rig != null, "production composition exposes CameraRig")
+	if city_lights == null or camera_rig == null:
+		quit(1)
+		return
+
+	city_lights.apply_solar_state({"valid": true, "elevation_deg": -8.0})
+	camera_rig.set_altitude(5000.0)
+	await process_frame
+
+	var stats: Dictionary = city_lights.get_render_stats()
+	var source_cells := int(stats.get("source_cell_count", 0))
+	var glow_count := int(stats.get("glow_count", 0))
+	var point_count := int(stats.get("point_count", 0))
+	var max_glow_count := int(stats.get("max_glow_count", 0))
+	var max_point_count := int(stats.get("max_point_count", 0))
+	_assert(source_cells >= MIN_SWEDEN_SOURCE_CELLS, "real Sweden urban data produces a substantial source-cell set")
+	_assert(glow_count == mini(source_cells, max_glow_count), "overview glow consumes the real source-cell set up to its explicit budget")
+	_assert(point_count == mini(source_cells * 8, max_point_count), "local lights consume the real source-cell set at the configured density")
+	_assert(point_count >= 2000, "real Sweden data produces thousands of local emissive lights")
+	_assert(bool(stats.get("points_visible", false)), "close real-data view shows local lights")
+	_assert(not bool(stats.get("glow_visible", true)), "close real-data view hides overview glow")
+
+	var points := city_lights.get_node_or_null("LocalLightPoints") as MultiMeshInstance3D
+	_assert(points != null and points.multimesh != null, "real-data local lights use the production MultiMesh")
+	if points != null and points.multimesh != null and points.multimesh.instance_count > 0:
+		var first_transform := points.multimesh.get_instance_transform(0)
+		var first_scale := first_transform.basis.get_scale()
+		_assert(first_scale.x <= 30.0 and first_scale.z <= 30.0, "close real-data light points remain small at ground scale")
+		_assert(_has_irregular_cell_offsets(points.multimesh), "real-data lights do not collapse onto a visible regular sampling grid")
+		_assert(_has_large_geographic_span(points.multimesh), "sampled real-data lights span a broad Sweden-sized area")
+
+		camera_rig.set_altitude(170000.0)
+		await process_frame
+		stats = city_lights.get_render_stats()
+		_assert(bool(stats.get("glow_visible", false)) and bool(stats.get("points_visible", false)), "mid-distance real-data view blends overview and local LODs")
+		_assert(points.multimesh.get_instance_transform(0).origin.is_equal_approx(first_transform.origin), "real-data camera LOD leaves physical light positions unchanged")
+
+		camera_rig.set_altitude(400000.0)
+		await process_frame
+		stats = city_lights.get_render_stats()
+		_assert(bool(stats.get("glow_visible", false)), "far real-data view keeps overview glow")
+		_assert(not bool(stats.get("points_visible", true)), "far real-data view hides local points")
+		_assert(points.multimesh.get_instance_transform(0).origin.is_equal_approx(first_transform.origin), "far real-data LOD still leaves physical light positions unchanged")
+
+	city_lights.apply_solar_state({"valid": true, "elevation_deg": 8.0})
+	await process_frame
+	stats = city_lights.get_render_stats()
+	_assert(not bool(stats.get("glow_visible", true)) and not bool(stats.get("points_visible", true)), "daylight removes real-data nighttime presentation")
+
+	print("godot city light real-data tests: OK | source_cells=%d glow=%d points=%d" % [source_cells, glow_count, point_count])
+	game.queue_free()
+	await process_frame
+	quit(0)
+
+func _has_irregular_cell_offsets(multimesh: MultiMesh) -> bool:
+	var seen: Dictionary = {}
+	var sample_count := mini(multimesh.instance_count, 512)
+	for index in range(sample_count):
+		var origin := multimesh.get_instance_transform(index).origin
+		var x_mod := fposmod(origin.x, GRID_SIZE_M)
+		var z_mod := fposmod(origin.z, GRID_SIZE_M)
+		var key := "%d:%d" % [int(floor(x_mod / 25.0)), int(floor(z_mod / 25.0))]
+		seen[key] = true
+	return seen.size() >= 24
+
+func _has_large_geographic_span(multimesh: MultiMesh) -> bool:
+	var sample_count := mini(multimesh.instance_count, 1024)
+	if sample_count < 2:
+		return false
+	var min_x := INF
+	var max_x := -INF
+	var min_z := INF
+	var max_z := -INF
+	for index in range(sample_count):
+		var origin := multimesh.get_instance_transform(index).origin
+		min_x = minf(min_x, origin.x)
+		max_x = maxf(max_x, origin.x)
+		min_z = minf(min_z, origin.z)
+		max_z = maxf(max_z, origin.z)
+	return (max_x - min_x) >= 100000.0 and (max_z - min_z) >= 100000.0
+
+func _assert(condition: bool, message: String) -> void:
+	if condition:
+		return
+	push_error("city light real-data test failed: " + message)
+	quit(1)
