@@ -161,7 +161,7 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 
 	var puffs_per_cloudlet: int = maxi(1, int(ceil(float(puff_count) / float(cloudlet_count))))
 	for puff_index in range(puff_count):
-		var cloudlet_index: int = mini(cloudlet_count - 1, puff_index / puffs_per_cloudlet)
+		var cloudlet_index: int = mini(cloudlet_count - 1, int(puff_index / puffs_per_cloudlet))
 		var local_index: int = puff_index % puffs_per_cloudlet
 		var cloudlet_center: Vector3 = cloudlet_centers[cloudlet_index]
 		var is_core: bool = local_index == 0
