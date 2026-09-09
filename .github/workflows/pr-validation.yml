@@ -53,5 +53,8 @@ jobs:
       - name: Run objective music playback tests
         run: bash tools/test_music.sh
 
+      - name: Run objective world clock tests
+        run: bash tools/test_world_clock.sh
+
       - name: Run objective camera altitude tests
         run: bash tools/test_camera_altitude.sh
