@@ -1,11 +1,12 @@
 extends Node
 class_name SunRuntimeController
 
-## Drives the game's astronomical sun from an explicit or temporary system-time source and controls the optional legacy light.
-## Dependencies: sun_light_adapter.gd plus explicitly configured DirectionalLight3D/Button scene nodes; WorldClock can replace the fallback time source later.
+## Drives the game's astronomical sun from the authoritative WorldClock and controls the optional legacy light.
+## Dependencies: sun_light_adapter.gd plus explicitly configured WorldClockRuntime, DirectionalLight3D, and Button scene nodes.
 
 const SunLightAdapterScript = preload("res://scripts/sun_light_adapter.gd")
 
+@export_node_path("Node") var world_clock_path: NodePath
 @export_node_path("DirectionalLight3D") var astronomical_light_path: NodePath
 @export_node_path("DirectionalLight3D") var legacy_light_path: NodePath
 @export_node_path("BaseButton") var legacy_toggle_path: NodePath
@@ -14,6 +15,7 @@ const SunLightAdapterScript = preload("res://scripts/sun_light_adapter.gd")
 @export_range(0.1, 60.0, 0.1) var update_interval_seconds := 1.0
 
 var _adapter = SunLightAdapterScript.new()
+var _world_clock_runtime: Node
 var _astronomical_light: DirectionalLight3D
 var _legacy_light: DirectionalLight3D
 var _legacy_toggle: BaseButton
@@ -21,11 +23,16 @@ var _time_source: Callable
 var _elapsed_seconds := 0.0
 
 func _ready() -> void:
+	_world_clock_runtime = get_node_or_null(world_clock_path)
 	_astronomical_light = get_node_or_null(astronomical_light_path) as DirectionalLight3D
 	_legacy_light = get_node_or_null(legacy_light_path) as DirectionalLight3D
 	_legacy_toggle = get_node_or_null(legacy_toggle_path) as BaseButton
 	if _astronomical_light == null:
 		push_error("SunRuntimeController requires an astronomical DirectionalLight3D")
+		set_process(false)
+		return
+	if not _time_source.is_valid() and (_world_clock_runtime == null or not _world_clock_runtime.has_method("get_utc_snapshot")):
+		push_error("SunRuntimeController requires WorldClockRuntime or an explicit time source")
 		set_process(false)
 		return
 	_adapter.setup(_astronomical_light)
@@ -60,22 +67,18 @@ func legacy_light_enabled() -> bool:
 func refresh_now() -> Dictionary:
 	if _astronomical_light == null:
 		return {"valid": false}
-	return _adapter.apply_time_snapshot(_read_time_snapshot(), latitude_deg, longitude_deg)
+	var snapshot := _read_time_snapshot()
+	if not bool(snapshot.get("valid", true)):
+		return {"valid": false}
+	return _adapter.apply_time_snapshot(snapshot, latitude_deg, longitude_deg)
 
 func _read_time_snapshot() -> Dictionary:
 	if _time_source.is_valid():
 		var supplied: Variant = _time_source.call()
 		if supplied is Dictionary:
 			return supplied as Dictionary
-	# Temporary pre-WorldClock bridge; #31 will provide the authoritative game-time snapshot.
-	var local_time: Dictionary = Time.get_datetime_dict_from_system()
-	var time_zone: Dictionary = Time.get_time_zone_from_system()
-	return {
-		"year": int(local_time.get("year", 0)),
-		"month": int(local_time.get("month", 0)),
-		"day": int(local_time.get("day", 0)),
-		"hour": int(local_time.get("hour", 0)),
-		"minute": int(local_time.get("minute", 0)),
-		"second": int(local_time.get("second", 0)),
-		"utc_offset_hours": float(time_zone.get("bias", 0)) / 60.0,
-	}
+	if _world_clock_runtime != null and _world_clock_runtime.has_method("get_utc_snapshot"):
+		var supplied: Variant = _world_clock_runtime.call("get_utc_snapshot")
+		if supplied is Dictionary:
+			return supplied as Dictionary
+	return {"valid": false}
