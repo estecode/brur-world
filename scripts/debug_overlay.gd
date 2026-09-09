@@ -8,7 +8,7 @@ extends CanvasLayer
 
 const PERF_LOG_PATH: String = "user://brur_performance.log"
 const LUND_FOCUS: Vector3 = Vector3(-489086.0, 0.0, 1582123.0)
-const LUND_DISTANCE: float = 12472.0
+const LUND_ALTITUDE_M: float = 9000.0
 
 @onready var main: Node = get_parent()
 @onready var camera_rig: Node = main.get_node("CameraRig")
@@ -60,7 +60,7 @@ func _read_build_id() -> String:
 func _create_lund_button() -> void:
 	var button: Button = Button.new()
 	button.text = "Lund"
-	button.tooltip_text = "Focus Lund at the saved gameplay zoom"
+	button.tooltip_text = "Focus Lund at the saved gameplay altitude"
 	button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	button.position = Vector2(-124.0, 14.0)
 	button.custom_minimum_size = Vector2(110.0, 34.0)
@@ -68,7 +68,7 @@ func _create_lund_button() -> void:
 	add_child(button)
 
 func _focus_lund() -> void:
-	camera_rig.call("set_view", LUND_FOCUS, LUND_DISTANCE)
+	camera_rig.call("set_view_altitude", LUND_FOCUS, LUND_ALTITUDE_M)
 
 func _open_perf_log() -> void:
 	if FileAccess.file_exists(PERF_LOG_PATH):
