@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs deterministic persistent-overlay structure, layout, collapse/restore, and Lund-control contracts.
+# Runs deterministic persistent-overlay structure, layout, collapse/restore, Lund-control, and debug-log contracts.
 # Dependencies: Godot 4 (GODOT_BIN can override the default executable lookup).
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,5 +43,6 @@ run_test() {
 
 run_test "tests/godot/test_ui_overlays.gd" "godot UI overlay tests: OK"
 run_test "tests/godot/test_lund_layout.gd" "godot Lund layout tests: OK"
+run_test "tests/godot/test_debug_overlay_perf_log.gd" "godot debug overlay performance log tests: OK"
 
 echo "UI overlay automated tests: OK"
