@@ -17,6 +17,9 @@ func _run() -> void:
 	_test_teleport_is_explicit_and_preserves_vehicle_identity()
 	_test_map_controls_ui_builds_headlessly()
 	_test_camera_mode_and_follow_contract()
+	_test_drive_camera_follows_heading_without_mutating_vehicle()
+	_test_drive_zoom_contract()
+	_test_mode_transition_contract()
 	_test_player_steering_direction_contract()
 	_test_main_scene_control_wiring()
 	print("godot map-controls tests: OK")
@@ -71,12 +74,17 @@ func _test_map_controls_ui_builds_headlessly() -> void:
 	_assert(not labels.has("Lund"), "map controls do not duplicate the existing Lund debug control")
 	controls.free()
 
-func _test_camera_mode_and_follow_contract() -> void:
+func _new_rig() -> Node3D:
 	var rig := CameraControllerScript.new() as Node3D
 	var camera := Camera3D.new()
 	camera.name = "Camera3D"
 	rig.add_child(camera)
 	get_root().add_child(rig)
+	return rig
+
+func _test_camera_mode_and_follow_contract() -> void:
+	var rig := _new_rig()
+	rig.set("mode_transition_seconds", 0.0)
 	var target := Node3D.new()
 	target.position = Vector3(120.0, 0.0, -80.0)
 	get_root().add_child(target)
@@ -92,6 +100,64 @@ func _test_camera_mode_and_follow_contract() -> void:
 	_assert(bool(rig.call("is_driving_view")), "Drive mode is explicit and not inferred from camera altitude")
 	rig.call("set_drive_mode", false)
 	_assert(not bool(rig.call("is_driving_view")), "camera returns explicitly to Map mode")
+	target.free()
+	rig.free()
+
+func _test_drive_camera_follows_heading_without_mutating_vehicle() -> void:
+	var rig := _new_rig()
+	rig.set("mode_transition_seconds", 0.0)
+	var camera := rig.get_node("Camera3D") as Camera3D
+	var player_scene := load("res://scenes/player_vehicle.tscn") as PackedScene
+	var player := player_scene.instantiate() as Node3D
+	get_root().add_child(player)
+	player.call("set_world_position", Vector3(25.0, 28.0, 40.0))
+	player.call("set_motion_state", 11.0, PI * 0.5)
+	var before_position := player.global_position
+	var before_heading := float(player.call("heading_rad"))
+	var before_speed := float(player.call("speed_mps"))
+	var before_owner := int(player.call("control_owner"))
+	rig.call("set_follow_target", player)
+	rig.call("set_drive_mode", true)
+	var forward := Vector3(-sin(before_heading), 0.0, -cos(before_heading)).normalized()
+	var relative_camera := camera.global_position - player.global_position
+	var camera_forward := -camera.global_transform.basis.z
+	_assert(relative_camera.dot(forward) < 0.0, "Drive camera is positioned behind the vehicle heading")
+	_assert(relative_camera.y >= float(rig.get("drive_height_m")) - 0.001, "Drive camera keeps configured clearance above the elevated route/player surface")
+	_assert(camera_forward.dot(forward) > 0.5, "Drive camera looks primarily along the vehicle driving direction")
+	_assert(camera_forward.y < -0.05, "Drive camera looks down toward the road instead of under the world")
+	_assert(_approx(player.global_position.x, before_position.x) and _approx(player.global_position.y, before_position.y) and _approx(player.global_position.z, before_position.z), "switching to Drive does not move the vehicle")
+	_assert(_approx(float(player.call("heading_rad")), before_heading), "switching to Drive does not change vehicle heading")
+	_assert(_approx(float(player.call("speed_mps")), before_speed), "switching to Drive does not change vehicle speed")
+	_assert(int(player.call("control_owner")) == before_owner, "switching to Drive does not change control ownership")
+	player.free()
+	rig.free()
+
+func _test_drive_zoom_contract() -> void:
+	var rig := _new_rig()
+	rig.set("mode_transition_seconds", 0.0)
+	var target := Node3D.new()
+	get_root().add_child(target)
+	rig.call("set_follow_target", target)
+	rig.call("set_drive_mode", true)
+	var initial := float(rig.call("get_drive_distance"))
+	rig.call("_zoom_by", 1.0 / 0.78, Vector2.ZERO)
+	_assert(float(rig.call("get_drive_distance")) > initial, "Drive mode allows wheel zooming out")
+	for _i in range(20): rig.call("_zoom_by", 1.0 / 0.78, Vector2.ZERO)
+	_assert(float(rig.call("get_drive_distance")) <= float(rig.get("drive_max_distance_m")) + 0.001, "Drive zoom remains bounded")
+	target.free()
+	rig.free()
+
+func _test_mode_transition_contract() -> void:
+	var rig := _new_rig()
+	var target := Node3D.new()
+	get_root().add_child(target)
+	rig.call("set_follow_target", target)
+	rig.call("set_drive_mode", true)
+	_assert(bool(rig.call("is_mode_transition_active")), "Map to Drive starts a smooth camera transition")
+	rig.call("_process", 1.0)
+	_assert(not bool(rig.call("is_mode_transition_active")), "camera transition completes after its configured duration")
+	rig.call("set_drive_mode", false)
+	_assert(bool(rig.call("is_mode_transition_active")), "Drive to Map starts a smooth camera transition")
 	target.free()
 	rig.free()
 
