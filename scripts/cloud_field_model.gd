@@ -12,6 +12,7 @@ const DEFAULT_SEED: int = 700031
 const SMALL_PROFILE_WEIGHT: float = 0.54
 const MEDIUM_PROFILE_WEIGHT: float = 0.30
 const LARGE_PROFILE_WEIGHT: float = 0.14
+const GIANT_PROFILE_WEIGHT: float = 0.015
 
 const SMALL_PROFILE := {
 	"name": "small_cumulus",
@@ -63,6 +64,22 @@ const GIANT_PROFILE := {
 	"speed_min_mps": 11.0,
 	"speed_max_mps": 20.0,
 	"heading_degrees": 84.0,
+}
+
+# Very rare synoptic-scale cloud systems. Their horizontal footprint can span
+# much of Sweden, but presentation deliberately composes them from bounded
+# local cloud lobes instead of scaling a single puff to this size.
+const CONTINENTAL_PROFILE := {
+	"name": "continental_cloud_bank",
+	"size_min_m": 220000.0,
+	"size_max_m": 880000.0,
+	"thickness_min_m": 5000.0,
+	"thickness_max_m": 14000.0,
+	"altitude_min_m_asl": 5000.0,
+	"altitude_max_m_asl": 11000.0,
+	"speed_min_mps": 14.0,
+	"speed_max_mps": 28.0,
+	"heading_degrees": 88.0,
 }
 
 func normalized_coverage(coverage: float) -> float:
@@ -141,6 +158,8 @@ func profile_bounds(profile_name: String) -> Dictionary:
 		return LARGE_PROFILE
 	if profile_name == String(GIANT_PROFILE["name"]):
 		return GIANT_PROFILE
+	if profile_name == String(CONTINENTAL_PROFILE["name"]):
+		return CONTINENTAL_PROFILE
 	return {}
 
 func _pick_profile(value: float) -> Dictionary:
@@ -150,7 +169,9 @@ func _pick_profile(value: float) -> Dictionary:
 		return MEDIUM_PROFILE
 	if value < SMALL_PROFILE_WEIGHT + MEDIUM_PROFILE_WEIGHT + LARGE_PROFILE_WEIGHT:
 		return LARGE_PROFILE
-	return GIANT_PROFILE
+	if value < SMALL_PROFILE_WEIGHT + MEDIUM_PROFILE_WEIGHT + LARGE_PROFILE_WEIGHT + GIANT_PROFILE_WEIGHT:
+		return GIANT_PROFILE
+	return CONTINENTAL_PROFILE
 
 func _cell_seed(cell: Vector2i, seed: int) -> int:
 	var key := "%d:%d:%d" % [seed, cell.x, cell.y]
