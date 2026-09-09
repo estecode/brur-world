@@ -137,6 +137,11 @@ fi
 rm -rf "$TMP/world_data"
 ln -s "$WORLD_DATA" "$TMP/world_data"
 
+if [[ -f "$TMP/tools/test_city_lights_real_data.sh" ]]; then
+  printf 'PR_CHECK=CHECK_CITY_LIGHTS_REAL_DATA pr=%s\n' "$PR"
+  GODOT_BIN="$GODOT" bash "$TMP/tools/test_city_lights_real_data.sh"
+fi
+
 if [[ -f "$TMP/tools/build_native_gps.sh" ]]; then
   printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s\n' "$PR"
   bash "$TMP/tools/build_native_gps.sh"
