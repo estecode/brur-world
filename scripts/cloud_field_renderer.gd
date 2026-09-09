@@ -1,6 +1,6 @@
 extends MultiMeshInstance3D
 
-## Renders deterministic cloud state as one lightweight MultiMesh of 3D puffs.
+## Renders deterministic cloud state as one lightweight MultiMesh of bounded 3D puffs.
 ##
 ## Dependencies:
 ## - Consumes cloud_field_model.gd output.
@@ -8,10 +8,12 @@ extends MultiMeshInstance3D
 ## - Uses normal Godot scene lighting, so #66 can move the shared sun without cloud astronomy.
 
 const CloudFieldModelScript = preload("res://scripts/cloud_field_model.gd")
-const MAX_PUFF_INSTANCES: int = 4800
+const MAX_PUFF_INSTANCES: int = 7200
 const DEFAULT_COVERAGE: float = 0.64
 const INSIDE_FADE_MIN_ALPHA: float = 0.10
 const INSIDE_FADE_START: float = 1.30
+const MAX_LOCAL_PUFF_WIDTH_M: float = 36000.0
+const MAX_PUFF_ASPECT: float = 3.2
 
 @export_range(0.0, 1.0, 0.01) var coverage: float = DEFAULT_COVERAGE
 @export var field_seed: int = 700031
@@ -27,6 +29,8 @@ var _last_cell := Vector2i(2147483647, 2147483647)
 var _last_lod: int = -1
 var _resources_ready: bool = false
 var _faded_puff_count: int = 0
+var _max_puff_width_m: float = 0.0
+var _max_formation_size_m: float = 0.0
 
 func _ready() -> void:
 	_create_render_resources()
@@ -66,6 +70,8 @@ func get_render_stats() -> Dictionary:
 		"faded_puff_count": _faded_puff_count,
 		"lod": _lod_for_distance(_camera_distance_m),
 		"coverage": coverage,
+		"max_puff_width_m": _max_puff_width_m,
+		"max_formation_size_m": _max_formation_size_m,
 	}
 
 func _create_render_resources() -> void:
@@ -75,9 +81,6 @@ func _create_render_resources() -> void:
 	puff_mesh.radial_segments = 8
 	puff_mesh.rings = 4
 
-	# Keep cloud lighting deliberately conventional: the same DirectionalLight3D
-	# used by the world lights the puff normals. Per-instance vertex color only
-	# changes opacity for camera-inside fading; it does not own any sun logic.
 	var material := StandardMaterial3D.new()
 	material.albedo_color = Color(0.98, 0.99, 1.0, 0.90)
 	material.roughness = 1.0
@@ -109,21 +112,24 @@ func _rebuild_if_needed(force: bool) -> void:
 func _rebuild_clouds(center_cell: Vector2i, lod: int) -> void:
 	_clouds.clear()
 	_puffs.clear()
+	_max_puff_width_m = 0.0
+	_max_formation_size_m = 0.0
 	var radius: int = _cell_radius_for_lod(lod)
-	var puffs_per_cloud: int = _puffs_per_cloud_for_lod(lod)
 
 	for cell_y in range(center_cell.y - radius, center_cell.y + radius + 1):
 		for cell_x in range(center_cell.x - radius, center_cell.x + radius + 1):
 			var generated: Array[Dictionary] = _model.generate_cell(Vector2i(cell_x, cell_y), coverage, field_seed)
 			for cloud in generated:
-				if _puffs.size() + puffs_per_cloud > MAX_PUFF_INSTANCES:
+				var puff_count: int = _puffs_for_cloud(cloud, lod)
+				if _puffs.size() + puff_count > MAX_PUFF_INSTANCES:
 					break
 				var cloud_index: int = _clouds.size()
 				_clouds.append(cloud)
-				_append_cloud_puffs(cloud_index, cloud, puffs_per_cloud)
-			if _puffs.size() + puffs_per_cloud > MAX_PUFF_INSTANCES:
+				_max_formation_size_m = maxf(_max_formation_size_m, float(cloud["size_m"]))
+				_append_cloud_puffs(cloud_index, cloud, puff_count)
+			if _puffs.size() >= MAX_PUFF_INSTANCES:
 				break
-		if _puffs.size() + puffs_per_cloud > MAX_PUFF_INSTANCES:
+		if _puffs.size() >= MAX_PUFF_INSTANCES:
 			break
 
 	multimesh.instance_count = _puffs.size()
@@ -134,33 +140,80 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 	rng.seed = int(cloud["puff_seed"])
 	var size_m: float = float(cloud["size_m"])
 	var thickness_m: float = float(cloud["thickness_m"])
+	var profile_name := String(cloud["profile"])
+	var footprint_radius: float = _footprint_radius_fraction(profile_name) * size_m
+	var nominal_width: float = _nominal_lobe_width(profile_name, size_m, thickness_m)
+
 	for puff_index in range(puff_count):
-		var offset := Vector3.ZERO
-		var width_m: float
-		var height_m: float
-		if puff_index == 0:
-			width_m = size_m * 0.50
-			height_m = thickness_m * 0.82
-		else:
-			var angle: float = rng.randf_range(0.0, TAU)
-			var radius: float = rng.randf_range(0.08, 0.34) * size_m
-			var vertical_layer: float = rng.randf_range(-0.42, 0.46)
-			if puff_index % 3 == 0:
-				vertical_layer = rng.randf_range(0.18, 0.52)
-			elif puff_index % 4 == 0:
-				vertical_layer = rng.randf_range(-0.48, -0.16)
-			offset = Vector3(
-				cos(angle) * radius,
-				vertical_layer * thickness_m,
-				sin(angle) * radius
-			)
-			width_m = size_m * rng.randf_range(0.25, 0.44)
-			height_m = thickness_m * rng.randf_range(0.48, 0.76)
+		var angle: float = rng.randf_range(0.0, TAU)
+		var radial: float = 0.0 if puff_index == 0 else sqrt(rng.randf()) * footprint_radius
+		var vertical_layer: float = rng.randf_range(-0.38, 0.48)
+		if puff_index % 5 == 0:
+			vertical_layer = rng.randf_range(0.18, 0.55)
+		elif puff_index % 7 == 0:
+			vertical_layer = rng.randf_range(-0.48, -0.14)
+		var offset := Vector3(
+			cos(angle) * radial,
+			vertical_layer * thickness_m,
+			sin(angle) * radial
+		)
+
+		var height_m: float = maxf(300.0, thickness_m * rng.randf_range(0.42, 0.78))
+		var width_m: float = nominal_width * rng.randf_range(0.72, 1.18)
+		width_m = minf(width_m, MAX_LOCAL_PUFF_WIDTH_M)
+		width_m = minf(width_m, height_m * MAX_PUFF_ASPECT)
+		width_m = maxf(width_m, minf(700.0, size_m * 0.35))
+		_max_puff_width_m = maxf(_max_puff_width_m, width_m)
+
 		_puffs.append({
 			"cloud_index": cloud_index,
 			"offset": offset,
 			"scale": Vector3(width_m, height_m, width_m),
 		})
+
+func _nominal_lobe_width(profile_name: String, size_m: float, thickness_m: float) -> float:
+	match profile_name:
+		"small_cumulus":
+			return minf(size_m * 0.52, 1800.0)
+		"medium_cumulus":
+			return minf(size_m * 0.34, 3600.0)
+		"large_low_mid":
+			return minf(size_m * 0.22, 6500.0)
+		"giant_cloud_bank":
+			return minf(size_m * 0.11, 14000.0)
+		"continental_cloud_bank":
+			return minf(size_m * 0.035, 32000.0)
+		_:
+			return minf(size_m * 0.35, thickness_m * MAX_PUFF_ASPECT)
+
+func _footprint_radius_fraction(profile_name: String) -> float:
+	match profile_name:
+		"small_cumulus":
+			return 0.28
+		"medium_cumulus":
+			return 0.34
+		"large_low_mid":
+			return 0.39
+		"giant_cloud_bank":
+			return 0.44
+		"continental_cloud_bank":
+			return 0.48
+		_:
+			return 0.32
+
+func _puffs_for_cloud(cloud: Dictionary, lod: int) -> int:
+	var profile_name := String(cloud["profile"])
+	match profile_name:
+		"continental_cloud_bank":
+			return 24 if lod == 0 else (56 if lod == 1 else 96)
+		"giant_cloud_bank":
+			return 10 if lod == 0 else (24 if lod == 1 else 40)
+		"large_low_mid":
+			return 5 if lod == 0 else (12 if lod == 1 else 18)
+		"medium_cumulus":
+			return 3 if lod == 0 else (8 if lod == 1 else 12)
+		_:
+			return 3 if lod == 0 else (6 if lod == 1 else 9)
 
 func _update_instance_transforms() -> void:
 	if multimesh == null or _puffs.is_empty():
@@ -216,14 +269,3 @@ func _cell_radius_for_lod(lod: int) -> int:
 			return 3
 		_:
 			return 2
-
-func _puffs_per_cloud_for_lod(lod: int) -> int:
-	match lod:
-		0:
-			# Sweden overview keeps three-puff silhouettes while a larger single
-			# MultiMesh budget carries roughly three times as many formations.
-			return 3
-		1:
-			return 6
-		_:
-			return 9
