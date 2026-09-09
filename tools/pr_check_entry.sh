@@ -49,9 +49,11 @@ fi
 
 if [[ -z "${BRUR_WORLD_PBF:-}" ]]; then
   data_dir="$(cd "$ROOT/.." && pwd)/data"
-  candidate="$(find "$data_dir" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n 1)"
-  if [[ -n "$candidate" ]]; then
-    export BRUR_WORLD_PBF="$candidate"
+  if [[ -d "$data_dir" ]]; then
+    candidate="$(find "$data_dir" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n 1)"
+    if [[ -n "$candidate" ]]; then
+      export BRUR_WORLD_PBF="$candidate"
+    fi
   fi
 fi
 
