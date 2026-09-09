@@ -170,8 +170,10 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 		var height_m: float = maxf(300.0, thickness_m * rng.randf_range(0.48, 0.78))
 		var major_m: float = nominal_major * rng.randf_range(0.82, 1.12)
 		if is_core:
-			major_m *= rng.randf_range(1.28, 1.46)
-			height_m *= rng.randf_range(0.92, 1.10)
+			# Keep one readable core, but avoid the extra-large alpha footprint that
+			# caused many transparent layers to stack over the same screen pixels.
+			major_m *= rng.randf_range(1.16, 1.30)
+			height_m *= rng.randf_range(0.92, 1.06)
 		elif role == 2:
 			major_m *= rng.randf_range(0.48, 0.68)
 			height_m *= rng.randf_range(0.72, 0.90)
@@ -186,7 +188,7 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 
 		var horizontal_aspect: float = rng.randf_range(1.16, MAX_HORIZONTAL_ASPECT)
 		if is_core:
-			horizontal_aspect = rng.randf_range(1.34, 1.82)
+			horizontal_aspect = rng.randf_range(1.30, 1.74)
 		elif role == 4:
 			horizontal_aspect = rng.randf_range(1.45, 1.95)
 		var minor_m: float = maxf(height_m * 0.78, major_m / horizontal_aspect)
@@ -194,20 +196,19 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 
 		var local_offset := Vector3.ZERO
 		if not is_core:
-			# A cloudlet is one overlapping mass: bridge lobes join the broad core,
-			# crown lobes add real height, and low skirt lobes break the footprint.
-			# Offsets stay in physical world units and never depend on camera state.
+			# Preserve cohesive overlap, but spread satellites enough that alpha
+			# blending does not repeatedly shade the same central footprint.
 			var local_angle: float = rng.randf_range(0.0, TAU)
 			var local_radius: float
 			var local_y: float
 			if role == 2:
-				local_radius = rng.randf_range(0.12, 0.30) * nominal_major
+				local_radius = rng.randf_range(0.22, 0.42) * nominal_major
 				local_y = rng.randf_range(0.28, 0.58) * height_m
 			elif role == 4:
-				local_radius = rng.randf_range(0.24, 0.44) * nominal_major
+				local_radius = rng.randf_range(0.32, 0.52) * nominal_major
 				local_y = rng.randf_range(-0.24, 0.04) * height_m
 			else:
-				local_radius = rng.randf_range(0.16, 0.38) * nominal_major
+				local_radius = rng.randf_range(0.24, 0.48) * nominal_major
 				local_y = rng.randf_range(-0.12, 0.26) * height_m
 			local_offset = Vector3(
 				cos(local_angle) * local_radius,
