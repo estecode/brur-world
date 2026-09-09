@@ -86,6 +86,48 @@ You must take responsibility for proving the objective correctness of your chang
 
 Final delivery reporting must include issue, branch, delivery commit, actual validation/results, PR, issue-update status, outstanding notes, and the same merge decision as the PR.
 
+## Project-leader workflow
+
+GitHub is the persistent source of truth for project state. Chat sessions are disposable work surfaces: the project leader must not need to remember which ChatGPT tab created, tested, or discussed an issue or PR.
+
+The workflow must remain resumable and fail closed. The project leader may forget, delay, repeat, or miss a handoff without risking correctness, local work, or merge safety. Missing or ambiguous approval means wait; never infer that a test passed or that a merge was approved.
+
+### Parallel sessions and isolated work
+
+Multiple agents or ChatGPT tabs may work on different issues concurrently.
+
+- Before starting tracked work, check GitHub for an existing active branch/PR or other clear implementation of the same issue. Do not accidentally create competing implementations for one issue.
+- Each concurrent issue uses its own isolated branch/worktree or equivalent isolated checkout. Never use the project leader's normal checkout as a shared branch-switching workspace for concurrent agent work.
+- Prefer dependencies to flow through `main`: merge the dependency, then refresh/revalidate the dependent PR. Do not create stacked branch chains by default.
+- Development and objective validation may run in parallel when their resources are independent. Interactive Godot checks that share local runtime resources should normally run one at a time unless safe isolation is explicitly known.
+- Technical parallelism is the agents' coordination responsibility, not the project leader's.
+
+### Merge safety under changing main
+
+A prior merge recommendation is evidence about the revision and integration context that was actually validated; it is not permanent permission to ignore later changes to `main`.
+
+- When `main` changes, the agent handling a waiting PR must decide whether that change is relevant to the PR's previous verification. Do not blindly rerun unrelated checks, but do not keep a stale decision when integration-sensitive assumptions changed.
+- Immediately before merge, verify the PR against current repository state and perform the smallest relevant refresh/revalidation needed. Merge integration must be serialized so two concurrent sessions cannot both rely on the same stale view of `main`.
+- A project-leader command such as `merge #111` is conditional approval: merge that candidate only if it still satisfies repository merge requirements. If relevant changes require a new human check, stop and provide the new exact PR check instead of merging on stale approval.
+- Agents should resolve ordinary branch freshness, push/pull, rebase/merge mechanics, and recoverable integration conflicts themselves when safe and within scope. Ask the project leader only when a real product decision, meaningful human verification, or unsafe/destructive choice remains.
+
+### Needs You
+
+The repository keeps one permanent open issue titled `BRUR — Needs You`. It is the project leader's small inbox, not a second source of truth. Its entries summarize the current underlying issues/PRs and link back to them.
+
+Agents must keep `BRUR — Needs You` useful whenever their work creates or resolves a project-leader action:
+
+- `TEST` — a meaningful human check is required; include the exact PR and Safe Command Link when available.
+- `READY` — the candidate is ready for explicit merge approval.
+- `DECIDE` — a genuine product/architecture decision blocks safe progress.
+- `MAIN` — only when there is a concrete reason for the project leader to run the latest integrated game.
+
+Do not put agent-owned work in `Needs You`: CI progress, branch freshness, routine rebases, pushes, dependency waiting, integration checks, or conflicts the agent can safely resolve. If no project-leader action remains in a category, remove that entry. Never treat the inbox itself as proof that a test passed; the relevant PR remains the persistent verification/merge-decision record.
+
+From any chat/session, requests such as `status #102`, `test ok #102`, `merge #102`, or `vad behöver jag göra?` must be resolved from current GitHub state rather than relying on that chat's memory. A bare `test ok` may be accepted only when exactly one active test candidate is unambiguous in context; otherwise ask for the PR number.
+
+This workflow is intentionally implemented with existing GitHub issues/PRs and Safe Command Links rather than a new dashboard, database, or orchestration service. Generalizing it beyond `brur-world` is future work and must not complicate the current repository workflow.
+
 ## Safe Command Links
 
 This project supports `estecode/safe-command-links` for human-executable PR checks and current-checkout playtests.
