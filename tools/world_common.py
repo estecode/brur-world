@@ -17,6 +17,13 @@ def project(lon: float, lat: float) -> tuple[float, float]:
     return x, y
 
 
+def unproject(x: float, y: float) -> tuple[float, float]:
+    """Convert Web Mercator meters back to WGS84 lon/lat."""
+    lon = math.degrees(x / EARTH_RADIUS)
+    lat = math.degrees(2.0 * math.atan(math.exp(y / EARTH_RADIUS)) - math.pi / 2.0)
+    return lon, lat
+
+
 def ensure_pbf(path: Path) -> None:
     """Fail early when the requested OSM source file is missing."""
     if not path.is_file():
