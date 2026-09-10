@@ -61,6 +61,10 @@ jobs:
           bash -n tools/run_pr_owned_check.sh
           bash tests/test_pr_owned_check.sh
 
+      - name: Run world streaming foundation tests
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_streaming_foundation.gd
+
       - name: Run portable vehicle dynamics tests
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_dynamics.gd
