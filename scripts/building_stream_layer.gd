@@ -26,6 +26,7 @@ const STATE_VISIBLE := "visible"
 @export var hide_altitude_m: float = 15000.0
 @export var full_height_altitude_m: float = 2500.0
 @export var base_height_m: float = 0.0
+@export var cast_shadows: bool = false
 
 var _coordinates = null
 var _camera_rig: Node = null
@@ -36,9 +37,9 @@ var _wanted: Dictionary = {}
 var _tile_states: Dictionary = {}
 var _tile_record_counts: Dictionary = {}
 var _last_center_tile := Vector2i(999999, 999999)
-var _last_visible := false
+var _last_visible = false
 var _last_focus_world := Vector3.ZERO
-var _has_last_focus := false
+var _has_last_focus = false
 var _material: StandardMaterial3D = null
 var _perf_build_ms: float = 0.0
 var _perf_build_max_ms: float = 0.0
@@ -190,6 +191,7 @@ func _build_tile(tile: Vector2i) -> Dictionary:
 	instance.name = "Buildings_%s" % _coordinates.tile_identity(tile).replace(":", "_")
 	instance.mesh = mesh
 	instance.material_override = _material
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	instance.position = _coordinates.tile_origin_world(tile, base_height_m)
 	return {"instance": instance, "records": records.size()}
 
