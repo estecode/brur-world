@@ -11,10 +11,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
-from prepare_world_showcase import CITY_CENTERS, prepare  # noqa: E402
+from prepare_world_showcase import CITY_CENTERS, DEFAULT_RADIUS_M, prepare  # noqa: E402
 
 
 class WorldShowcasePrepareTests(unittest.TestCase):
+    def test_default_radius_keeps_extruded_working_set_local(self) -> None:
+        self.assertLessEqual(DEFAULT_RADIUS_M, 1500.0)
+        self.assertGreaterEqual(DEFAULT_RADIUS_M, 1000.0)
+
     def test_prepare_selects_all_showcase_cities_without_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
