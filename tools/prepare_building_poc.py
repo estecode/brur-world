@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare an ephemeral Malmö tile cache from the existing buildings.jsonl runtime export.
+"""Prepare an ephemeral multi-city tile cache from the existing buildings.jsonl runtime export.
 
 Dependencies:
 - Reads only world_data/manifest.json and world_data/buildings.jsonl.
@@ -16,8 +16,11 @@ import shutil
 import time
 from pathlib import Path
 
-MALMO_X = 1_447_576.3943775708
-MALMO_Y = 7_480_180.845685549
+CITY_CENTERS = {
+    "malmo": (1_447_576.3943775708, 7_480_180.845685549),
+    "goteborg": (1_333_006.3744531337, 7_906_413.516421634),
+    "stockholm": (2_011_387.3513473428, 8_251_904.234165725),
+}
 DEFAULT_RADIUS_M = 6_000.0
 PROGRESS_INTERVAL = 250_000
 
@@ -42,11 +45,8 @@ def prepare(source_dir: Path, output_dir: Path, radius_m: float = DEFAULT_RADIUS
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True)
 
-    min_x = MALMO_X - radius_m
-    max_x = MALMO_X + radius_m
-    min_y = MALMO_Y - radius_m
-    max_y = MALMO_Y + radius_m
     files: dict[tuple[int, int], object] = {}
+    selected_by_city = {name: 0 for name in CITY_CENTERS}
     scanned = 0
     selected = 0
     started = time.monotonic()
@@ -70,8 +70,15 @@ def prepare(source_dir: Path, output_dir: Path, radius_m: float = DEFAULT_RADIUS
                     raise SystemExit(f"invalid buildings.jsonl at line {scanned}: {exc}") from exc
                 x = float(record.get("x", math.inf))
                 y = float(record.get("y", math.inf))
-                if x < min_x or x > max_x or y < min_y or y > max_y:
+
+                matched_city = None
+                for city, (cx, cy) in CITY_CENTERS.items():
+                    if abs(x - cx) <= radius_m and abs(y - cy) <= radius_m:
+                        matched_city = city
+                        break
+                if matched_city is None:
                     continue
+
                 tx = math.floor(x / tile_size)
                 ty = math.floor(y / tile_size)
                 key = (tx, ty)
@@ -81,6 +88,7 @@ def prepare(source_dir: Path, output_dir: Path, radius_m: float = DEFAULT_RADIUS
                     files[key] = handle
                 handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
                 selected += 1
+                selected_by_city[matched_city] += 1
     finally:
         for handle in files.values():
             handle.close()
@@ -88,11 +96,12 @@ def prepare(source_dir: Path, output_dir: Path, radius_m: float = DEFAULT_RADIUS
     result = {
         "source": "world_data/buildings.jsonl",
         "source_rebuilt": False,
-        "center_absolute": [MALMO_X, MALMO_Y],
+        "centers_absolute": {name: list(center) for name, center in CITY_CENTERS.items()},
         "radius_m": radius_m,
         "tile_size": tile_size,
         "scanned_records": scanned,
         "selected_records": selected,
+        "selected_by_city": selected_by_city,
         "tile_count": len(files),
     }
     (output_dir / "poc_manifest.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
@@ -101,8 +110,12 @@ def prepare(source_dir: Path, output_dir: Path, radius_m: float = DEFAULT_RADIUS
         f"elapsed={time.monotonic() - started:.1f}s",
         flush=True,
     )
-    if selected == 0:
-        raise SystemExit("existing buildings.jsonl contained no Malmö buildings in the POC radius")
+    missing = [name for name, count in selected_by_city.items() if count == 0]
+    if missing:
+        raise SystemExit(
+            "existing buildings.jsonl contained no buildings in the POC radius for: "
+            + ", ".join(missing)
+        )
     return result
 
 
