@@ -1,0 +1,55 @@
+# Windows runtime build
+
+This directory owns the reusable Windows build/package recipe. It is tooling only: authoritative world data remains owned by the offline/runtime-data pipeline.
+
+## Normal invocation
+
+From any mapped `brur-world` checkout:
+
+```bash
+bash tools/windows_build.sh 123
+```
+
+This means “build exact PR #123”. The launcher fetches the current `main` build tooling, resolves the exact PR head, creates an isolated temporary checkout for that revision, prepares the target's runtime-data subset from the mapped checkout's existing `world_data`, exports Windows, validates the package, and writes only the final ZIP to `~/Dropbox/BRUR/` by default.
+
+Refs and full commits are also supported:
+
+```bash
+bash tools/windows_build.sh --ref issue/example
+bash tools/windows_build.sh --ref <full-sha>
+```
+
+Overrides are environment variables, not alternate build implementations:
+
+```bash
+BRUR_WINDOWS_OUTPUT_DIR=/tmp/brur-out \
+BRUR_WINDOWS_WORLD_DATA=/path/to/world_data \
+GODOT_BIN=/path/to/godot \
+bash tools/windows_build.sh --ref <ref>
+```
+
+## Target contract
+
+A revision that supports the build provides `tools/windows_build/target.sh`. The generic builder passes explicit environment paths for the isolated source checkout, authoritative local world data, temporary runtime-data output, binary output, build name and Godot binary. The target prepares only the runtime files it actually needs and exports the Windows EXE/PCK pair. It does not own ZIP packaging or build identity.
+
+The current target is the continuous world showcase introduced by #126. Future targets should change this small target boundary rather than duplicate revision resolution, packaging, manifest generation or Dropbox delivery logic.
+
+## Package contract
+
+A client-ready ZIP has this shape:
+
+```text
+BRUR/
+  <build>.exe
+  <build>.pck
+  build_info.json
+  client_bundle_info.json
+  runtime_data/
+  logs/
+```
+
+`build_info.json` records repository, selector/ref, PR/issue when available, exact SHA, build timestamp, Godot version/export target, source-manifest fingerprint and packaged runtime-file fingerprints. `client_bundle_info.json` repeats the code/world identity needed for copied client logs and package inspection.
+
+`package.py` fails closed on missing EXE/PCK, missing/empty runtime data, invalid build identity, missing source manifest, staged fingerprint mismatch or incomplete ZIP contents.
+
+Intermediate worktrees, exports and runtime-data staging stay in temporary directories. Only the final ZIP is written to the configured delivery directory.
