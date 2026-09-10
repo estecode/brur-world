@@ -1,6 +1,6 @@
 extends Node3D
 
-## Streams portable BRT1 road tiles and renders the BRM2 Sweden background map.
+## Streams portable BRT1 road tiles and renders a configured BRM2 background map.
 ##
 ## Dependencies:
 ## - world_coordinates.gd owns projected/world/tile coordinate conversion.
@@ -21,6 +21,8 @@ const MAP_FARMLAND: int = 1
 const MAP_FOREST: int = 2
 const MAP_URBAN: int = 3
 const MAP_WATER: int = 4
+
+@export var background_source_path: String = WORLD_DIR + "/background.brmap"
 
 @onready var world: Node3D = $World
 @onready var camera_rig: Node3D = $CameraRig
@@ -99,6 +101,21 @@ func _load_manifest() -> bool:
 
 func get_world_coordinates():
 	return world_coordinates
+
+func set_background_source(path: String) -> void:
+	if path.is_empty() or path == background_source_path:
+		return
+	background_source_path = path
+	_clear_background()
+	_load_background()
+	_update_depth_layout(true)
+
+func _clear_background() -> void:
+	for instance_value in background_instances.values():
+		var instance: Node = instance_value as Node
+		if instance != null:
+			instance.queue_free()
+	background_instances.clear()
 
 func _setup_lighting() -> void:
 	sun.rotation_degrees = Vector3(-48.0, -32.0, 0.0)
@@ -359,9 +376,9 @@ func consume_perf_metrics() -> Dictionary:
 	return result
 
 func _load_background() -> void:
-	var path: String = WORLD_DIR + "/background.brmap"
+	var path: String = background_source_path
 	if not FileAccess.file_exists(path):
-		print("No background.brmap yet. Re-run ./build_sweden.sh to build the map background.")
+		push_error("Missing BRM2 background: " + path)
 		return
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null or file.get_length() < 8:

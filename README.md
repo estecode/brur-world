@@ -1,1 +1,158 @@
-noop
+# brur-world
+
+Minimal Godot 4 proof of concept for building a playable Sweden world from an external OSM PBF.
+
+## Project rules
+
+This is a standalone project. Do not reuse or depend on architecture or code from Syndicate. The current local PBF path happens to live under a Syndicate directory, but it is external source data only.
+
+Keep every implementation as small as possible while preserving a clean architecture:
+
+- Prefer small, well-defined objects/modules with one clear responsibility.
+- Keep data, decisions, simulation and rendering separate where practical.
+- Avoid large controllers, monster files and long chains of special-case `if` statements.
+- Add interfaces/states/strategies only when they make an actual implemented feature simpler.
+- Gameplay logic should not depend unnecessarily on Godot scene-tree state or rendering.
+- Important source files should briefly explain in plain English what they do and their dependencies.
+- Prefer real units for simulation data (metres, seconds, m/s, litres, kWh, etc.). Rendering coordinates are not automatically simulation truth.
+- Use credible web sources, open-source projects, technical references or scientific papers when research materially improves realism. Keep the resulting implementation minimal.
+- Offline builders/compilers that may run for more than a few seconds must report the current phase and periodic progress/heartbeat information so a long build never appears hung.
+
+## Development workflow
+
+Develop the game as a sequence of small **vertical slices** rather than building large technical subsystems in isolation. Each slice should end in a working, demonstrable piece of gameplay.
+
+Example progression:
+
+`routing graph -> routing benchmark -> click-to-road GPS -> route following -> normal driving -> aggressive/maniac driving -> lightweight traffic -> police patrol -> offence detection -> pursuit`
+
+Use GitHub issues as small work orders. An issue should have a clear goal, scope, dependencies where relevant, explicit out-of-scope boundaries and acceptance criteria. Keep the backlog prioritized by what is needed for the next playable step.
+
+For each slice:
+
+1. Define the smallest behavior that proves the feature.
+2. Implement the minimum clean solution.
+3. Add automatic tests while implementing the feature, not afterward.
+4. Add benchmarks/performance counters early for systems where latency or scale matters, especially routing, streaming and traffic.
+5. Verify functional correctness through tests before relying on visual inspection.
+6. Use manual play-testing primarily for feel, presentation and visual quality.
+7. Keep the project in a working state when the slice is complete.
+
+Avoid speculative frameworks and premature generalization. Do not spend weeks building a complete subsystem before it produces gameplay. Extend or replace simple implementations only when a real requirement or measurement justifies it.
+
+Prefer a lightweight project process: prioritized backlog, well-defined issues, short implementation cycles, automated tests and regular playable milestones. Heavy project-management ceremony is not a goal.
+
+Use feature branches for substantial work and keep the stable branch usable. Preserve known-good snapshots/checkpoints before risky architectural changes when useful.
+
+### One-click PR checks
+
+PRs that still need a human Godot/runtime check use **Safe Command Links**. A `CHECK THEN MERGE` PR contains a clickable `▶ Run safe check` link. Clicking it launches the exact PR revision in an isolated temporary worktree, reuses this checkout's ignored `world_data`, starts Godot, and removes the temporary checkout after Godot exits.
+
+Safe Command Links is installed once per Mac. After cloning both repositories, run from the Safe Command Links checkout:
+
+```bash
+bash install.sh
+bash allow-repo.sh estecode/brur-world /absolute/path/to/brur-world
+bash allow-project.sh /absolute/path/to/brur-world pr-check . /bin/bash tools/pr_check_entry.sh --param pr:positive-int
+```
+
+That is the complete project registration. The GitHub link contains only the portable repository identity and PR number; no developer-specific path is committed or placed in a PR. Safe Command Links maps the repository identity to the local checkout and executes only the locally approved entrypoint.
+
+The stable `tools/pr_check_entry.sh` entrypoint fetches current `origin/main` and prepares that revision in a temporary detached worktree before running the project-owned PR-check launcher. It does not switch, pull, reset, clean or otherwise mutate the mapped checkout. The mapped checkout remains the owner of local machine state such as ignored `world_data`, the local virtual environment, repository access and sibling Sweden PBF data. This prevents an old local `main` from silently running obsolete PR-check behavior.
+
+After migrating an existing installation from the old `tools/pr_check.sh` approval, update the mapped checkout once so `tools/pr_check_entry.sh` exists, then re-run the `allow-project.sh` command above. After that one-time migration, ordinary Safe Checks fetch the current launcher themselves; manually pulling `main` before every PR check is not required.
+
+A PR check requires:
+
+- macOS with Safe Command Links installed;
+- this repository mapped and `pr-check` approved to `tools/pr_check_entry.sh` as above;
+- authenticated GitHub CLI (`gh`) access for this repository so local objective results can be persisted on the exact PR head;
+- Godot available as `godot` or installed at `/Applications/Godot.app`;
+- local `world_data/manifest.json` in the mapped checkout;
+- `tools/pr_check_entry.sh` present in the mapped checkout;
+- network/repository access sufficient to fetch current `origin/main`.
+
+The project-owned PR check records a GitHub commit status named `brur-world/local-pr-check` on the exact PR head. It records `pending` when the local run starts, `failure` if objective validation fails, and `success` only after the local objective checks complete. Earlier failed attempts remain in GitHub's status history even if a later run passes. Human visual/feel approval is separate and is never implied by this machine status.
+
+If the current launcher cannot be fetched/prepared, or GitHub status recording cannot be initialized, the PR check fails closed. A missing or failed required local-check status therefore cannot be replaced by a remembered terminal result or by saying that the test looked fine.
+
+If the browser reports that the approved command was started, Safe Command Links itself accepted the request. Any subsequent error is from the project-owned PR-check bootstrap/launcher and is shown in Terminal; objective failures are also persisted to GitHub once status recording has started.
+
+Project/agent rules for generating the clickable link are defined in `AGENTS.md`. Safe Command Links itself stays generic; this repository owns the Godot-specific PR-check behavior.
+
+### Definition of done
+
+A gameplay issue is complete when:
+
+- its acceptance criteria pass;
+- core functional behavior is covered by automatic reproducible tests;
+- the implementation remains small, understandable and correctly separated by responsibility;
+- relevant performance is measured and acceptable for the current gameplay scale;
+- functional bugs discovered during development have regression tests where practical;
+- the feature can be demonstrated in the game when it has a visible/gameplay component.
+
+A feature is not considered complete merely because it appears to work during one manual play session.
+
+## Automated testing rule
+
+**A new gameplay feature is not complete until its core logic has automatic, reproducible tests.**
+
+The target is that functional correctness can be verified without manual play-testing. Design gameplay systems so they can be exercised headlessly with explicit inputs and outputs instead of requiring a running rendered scene.
+
+Examples:
+
+- routing uses small synthetic road graphs to test one-way roads, speed limits, access, disconnected routes, bridges/tunnels/layers and path cost;
+- route following can be tested with fixed routes, positions, speeds and look-ahead geometry;
+- driving policies can be tested against known speed limits, curves and vehicle limits;
+- acceleration, braking, fuel/energy use and tire wear use deterministic calculations with fixed test cases;
+- lightweight traffic can be advanced through road edges without rendering;
+- police observations use controlled timestamps and synthetic observations;
+- pursuit/intercept logic uses deterministic road scenarios;
+- police tactics are testable as state transitions/actions rather than requiring visual inspection;
+- randomness that affects functional tests must be seedable/reproducible.
+
+Godot nodes should generally act as thin adapters around testable gameplay logic rather than owning all logic directly in `_process()`/`_physics_process()`.
+
+Manual testing is primarily for things that are inherently perceptual: visual quality, camera feel, animation, audio, final driving feel and similar presentation. State and decision logic behind those features should still be automatically tested where possible.
+
+When fixing a functional bug, add or update a regression test that reproduces the bug whenever practical.
+
+## Goal
+
+Prove the world/gameplay stack incrementally with as little code as possible. The current world pipeline starts from OSM PBF, produces portable runtime data offline, and renders/streams it in Godot 4. Routing, vehicles, traffic and police systems are added as separate small systems as gameplay requires them.
+
+Godot does not parse OSM PBF at runtime. Generated world data is intentionally ignored by Git.
+
+## Build Sweden
+
+The helper script already defaults to the local source used for this POC:
+
+```bash
+./build_sweden.sh
+```
+
+Equivalent explicit command:
+
+```bash
+./build_sweden.sh /path/to/sweden.osm.pbf
+```
+
+The PBF is external input and is not part of this repository.
+
+## Run
+
+Open this repository folder in **Godot 4**, then press **Run Project**.
+
+Controls:
+
+- Mouse wheel: zoom
+- Middle or right mouse drag: pan
+- WASD / arrow keys: pan
+
+## POC road LODs
+
+- LOD 0: motorway + trunk, thinned to roughly 400 m point spacing
+- LOD 1: + primary + secondary, thinned to roughly 100 m spacing
+- LOD 2: + tertiary/residential/unclassified/service, source geometry
+
+Tiles are 32 km square. Runtime loads tiles around the current camera view and swaps LOD based on camera distance.
