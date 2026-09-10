@@ -27,6 +27,7 @@ func _run() -> void:
 	var model = CityLightModelScript.new()
 	_test_solar_intensity(model)
 	_test_density_and_distribution(model)
+	_test_budget_preserves_extent_and_irregularity()
 	_test_poi_density_weighting()
 	_test_production_composition()
 	await _test_environment_contrast()
@@ -62,6 +63,32 @@ func _test_density_and_distribution(model) -> void:
 	model.add_poi_density_sample(Vector3(2000.0, 0.0, 2000.0), 100)
 	_assert(first == model.local_light_points(), "same urban geometry and POI density produce identical local lights")
 	_assert(model.local_light_points(37).size() == 37, "distribution respects an explicit point budget")
+
+func _test_budget_preserves_extent_and_irregularity() -> void:
+	var model = CityLightModelScript.new()
+	for x in range(40):
+		for z in range(40):
+			var ox := float(x) * 5000.0
+			var oz := float(z) * 5000.0
+			model.add_urban_triangle(Vector3(ox + 20.0, 0.0, oz + 20.0), Vector3(ox + 400.0, 0.0, oz + 20.0), Vector3(ox + 20.0, 0.0, oz + 400.0))
+			if x < 5 and z < 5:
+				model.add_poi_density_sample(Vector3(ox, 0.0, oz), 200)
+	var points: Array[Vector3] = model.local_light_points(700)
+	_assert(points.size() == 700, "budgeted distribution fills requested local-light budget")
+	var min_x := INF
+	var max_x := -INF
+	var min_z := INF
+	var max_z := -INF
+	var offsets: Dictionary = {}
+	for point in points:
+		min_x = minf(min_x, point.x)
+		max_x = maxf(max_x, point.x)
+		min_z = minf(min_z, point.z)
+		max_z = maxf(max_z, point.z)
+		var key := "%d:%d" % [int(floor(fposmod(point.x, 450.0) / 25.0)), int(floor(fposmod(point.z, 450.0) / 25.0))]
+		offsets[key] = true
+	_assert((max_x - min_x) > 100000.0 and (max_z - min_z) > 100000.0, "budgeting preserves broad geographic spread instead of consuming dense cells first")
+	_assert(offsets.size() >= 24, "deterministic offsets remain visibly irregular rather than collapsing onto a grid")
 
 func _test_poi_density_weighting() -> void:
 	var sparse = CityLightModelScript.new()
