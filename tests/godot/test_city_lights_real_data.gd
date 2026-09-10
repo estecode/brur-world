@@ -106,6 +106,8 @@ func _has_irregular_cell_offsets(multimesh: MultiMesh) -> bool:
 		var z_mod := fposmod(origin.z, GRID_SIZE_M)
 		var key := "%d:%d" % [int(floor(x_mod / 25.0)), int(floor(z_mod / 25.0))]
 		seen[key] = true
+	if seen.size() < 24:
+		print("CITY_LIGHT_DIAG irregular_offset_bucket_count=%d instances=%d" % [seen.size(), multimesh.instance_count])
 	return seen.size() >= 24
 
 func _has_large_geographic_span(multimesh: MultiMesh) -> bool:
@@ -121,7 +123,11 @@ func _has_large_geographic_span(multimesh: MultiMesh) -> bool:
 		max_x = maxf(max_x, origin.x)
 		min_z = minf(min_z, origin.z)
 		max_z = maxf(max_z, origin.z)
-	return (max_x - min_x) >= 100000.0 and (max_z - min_z) >= 100000.0
+	var span_x := max_x - min_x
+	var span_z := max_z - min_z
+	if span_x < 100000.0 or span_z < 100000.0:
+		print("CITY_LIGHT_DIAG span_x=%.1f span_z=%.1f instances=%d" % [span_x, span_z, multimesh.instance_count])
+	return span_x >= 100000.0 and span_z >= 100000.0
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:
