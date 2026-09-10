@@ -1,0 +1,17 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource path="res://harness/world_showcase/world_showcase.gd" type="Script" id="1_showcase"]
+[ext_resource path="res://scenes/main.tscn" type="PackedScene" id="2_main"]
+[ext_resource path="res://scripts/building_stream_layer.gd" type="Script" id="3_buildings"]
+[ext_resource path="res://scripts/world_atmosphere.gd" type="Script" id="4_atmosphere"]
+
+[node name="WorldShowcase" type="Node"]
+script = ExtResource("1_showcase")
+
+[node name="Main" parent="." instance=ExtResource("2_main")]
+
+[node name="BuildingLayer" type="Node3D" parent="Main"]
+script = ExtResource("3_buildings")
+
+[node name="WorldAtmosphere" type="Node" parent="Main"]
+script = ExtResource("4_atmosphere")
