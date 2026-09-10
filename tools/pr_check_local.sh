@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prepares and objectively validates the isolated #126 world showcase from existing runtime data only.
-# Dependencies: tools/prepare_world_showcase.py, existing world_data/buildings.jsonl, and Godot supplied by PR check.
+# Dependencies: tools/prepare_world_showcase.py, existing world_data buildings/map runtime exports, and Godot supplied by PR check.
 set -euo pipefail
 
 WORKTREE="${BRUR_PR_CHECK_WORKTREE:?}"
@@ -9,30 +9,41 @@ PYTHON="${PYTHON_BIN:?}"
 GODOT="${GODOT_BIN:?}"
 CACHE="$WORKTREE/.poc_runtime/world_showcase"
 
-printf 'PR_CHECK=PREPARE_WORLD_SHOWCASE pr=%s source=existing-buildings-jsonl\n' "${BRUR_PR_CHECK_PR:?}"
+printf 'PR_CHECK=PREPARE_WORLD_SHOWCASE pr=%s source=existing-runtime-data\n' "${BRUR_PR_CHECK_PR:?}"
 "$PYTHON" "$WORKTREE/tools/prepare_world_showcase.py" "$WORLD_DATA" --output "$CACHE"
 
-"$PYTHON" - "$CACHE/showcase_manifest.json" <<'PY'
+"$PYTHON" - "$CACHE/showcase_manifest.json" "$CACHE" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+cache = Path(sys.argv[2])
 report = json.loads(path.read_text(encoding="utf-8"))
 if report.get("source_rebuilt") is not False:
     print("PR_CHECK=FAIL world showcase unexpectedly rebuilt source data")
     raise SystemExit(1)
 if int(report.get("selected_records", 0)) <= 0 or int(report.get("tile_count", 0)) <= 0:
-    print("PR_CHECK=FAIL world showcase cache is empty")
+    print("PR_CHECK=FAIL world showcase building cache is empty")
     raise SystemExit(1)
 missing = [name for name, count in report.get("selected_by_city", {}).items() if int(count) <= 0]
 if missing:
     print("PR_CHECK=FAIL missing showcase city building data: " + ", ".join(missing))
     raise SystemExit(1)
+background = report.get("background_triangles_by_city", {})
+missing_background = [name for name in ("malmo", "goteborg", "stockholm") if int(background.get(name, 0)) <= 0]
+if missing_background:
+    print("PR_CHECK=FAIL missing showcase city background data: " + ", ".join(missing_background))
+    raise SystemExit(1)
+missing_files = [name for name in background if not (cache / f"background_{name}.brmap").is_file()]
+if missing_files:
+    print("PR_CHECK=FAIL missing local BRM2 files: " + ", ".join(missing_files))
+    raise SystemExit(1)
 print(
     "PR_CHECK=WORLD_SHOWCASE_REAL_DATA_OK "
     f"selected={report['selected_records']} tiles={report['tile_count']} "
-    f"cities={report['selected_by_city']} source_rebuilt={report['source_rebuilt']}"
+    f"cities={report['selected_by_city']} background={background} "
+    f"source_rebuilt={report['source_rebuilt']}"
 )
 PY
 
