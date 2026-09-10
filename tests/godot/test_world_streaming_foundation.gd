@@ -8,6 +8,8 @@ const WorldStreamRequestScript = preload("res://scripts/world_stream_request.gd"
 const BuildingMeshBuilderScript = preload("res://scripts/building_mesh_builder.gd")
 const BuildingStreamLayerScript = preload("res://scripts/building_stream_layer.gd")
 
+var _failed := false
+
 class DummyCameraRig:
 	extends Node
 	var focus := Vector3(110.0, 0.0, -10.0)
@@ -21,6 +23,9 @@ func _init() -> void:
 	_test_coordinate_and_request_contracts()
 	_test_building_identity_and_mesh()
 	_test_bounded_streaming_and_hysteresis()
+	if _failed:
+		quit(1)
+		return
 	print("world streaming foundation tests: OK")
 	quit(0)
 
@@ -35,7 +40,6 @@ func _test_coordinate_and_request_contracts() -> void:
 	_assert(malmo_id != coordinates.absolute_tile_identity(stockholm), "Malmö and Stockholm resolve to different tile identities")
 	var malmo_world: Vector3 = coordinates.absolute_to_world(malmo)
 	_assert(coordinates.world_tile_identity(malmo_world) == malmo_id, "absolute and world positions share one tile identity owner")
-
 	var request = WorldStreamRequestScript.new(Vector3(1.0, 2.0, 3.0), 4500.0, Vector3(4.0, 9.0, -6.0))
 	_assert(request.focus_world == Vector3(1.0, 2.0, 3.0), "stream request preserves focus")
 	_assert(is_equal_approx(request.altitude_m, 4500.0), "stream request preserves altitude")
@@ -48,6 +52,8 @@ func _test_building_identity_and_mesh() -> void:
 	_assert(is_equal_approx(BuildingMeshBuilderScript.height_from_tags({"building:levels": "4"}), 12.0), "building levels derive stable height")
 	var mesh: ArrayMesh = BuildingMeshBuilderScript.build_tile_mesh([record], Vector2.ZERO)
 	_assert(mesh != null, "building footprint produces a mesh")
+	if mesh == null:
+		return
 	_assert(mesh.get_surface_count() == 1, "one tile batch produces one mesh surface")
 	var bounds := mesh.get_aabb()
 	_assert(bounds.size.x > 9.9 and bounds.size.z > 9.9, "building footprint keeps metre-scale horizontal bounds")
@@ -59,7 +65,6 @@ func _test_bounded_streaming_and_hysteresis() -> void:
 	_write_tile(cache_dir, Vector2i(0, 0), _record(10.0, 10.0, "way/0"))
 	_write_tile(cache_dir, Vector2i(1, 0), _record(110.0, 10.0, "way/1"))
 	_write_tile(cache_dir, Vector2i(2, 0), _record(210.0, 10.0, "way/2"))
-
 	var coordinates = WorldCoordinatesScript.new(Vector2.ZERO, 100.0)
 	var camera := DummyCameraRig.new()
 	get_root().add_child(camera)
@@ -71,7 +76,6 @@ func _test_bounded_streaming_and_hysteresis() -> void:
 	layer.prefetch_tiles_ahead = 0
 	get_root().add_child(layer)
 	layer.setup(coordinates, camera, cache_dir)
-
 	_assert(layer.pending_tile_count() == 2, "pending queue is capped by configured maximum")
 	var initial_metrics: Dictionary = layer.consume_perf_metrics()
 	_assert(int(initial_metrics["building_dropped_requests"]) >= 1, "overflow requests degrade by dropping optional queued work")
@@ -81,7 +85,6 @@ func _test_bounded_streaming_and_hysteresis() -> void:
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 2, "second frame advances bounded work")
 	_assert(layer.pending_tile_count() == 0, "bounded queue drains across frames")
-
 	camera.altitude = 14500.0
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 2, "loaded tiles remain through hysteresis band")
@@ -91,7 +94,6 @@ func _test_bounded_streaming_and_hysteresis() -> void:
 	camera.altitude = 14500.0
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 0, "hidden layer does not flap back on inside hysteresis band")
-
 	camera.altitude = 1000.0
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 1, "layer can reload after becoming visible again")
@@ -99,7 +101,6 @@ func _test_bounded_streaming_and_hysteresis() -> void:
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 0, "large location jump unloads old geometry")
 	_assert(layer.pending_tile_count() == 0, "large location jump does not leave stale queued tiles")
-
 	for _cycle in range(3):
 		camera.focus = Vector3(110.0, 0.0, -10.0)
 		layer._process(0.0)
@@ -110,23 +111,19 @@ func _test_bounded_streaming_and_hysteresis() -> void:
 	_assert(layer.debug_snapshot()["active_records"] == 0, "repeated unload cycles leave no active record leak")
 
 func _record(x: float, y: float, source_id: String) -> Dictionary:
-	return {
-		"id": source_id,
-		"x": x,
-		"y": y,
-		"geometry": [{"outer": [[x - 5.0, y - 5.0], [x + 5.0, y - 5.0], [x + 5.0, y + 5.0], [x - 5.0, y + 5.0]], "holes": []}],
-		"tags": {"building": "yes", "building:levels": "4"},
-	}
+	return {"id": source_id, "x": x, "y": y, "geometry": [{"outer": [[x - 5.0, y - 5.0], [x + 5.0, y - 5.0], [x + 5.0, y + 5.0], [x - 5.0, y + 5.0]], "holes": []}], "tags": {"building": "yes", "building:levels": "4"}}
 
 func _write_tile(cache_dir: String, tile: Vector2i, record: Dictionary) -> void:
 	var path := "%s/%d_%d.jsonl" % [cache_dir, tile.x, tile.y]
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	_assert(file != null, "test tile is writable")
+	if file == null:
+		return
 	file.store_line(JSON.stringify(record))
 	file.close()
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:
 		return
+	_failed = true
 	push_error("world streaming foundation test failed: " + message)
-	quit(1)
