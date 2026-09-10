@@ -53,7 +53,7 @@ func _refresh(force: bool) -> void:
 		_last_visible = false
 		return
 	_last_visible = true
-	var focus: Vector3 = _camera_rig.call("get_focus_world") as Vector3
+	var focus: Vector3 = _camera_rig.call("get_focus_world")
 	var center_tile: Vector2i = _coordinates.world_to_tile(focus)
 	if not force and center_tile == _last_center_tile:
 		return
