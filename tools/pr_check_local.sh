@@ -38,9 +38,14 @@ PY
 
 run_godot_test() {
   local script="$1"
-  local log
+  local log status
   log="$(mktemp "${TMPDIR:-/tmp}/brur-world-showcase-test.XXXXXX.log")"
-  if ! "$GODOT" --headless --path "$WORKTREE" --script "$script" 2>&1 | tee "$log"; then
+  set +e
+  "$GODOT" --headless --path "$WORKTREE" --script "$script" 2>&1 | tee "$log"
+  status=${PIPESTATUS[0]}
+  set -e
+  if [[ $status -ne 0 ]]; then
+    printf 'PR_CHECK=FAIL Godot exited %d for %s\n' "$status" "$script" >&2
     rm -f "$log"
     return 1
   fi
