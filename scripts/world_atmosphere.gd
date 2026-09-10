@@ -10,6 +10,7 @@ class_name WorldAtmosphere
 @export var haze_start_altitude_m: float = 30000.0
 @export var full_haze_altitude_m: float = 3500.0
 @export var shadow_enable_altitude_m: float = 18000.0
+@export var enable_dynamic_shadows: bool = false
 @export var max_fog_density: float = 0.000085
 @export var near_ambient_energy: float = 0.82
 @export var far_ambient_energy: float = 1.05
@@ -70,7 +71,7 @@ func _apply(altitude_m: float) -> void:
 	_environment.ambient_light_color = Color(0.78, 0.86, 0.95).lerp(Color(0.70, 0.76, 0.82), blend * 0.45)
 	_environment.ambient_light_energy = lerpf(far_ambient_energy, near_ambient_energy, blend)
 	if _astronomical_sun != null:
-		_astronomical_sun.shadow_enabled = altitude_m <= shadow_enable_altitude_m
+		_astronomical_sun.shadow_enabled = enable_dynamic_shadows and altitude_m <= shadow_enable_altitude_m
 
 func debug_profile() -> Dictionary:
 	if _camera_rig == null:
