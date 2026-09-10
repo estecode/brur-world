@@ -12,6 +12,15 @@ const LEVEL_HEIGHT_M: float = 3.0
 const MIN_HEIGHT_M: float = 2.5
 const MAX_HEIGHT_M: float = 120.0
 
+static func stable_source_id(record: Dictionary) -> String:
+	for key in ["id", "osm_id", "source_id"]:
+		if record.has(key) and not String(record[key]).is_empty():
+			return String(record[key])
+	return "xy:%.3f:%.3f" % [float(record.get("x", 0.0)), float(record.get("y", 0.0))]
+
+static func stable_seed(record: Dictionary) -> int:
+	return stable_source_id(record).hash()
+
 static func height_from_tags(tags: Dictionary) -> float:
 	var explicit_height := _numeric_tag(tags.get("height", ""))
 	if explicit_height > 0.0:
