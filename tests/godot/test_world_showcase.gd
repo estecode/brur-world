@@ -32,10 +32,13 @@ func _test_deterministic_building_appearance() -> void:
 	var colors_a: Dictionary = BuildingMeshBuilderScript.appearance_colors(record_a)
 	var colors_a_reload: Dictionary = BuildingMeshBuilderScript.appearance_colors(record_a.duplicate(true))
 	var colors_b: Dictionary = BuildingMeshBuilderScript.appearance_colors(record_b)
+	var wall_a: Color = colors_a["wall"]
+	var base_a: Color = colors_a["base"]
+	var wall_b: Color = colors_b["wall"]
 	_assert(colors_a == colors_a_reload, "building appearance survives unload/reload deterministically")
-	_assert(colors_a["wall"] != colors_b["wall"], "different stable IDs can produce restrained appearance variation")
-	_assert(float((colors_a["wall"] as Color).r) >= 0.42 and float((colors_a["wall"] as Color).r) <= 0.56, "wall variation stays restrained")
-	_assert((colors_a["base"] as Color).get_luminance() < (colors_a["wall"] as Color).get_luminance(), "building base is darker for contact shading")
+	_assert(wall_a != wall_b, "different stable IDs can produce restrained appearance variation")
+	_assert(wall_a.r >= 0.42 and wall_a.r <= 0.56, "wall variation stays restrained")
+	_assert(base_a.get_luminance() < wall_a.get_luminance(), "building base is darker for contact shading")
 	var mesh: ArrayMesh = BuildingMeshBuilderScript.build_tile_mesh([record_a, record_b], Vector2.ZERO)
 	_assert(mesh != null and mesh.get_surface_count() == 1, "multiple buildings remain one batched tile surface")
 	var arrays := mesh.surface_get_arrays(0)
