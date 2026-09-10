@@ -36,6 +36,22 @@ print(
 )
 PY
 
+run_godot_test() {
+  local script="$1"
+  local log
+  log="$(mktemp "${TMPDIR:-/tmp}/brur-world-showcase-test.XXXXXX.log")"
+  if ! "$GODOT" --headless --path "$WORKTREE" --script "$script" 2>&1 | tee "$log"; then
+    rm -f "$log"
+    return 1
+  fi
+  if grep -Eq 'SCRIPT ERROR:|Failed to load script|world (streaming foundation|showcase) test failed:' "$log"; then
+    printf 'PR_CHECK=FAIL Godot reported script/test errors for %s\n' "$script" >&2
+    rm -f "$log"
+    return 1
+  fi
+  rm -f "$log"
+}
+
 printf 'PR_CHECK=CHECK_WORLD_SHOWCASE_HEADLESS pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
-"$GODOT" --headless --path "$WORKTREE" --script res://tests/godot/test_world_streaming_foundation.gd
-"$GODOT" --headless --path "$WORKTREE" --script res://tests/godot/test_world_showcase.gd
+run_godot_test res://tests/godot/test_world_streaming_foundation.gd
+run_godot_test res://tests/godot/test_world_showcase.gd
