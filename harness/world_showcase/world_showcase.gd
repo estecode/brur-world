@@ -13,6 +13,7 @@ const CITY_ABSOLUTE := {
 	"Göteborg": Vector2(1333006.3744531337, 7906413.516421634),
 	"Stockholm": Vector2(2011387.3513473428, 8251904.234165725),
 }
+const CITY_SLUG := {"Malmö": "malmo", "Göteborg": "goteborg", "Stockholm": "stockholm"}
 const CITY_ORDER := ["Malmö", "Göteborg", "Stockholm", "Malmö"]
 const START_ALTITUDE_M := 30000.0
 const DIVE_ALTITUDE_M := 1400.0
@@ -50,11 +51,12 @@ func _ready() -> void:
 func _initialize() -> void:
 	_coordinates = _main.call("get_world_coordinates")
 	_configure_camera_for_continuous_scale()
-	_buildings.active_radius_tiles = 1
+	_disable_non_showcase_poi_work()
+	_buildings.active_radius_tiles = 0
 	_buildings.builds_per_frame = 1
 	_buildings.build_budget_ms = 3.5
-	_buildings.max_pending_tiles = 18
-	_buildings.prefetch_tiles_ahead = 1
+	_buildings.max_pending_tiles = 4
+	_buildings.prefetch_tiles_ahead = 0
 	_buildings.appear_altitude_m = 16000.0
 	_buildings.hide_altitude_m = 17500.0
 	_buildings.full_height_altitude_m = 1800.0
@@ -65,6 +67,14 @@ func _initialize() -> void:
 	_spawn_player()
 	_update_controls()
 	_update_status()
+
+func _disable_non_showcase_poi_work() -> void:
+	var poi_layer := _main.get_node_or_null("PoiLayer")
+	if poi_layer == null:
+		return
+	if poi_layer.has_method("set_presentation_enabled"):
+		poi_layer.call("set_presentation_enabled", false)
+	poi_layer.set_process(false)
 
 func _configure_camera_for_continuous_scale() -> void:
 	_camera_rig.overview_pitch_degrees = 84.0
@@ -150,11 +160,15 @@ func _reset_overview() -> void:
 		_dive_tween.kill()
 	_jump_to_city("Malmö", START_ALTITUDE_M)
 
+func _local_background_path(city: String) -> String:
+	return "%s/background_%s.brmap" % [CACHE_DIR, String(CITY_SLUG.get(city, "malmo"))]
+
 func _jump_to_city(city: String, altitude_m: float = 4500.0) -> void:
 	if _coordinates == null or _camera_rig == null or not CITY_ABSOLUTE.has(city):
 		return
 	_current_city = city
 	_current_world = _coordinates.absolute_to_world(CITY_ABSOLUTE[city], 0.0)
+	_main.call("set_background_source", _local_background_path(city))
 	_camera_rig.call("set_drive_mode", false)
 	if _player != null:
 		_player.process_mode = Node.PROCESS_MODE_DISABLED
@@ -233,7 +247,7 @@ func _update_status() -> void:
 		int(_last_metrics.get("building_dropped_requests", 0)),
 		float(atmosphere.get("fog_density", 0.0)),
 		String(snapshot.get("last_center_tile", "")),
-		"existing buildings.jsonl" if cache_ready else "MISSING CACHE",
+		"local runtime map + buildings" if cache_ready else "MISSING CACHE",
 	]
 
 func _build_ui() -> void:
@@ -258,7 +272,7 @@ func _build_ui() -> void:
 	title.text = "BRUR — 30 km → street POC #126"
 	box.add_child(title)
 	_status = Label.new()
-	_status.text = "Preparing existing Sweden building data…"
+	_status.text = "Preparing existing Sweden showcase data…"
 	box.add_child(_status)
 
 	_dive_button = Button.new()
@@ -287,7 +301,7 @@ func _build_ui() -> void:
 	box.add_child(reset)
 
 	var hint := Label.new()
-	hint.text = "Mouse wheel/drag/WASD still work in map mode.\nWatch the camera tilt, haze and buildings resolve as one world.\nManual Drive: W/S throttle, A/D steer, Space brake."
+	hint.text = "Mouse wheel/drag/WASD still work in map mode.\nPOI streaming is disabled in this performance POC.\nManual Drive: W/S throttle, A/D steer, Space brake."
 	box.add_child(hint)
 
 	_stress_timer = Timer.new()
