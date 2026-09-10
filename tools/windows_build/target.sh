@@ -19,7 +19,7 @@ for required in manifest.json buildings.jsonl background.brmap; do
 done
 
 "$PYTHON" "$BRUR_WINDOWS_SOURCE_ROOT/tools/prepare_world_showcase.py" \
-  "$BRUR_WINDOWS_WORLD_DATA" "$BRUR_WINDOWS_RUNTIME_DATA_OUT"
+  "$BRUR_WINDOWS_WORLD_DATA" --output "$BRUR_WINDOWS_RUNTIME_DATA_OUT"
 
 "$PYTHON" - "$BRUR_WINDOWS_SOURCE_ROOT/project.godot" <<'PY'
 from pathlib import Path
