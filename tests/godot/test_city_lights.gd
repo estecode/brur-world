@@ -32,6 +32,7 @@ func _run() -> void:
 	_test_production_composition()
 	await _test_environment_contrast()
 	await _test_renderer_visual_contracts()
+	await _test_large_renderer_multimesh_distribution()
 	print("godot city light tests: OK")
 	quit(0)
 
@@ -191,6 +192,33 @@ func _test_renderer_visual_contracts() -> void:
 	await process_frame
 	stats = renderer.get_render_stats()
 	_assert(not bool(stats["glow_visible"]) and not bool(stats["points_visible"]), "daylight removes both night layers")
+	renderer.queue_free()
+	camera.queue_free()
+	await process_frame
+
+func _test_large_renderer_multimesh_distribution() -> void:
+	var camera := MockCameraRig.new()
+	camera.name = "LargeCameraRig"
+	root.add_child(camera)
+	var renderer = CityLightRendererScript.new()
+	renderer.name = "LargeCityLights"
+	renderer.camera_rig_path = NodePath("../LargeCameraRig")
+	root.add_child(renderer)
+	await process_frame
+	renderer.begin_urban_data()
+	for x in range(260):
+		for z in range(260):
+			var ox := float(x) * 1000.0
+			var oz := float(z) * 1000.0
+			renderer.add_urban_triangle(Vector3(ox + 20.0, 0.0, oz + 20.0), Vector3(ox + 400.0, 0.0, oz + 20.0), Vector3(ox + 20.0, 0.0, oz + 400.0))
+	renderer.finish_urban_data()
+	var points := renderer.get_node_or_null("LocalLightPoints") as MultiMeshInstance3D
+	_assert(points != null and points.multimesh != null, "large renderer fixture creates production MultiMesh")
+	_assert(points.multimesh.instance_count == 60000, "large renderer fixture reaches the production local-light budget")
+	var first := points.multimesh.get_instance_transform(0).origin
+	var middle := points.multimesh.get_instance_transform(30000).origin
+	var last := points.multimesh.get_instance_transform(59999).origin
+	_assert(first.distance_to(middle) > 10000.0 or first.distance_to(last) > 10000.0, "60k MultiMesh upload preserves distinct large-scale light positions")
 	renderer.queue_free()
 	camera.queue_free()
 	await process_frame
