@@ -2,6 +2,7 @@
 #include "gps_mapped_data.h"
 #include "gps_route_geometry.h"
 #include "gps_route_protocol.h"
+#include "gps_route_speed_profile.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -20,6 +21,7 @@
 // Dependencies:
 // - gps_core owns snapping, legality, preferences, routing and ordered plan semantics.
 // - gps_route_geometry expands chosen edges with BRH1 road-shape points before serialization.
+// - gps_route_speed_profile aligns authoritative BRG1 speeds with the routed presentation points.
 // - gps_mapped_data owns POSIX file mapping/warming.
 // - This file owns text parsing, JSON serialization, process priority and TCP only.
 
@@ -44,6 +46,7 @@ std::string error_json(const std::string &error) {
 }
 
 void append_json_result(std::ostringstream &out, const RouteResult &result,
+                        const std::vector<float> &speed_limits_mps,
                         double snap_ms, double route_ms) {
     out << std::setprecision(12)
         << "{\"success\":" << (result.success ? "true" : "false")
@@ -103,10 +106,18 @@ void append_json_result(std::ostringstream &out, const RouteResult &result,
         if (i) out << ',';
         out << '[' << result.points[i].x << ',' << result.points[i].y << ']';
     }
+    out << ']';
+
+    out << ",\"speed_limits_mps\":[";
+    for (std::size_t i = 0; i < speed_limits_mps.size(); ++i) {
+        if (i) out << ',';
+        out << speed_limits_mps[i];
+    }
     out << "]}\n";
 }
 
-std::string handle_plan(const std::string &line, RoutingContext &core, const RouteGeometryView &geometry) {
+std::string handle_plan(const std::string &line, RoutingContext &core,
+                        const RouteGeometryView &geometry, const RoutingSpeedView &speeds) {
     const auto parsed = parse_route_plan_request(line);
     if (!parsed.success) return error_json("bad_plan");
 
@@ -134,7 +145,7 @@ std::string handle_plan(const std::string &line, RoutingContext &core, const Rou
                 failed.snap_candidates.push_back(stop.candidates);
             }
             std::ostringstream out;
-            append_json_result(out, failed, snap_ms, 0.0);
+            append_json_result(out, failed, {}, snap_ms, 0.0);
             return out.str();
         }
     }
@@ -142,13 +153,15 @@ std::string handle_plan(const std::string &line, RoutingContext &core, const Rou
     const auto route_started = std::chrono::steady_clock::now();
     auto result = core.route_plan(request);
     geometry.densify(result);
+    const auto speed_profile = build_route_speed_profile(result, geometry, speeds);
     const auto route_finished = std::chrono::steady_clock::now();
     std::ostringstream out;
-    append_json_result(out, result, snap_ms, elapsed_ms(route_started, route_finished));
+    append_json_result(out, result, speed_profile, snap_ms, elapsed_ms(route_started, route_finished));
     return out.str();
 }
 
-std::string handle_direct(const std::string &line, RoutingContext &core, const RouteGeometryView &geometry) {
+std::string handle_direct(const std::string &line, RoutingContext &core,
+                          const RouteGeometryView &geometry, const RoutingSpeedView &speeds) {
     std::istringstream input(line);
     double start_x = 0.0;
     double start_y = 0.0;
@@ -170,6 +183,7 @@ std::string handle_direct(const std::string &line, RoutingContext &core, const R
     const auto c = std::chrono::steady_clock::now();
 
     RouteResult result;
+    std::vector<float> speed_profile;
     if (!start.success || !target.success) {
         result.preference = preference;
         result.failure = RouteFailure::SnapFailed;
@@ -179,17 +193,19 @@ std::string handle_direct(const std::string &line, RoutingContext &core, const R
     } else {
         result = core.route({start, target, preference});
         geometry.densify(result);
+        speed_profile = build_route_speed_profile(result, geometry, speeds);
     }
     const auto d = std::chrono::steady_clock::now();
 
     std::ostringstream out;
-    append_json_result(out, result, elapsed_ms(a, c), elapsed_ms(c, d));
+    append_json_result(out, result, speed_profile, elapsed_ms(a, c), elapsed_ms(c, d));
     return out.str();
 }
 
-std::string handle_query(const std::string &line, RoutingContext &core, const RouteGeometryView &geometry) {
-    if (line.rfind("plan ", 0) == 0) return handle_plan(line, core, geometry);
-    return handle_direct(line, core, geometry);
+std::string handle_query(const std::string &line, RoutingContext &core,
+                         const RouteGeometryView &geometry, const RoutingSpeedView &speeds) {
+    if (line.rfind("plan ", 0) == 0) return handle_plan(line, core, geometry, speeds);
+    return handle_direct(line, core, geometry, speeds);
 }
 
 bool send_all(int fd, const std::string &payload) {
@@ -221,7 +237,8 @@ int main(int argc, char **argv) {
         MappedFile mapped_geometry(geometry_path);
         RoutingContext core(mapped.view());
         RouteGeometryView geometry(mapped_geometry.view());
-        if (geometry.edge_count() != core.edge_count())
+        RoutingSpeedView speeds(mapped.graph.view());
+        if (geometry.edge_count() != core.edge_count() || speeds.edge_count() != core.edge_count())
             throw std::runtime_error("BRH1/BRG1 edge count mismatch");
 
         const auto warm_started = std::chrono::steady_clock::now();
@@ -276,7 +293,7 @@ int main(int argc, char **argv) {
                     pending.erase(0, newline + 1);
                     if (line.empty()) continue;
                     try {
-                        if (!send_all(client_fd, handle_query(line, core, geometry))) {
+                        if (!send_all(client_fd, handle_query(line, core, geometry, speeds))) {
                             connected = false;
                             break;
                         }

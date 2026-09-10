@@ -53,20 +53,30 @@ Safe Command Links is installed once per Mac. After cloning both repositories, r
 ```bash
 bash install.sh
 bash allow-repo.sh estecode/brur-world /absolute/path/to/brur-world
-bash allow-project.sh /absolute/path/to/brur-world pr-check . /bin/bash tools/pr_check.sh --param pr:positive-int
+bash allow-project.sh /absolute/path/to/brur-world pr-check . /bin/bash tools/pr_check_entry.sh --param pr:positive-int
 ```
 
-That is the complete project registration. The GitHub link contains only the portable repository identity and PR number; no developer-specific path is committed or placed in a PR. Safe Command Links maps the repository identity to the local checkout and executes only the locally approved command.
+That is the complete project registration. The GitHub link contains only the portable repository identity and PR number; no developer-specific path is committed or placed in a PR. Safe Command Links maps the repository identity to the local checkout and executes only the locally approved entrypoint.
+
+The stable `tools/pr_check_entry.sh` entrypoint fetches current `origin/main` and prepares that revision in a temporary detached worktree before running the project-owned PR-check launcher. It does not switch, pull, reset, clean or otherwise mutate the mapped checkout. The mapped checkout remains the owner of local machine state such as ignored `world_data`, the local virtual environment, repository access and sibling Sweden PBF data. This prevents an old local `main` from silently running obsolete PR-check behavior.
+
+After migrating an existing installation from the old `tools/pr_check.sh` approval, update the mapped checkout once so `tools/pr_check_entry.sh` exists, then re-run the `allow-project.sh` command above. After that one-time migration, ordinary Safe Checks fetch the current launcher themselves; manually pulling `main` before every PR check is not required.
 
 A PR check requires:
 
 - macOS with Safe Command Links installed;
-- this repository mapped and `pr-check` approved as above;
+- this repository mapped and `pr-check` approved to `tools/pr_check_entry.sh` as above;
+- authenticated GitHub CLI (`gh`) access for this repository so local objective results can be persisted on the exact PR head;
 - Godot available as `godot` or installed at `/Applications/Godot.app`;
 - local `world_data/manifest.json` in the mapped checkout;
-- `tools/pr_check.sh` present in the mapped checkout.
+- `tools/pr_check_entry.sh` present in the mapped checkout;
+- network/repository access sufficient to fetch current `origin/main`.
 
-If the browser reports that the approved command was started, Safe Command Links itself accepted the request. Any subsequent error is from the project-owned `tools/pr_check.sh` and is shown in Terminal.
+The project-owned PR check records a GitHub commit status named `brur-world/local-pr-check` on the exact PR head. It records `pending` when the local run starts, `failure` if objective validation fails, and `success` only after the local objective checks complete. Earlier failed attempts remain in GitHub's status history even if a later run passes. Human visual/feel approval is separate and is never implied by this machine status.
+
+If the current launcher cannot be fetched/prepared, or GitHub status recording cannot be initialized, the PR check fails closed. A missing or failed required local-check status therefore cannot be replaced by a remembered terminal result or by saying that the test looked fine.
+
+If the browser reports that the approved command was started, Safe Command Links itself accepted the request. Any subsequent error is from the project-owned PR-check bootstrap/launcher and is shown in Terminal; objective failures are also persisted to GitHub once status recording has started.
 
 Project/agent rules for generating the clickable link are defined in `AGENTS.md`. Safe Command Links itself stays generic; this repository owns the Godot-specific PR-check behavior.
 

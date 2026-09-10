@@ -165,32 +165,50 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 		var local_index: int = puff_index % puffs_per_cloudlet
 		var cloudlet_center: Vector3 = cloudlet_centers[cloudlet_index]
 		var is_core: bool = local_index == 0
+		var role: int = local_index % 5
 
-		var height_m: float = maxf(300.0, thickness_m * rng.randf_range(0.50, 0.82))
-		var major_m: float = nominal_major * rng.randf_range(0.82, 1.16)
+		var height_m: float = maxf(300.0, thickness_m * rng.randf_range(0.48, 0.78))
+		var major_m: float = nominal_major * rng.randf_range(0.82, 1.12)
 		if is_core:
-			major_m *= rng.randf_range(1.12, 1.34)
+			major_m *= rng.randf_range(1.28, 1.46)
+			height_m *= rng.randf_range(0.92, 1.10)
+		elif role == 2:
+			major_m *= rng.randf_range(0.48, 0.68)
+			height_m *= rng.randf_range(0.72, 0.90)
+		elif role == 4:
+			major_m *= rng.randf_range(0.62, 0.80)
+			height_m *= rng.randf_range(0.58, 0.76)
 		else:
-			major_m *= rng.randf_range(0.62, 0.92)
+			major_m *= rng.randf_range(0.68, 0.90)
 		major_m = minf(major_m, MAX_LOCAL_PUFF_MAJOR_M)
 		major_m = minf(major_m, height_m * MAX_VERTICAL_ASPECT)
 		major_m = maxf(major_m, minf(650.0, size_m * 0.24))
 
-		var horizontal_aspect: float = rng.randf_range(1.12, MAX_HORIZONTAL_ASPECT)
+		var horizontal_aspect: float = rng.randf_range(1.16, MAX_HORIZONTAL_ASPECT)
 		if is_core:
-			horizontal_aspect = rng.randf_range(1.22, 1.72)
+			horizontal_aspect = rng.randf_range(1.34, 1.82)
+		elif role == 4:
+			horizontal_aspect = rng.randf_range(1.45, 1.95)
 		var minor_m: float = maxf(height_m * 0.78, major_m / horizontal_aspect)
 		minor_m = minf(minor_m, major_m)
 
 		var local_offset := Vector3.ZERO
 		if not is_core:
-			# Satellites stay close enough to overlap the core. This restores the
-			# older cloud-like silhouette instead of distributing isolated beads.
+			# A cloudlet is one overlapping mass: bridge lobes join the broad core,
+			# crown lobes add real height, and low skirt lobes break the footprint.
+			# Offsets stay in physical world units and never depend on camera state.
 			var local_angle: float = rng.randf_range(0.0, TAU)
-			var local_radius: float = rng.randf_range(0.22, 0.58) * major_m
-			var local_y: float = rng.randf_range(-0.34, 0.42) * height_m
-			if local_index % 3 == 0:
-				local_y = rng.randf_range(0.16, 0.48) * height_m
+			var local_radius: float
+			var local_y: float
+			if role == 2:
+				local_radius = rng.randf_range(0.12, 0.30) * nominal_major
+				local_y = rng.randf_range(0.28, 0.58) * height_m
+			elif role == 4:
+				local_radius = rng.randf_range(0.24, 0.44) * nominal_major
+				local_y = rng.randf_range(-0.24, 0.04) * height_m
+			else:
+				local_radius = rng.randf_range(0.16, 0.38) * nominal_major
+				local_y = rng.randf_range(-0.12, 0.26) * height_m
 			local_offset = Vector3(
 				cos(local_angle) * local_radius,
 				local_y,
@@ -201,7 +219,7 @@ func _append_cloud_puffs(cloud_index: int, cloud: Dictionary, puff_count: int) -
 		var offset: Vector3 = cloudlet_center + local_offset
 		var yaw: float = rng.randf_range(0.0, TAU)
 		if not is_core and local_offset.length_squared() > 1.0:
-			yaw = atan2(local_offset.z, local_offset.x) + rng.randf_range(-0.75, 0.75)
+			yaw = atan2(local_offset.z, local_offset.x) + rng.randf_range(-0.72, 0.72)
 
 		_max_puff_major_m = maxf(_max_puff_major_m, major_m)
 		var actual_horizontal_aspect: float = major_m / maxf(1.0, minor_m)

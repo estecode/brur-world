@@ -1,8 +1,9 @@
 extends SceneTree
 
-## Headless integration tests for the production player vehicle scene and control ownership boundary.
-## Dependencies: scenes/player_vehicle.tscn, Vehicle adapter, player controller, route follower, and driving harness scene.
+## Headless integration tests for the production player vehicle, route policy and control ownership boundary.
+## Dependencies: player vehicle scene, RouteDrivingPolicy, route follower, and driving harness scene.
 
+const RouteDrivingPolicyScript = preload("res://scripts/route_driving_policy.gd")
 const PLAYER_OWNER: int = 0
 const GPS_OWNER: int = 1
 
@@ -10,6 +11,7 @@ func _init() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
+	_test_route_policy()
 	var player_scene := load("res://scenes/player_vehicle.tscn") as PackedScene
 	_assert(player_scene != null, "player vehicle scene loads")
 	var player: Node3D = player_scene.instantiate() as Node3D
@@ -41,7 +43,7 @@ func _run() -> void:
 		player.global_position,
 		player.global_position + Vector3(0.0, 0.0, -100.0),
 	])
-	route_follower.call("set_route", route)
+	route_follower.call("set_route", route, PackedFloat32Array([13.9, 13.9]))
 	_assert(bool(route_follower.call("set_follow_enabled", true)), "GPS follow can take ownership for an active route")
 	_assert(int(player.call("control_owner")) == GPS_OWNER, "GPS owns controls while follow is on")
 	route_follower.call("_physics_process", 1.0 / 60.0)
@@ -52,6 +54,13 @@ func _run() -> void:
 	_assert(int(player.call("control_owner")) == PLAYER_OWNER, "manual control owns same vehicle after follow off")
 	_assert(_same_state(before_manual_takeover, after_manual_takeover), "follow off preserves live vehicle state")
 	_assert(bool(route_follower.call("has_route")), "follow off preserves the active route")
+
+	var reroute_count := [0]
+	route_follower.connect("reroute_requested", func(): reroute_count[0] += 1)
+	player.call("set_world_position", Vector3(180.0, 0.0, 200.0))
+	route_follower.call("_physics_process", 1.0 / 60.0)
+	_assert(reroute_count[0] == 1, "manual deviation requests a reroute without taking control")
+	_assert(int(player.call("control_owner")) == PLAYER_OWNER, "reroute request leaves manual control active")
 
 	var harness_scene := load("res://harness/driving/driving_harness.tscn") as PackedScene
 	_assert(harness_scene != null, "driving harness scene loads")
@@ -67,6 +76,19 @@ func _run() -> void:
 	root.queue_free()
 	print("godot vehicle-integration tests: OK")
 	quit(0)
+
+func _test_route_policy() -> void:
+	var policy = RouteDrivingPolicyScript.new()
+	var straight := PackedVector3Array([Vector3.ZERO, Vector3(0.0, 0.0, -40.0), Vector3(0.0, 0.0, -80.0)])
+	var curve := PackedVector3Array([Vector3.ZERO, Vector3(0.0, 0.0, -20.0), Vector3(20.0, 0.0, -20.0)])
+	var limits := PackedFloat32Array([22.2, 22.2, 22.2])
+	var straight_speed: float = policy.target_speed_mps(straight, 1, limits, 15.0)
+	var curve_speed: float = policy.target_speed_mps(curve, 1, limits, 15.0)
+	_assert(curve_speed < straight_speed, "driver slows before a sharp curve")
+	var low_limits := PackedFloat32Array([22.2, 8.3, 8.3])
+	_assert(policy.target_speed_mps(straight, 1, low_limits, 15.0) < straight_speed, "driver anticipates a lower upcoming speed limit")
+	var braking: Vector2 = policy.controls_for_speed(20.0, 8.0)
+	_assert(braking.x == 0.0 and braking.y > 0.0, "driver brakes progressively above target speed")
 
 func _same_state(a, b) -> bool:
 	return _approx(a.x_m, b.x_m) and _approx(a.z_m, b.z_m) and _approx(a.heading_rad, b.heading_rad) and _approx(a.speed_mps, b.speed_mps)
