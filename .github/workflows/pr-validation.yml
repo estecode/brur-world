@@ -32,6 +32,9 @@ jobs:
       - name: Run world showcase cache preparation tests
         run: python -m unittest tests.test_world_showcase_prepare
 
+      - name: Run Windows client bundle packaging tests
+        run: python -m unittest tests.test_world_showcase_client_package
+
       - name: Install Godot 4 headless runtime
         shell: bash
         run: |
