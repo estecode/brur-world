@@ -1,5 +1,5 @@
 [application]
-config/name="Brur World POC — 3D Buildings #120"
+config/name="Brur World POC — World Streaming #122"
 run/main_scene="res://harness/buildings/building_poc.tscn"
 
 [display]
