@@ -21,7 +21,10 @@ CITY_CENTERS = {
     "goteborg": (1_333_006.3744531337, 7_906_413.516421634),
     "stockholm": (2_011_387.3513473428, 8_251_904.234165725),
 }
-DEFAULT_RADIUS_M = 7_500.0
+# Keep the POC's fully extruded working set local enough to be genuinely playable.
+# The previous 7.5 km square radius pushed hundreds of square kilometres of
+# building geometry into one coarse world tile, making the visual POC GPU-bound.
+DEFAULT_RADIUS_M = 1_500.0
 PROGRESS_INTERVAL = 250_000
 
 
