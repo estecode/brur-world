@@ -22,6 +22,7 @@ For this POC only:
 
 - only the current demo city's 50 km local BRM2 map extract is loaded,
 - POI presentation/refresh is disabled because POIs are outside #126's acceptance target,
+- clouds are disabled because their transparent puff field is outside #126's core acceptance target,
 - full-detail buildings stay local to roughly 1.5 km,
 - building streaming stays on the local world tile with no directional prefetch,
 - building and directional dynamic shadows remain disabled.
