@@ -9,6 +9,7 @@
 script = ExtResource("1_showcase")
 
 [node name="Main" parent="." instance=ExtResource("2_main")]
+background_source_path = "res://.poc_runtime/world_showcase/background_malmo.brmap"
 
 [node name="BuildingLayer" type="Node3D" parent="Main"]
 script = ExtResource("3_buildings")
