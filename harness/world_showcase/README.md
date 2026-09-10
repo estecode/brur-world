@@ -12,7 +12,7 @@ It composes production systems rather than reimplementing them:
 
 The Safe Check prepares `.poc_runtime/world_showcase/` only from the already-built `world_data/buildings.jsonl`. It does **not** read the Sweden PBF or rebuild authoritative world data.
 
-The local objective hook is fail-closed across supported Godot versions: script parse/compile/runtime-test errors make the Safe Check fail instead of allowing the visual harness to open on a broken revision.
+The local objective hook is fail-closed across supported Godot versions: script parse/compile/runtime-test errors make the Safe Check fail instead of allowing the visual harness to open on a broken revision. This specifically prevents a Godot error followed by a misleading test `OK`/status success from being accepted.
 
 ## Performance profile
 
