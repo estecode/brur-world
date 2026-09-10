@@ -7,6 +7,8 @@ const MIN_SWEDEN_SOURCE_CELLS: int = 250
 const MIN_POI_DENSITY_CELLS: int = 100
 const GRID_SIZE_M: float = 450.0
 
+var _failed: bool = false
+
 func _init() -> void:
 	call_deferred("_run")
 
@@ -17,6 +19,9 @@ func _run() -> void:
 
 	var scene := load("res://scenes/main.tscn") as PackedScene
 	_assert(scene != null, "production main scene loads")
+	if scene == null:
+		quit(1)
+		return
 	var game := scene.instantiate()
 	root.add_child(game)
 	await process_frame
@@ -27,6 +32,8 @@ func _run() -> void:
 	_assert(city_lights != null, "production composition created CityLights")
 	_assert(camera_rig != null, "production composition exposes CameraRig")
 	if city_lights == null or camera_rig == null:
+		game.queue_free()
+		await process_frame
 		quit(1)
 		return
 
@@ -80,10 +87,11 @@ func _run() -> void:
 	stats = city_lights.get_render_stats()
 	_assert(not bool(stats.get("glow_visible", true)) and not bool(stats.get("points_visible", true)), "daylight removes real-data nighttime presentation")
 
-	print("godot city light real-data tests: OK | source_cells=%d poi_cells=%d pois=%d glow=%d points=%d" % [source_cells, poi_density_cells, poi_density_total, glow_count, point_count])
+	if not _failed:
+		print("godot city light real-data tests: OK | source_cells=%d poi_cells=%d pois=%d glow=%d points=%d" % [source_cells, poi_density_cells, poi_density_total, glow_count, point_count])
 	game.queue_free()
 	await process_frame
-	quit(0)
+	quit(1 if _failed else 0)
 
 func _sample_indices(instance_count: int, requested_count: int) -> Array[int]:
 	var result: Array[int] = []
@@ -132,5 +140,5 @@ func _has_large_geographic_span(multimesh: MultiMesh) -> bool:
 func _assert(condition: bool, message: String) -> void:
 	if condition:
 		return
+	_failed = true
 	push_error("city light real-data test failed: " + message)
-	quit(1)
