@@ -6,6 +6,7 @@ extends SceneTree
 const MIN_SWEDEN_SOURCE_CELLS: int = 250
 const MIN_POI_DENSITY_CELLS: int = 100
 const GRID_SIZE_M: float = 450.0
+const MULTIMESH_3D_STRIDE: int = 12
 
 var _failed: bool = false
 
@@ -63,24 +64,25 @@ func _run() -> void:
 	var points := city_lights.get_node_or_null("LocalLightPoints") as MultiMeshInstance3D
 	_assert(points != null and points.multimesh != null, "real-data local lights use the production MultiMesh")
 	if points != null and points.multimesh != null and points.multimesh.instance_count > 0:
-		var first_transform := points.multimesh.get_instance_transform(0)
-		var first_scale := first_transform.basis.get_scale()
-		_assert(first_scale.x <= 30.0 and first_scale.z <= 30.0, "close real-data light points remain small at ground scale")
-		_assert(_has_irregular_cell_offsets(points.multimesh), "real-data lights do not collapse onto a visible regular sampling grid")
-		_assert(_has_large_geographic_span(points.multimesh), "sampled real-data lights span a broad Sweden-sized area")
+		var point_buffer := points.multimesh.buffer
+		_assert(point_buffer.size() == points.multimesh.instance_count * MULTIMESH_3D_STRIDE, "real-data MultiMesh exposes a complete production transform buffer")
+		var first_origin := _buffer_origin(point_buffer, 0)
+		_assert(point_buffer[0] <= 30.0 and point_buffer[10] <= 30.0, "close real-data light points remain small at ground scale")
+		_assert(_has_irregular_cell_offsets(point_buffer, points.multimesh.instance_count), "real-data lights do not collapse onto a visible regular sampling grid")
+		_assert(_has_large_geographic_span(point_buffer, points.multimesh.instance_count), "sampled real-data lights span a broad Sweden-sized area")
 
 		camera_rig.set_altitude(170000.0)
 		await process_frame
 		stats = city_lights.get_render_stats()
 		_assert(bool(stats.get("glow_visible", false)) and bool(stats.get("points_visible", false)), "mid-distance real-data view blends overview and local LODs")
-		_assert(points.multimesh.get_instance_transform(0).origin.is_equal_approx(first_transform.origin), "real-data camera LOD leaves physical light positions unchanged")
+		_assert(_buffer_origin(points.multimesh.buffer, 0).is_equal_approx(first_origin), "real-data camera LOD leaves physical light positions unchanged")
 
 		camera_rig.set_altitude(400000.0)
 		await process_frame
 		stats = city_lights.get_render_stats()
 		_assert(bool(stats.get("glow_visible", false)), "far real-data view keeps overview glow")
 		_assert(not bool(stats.get("points_visible", true)), "far real-data view hides local points")
-		_assert(points.multimesh.get_instance_transform(0).origin.is_equal_approx(first_transform.origin), "far real-data LOD still leaves physical light positions unchanged")
+		_assert(_buffer_origin(points.multimesh.buffer, 0).is_equal_approx(first_origin), "far real-data LOD still leaves physical light positions unchanged")
 
 	city_lights.apply_solar_state({"valid": true, "elevation_deg": 8.0})
 	await process_frame
@@ -106,27 +108,31 @@ func _sample_indices(instance_count: int, requested_count: int) -> Array[int]:
 		result[sample_index] = int(round(float(sample_index) * float(instance_count - 1) / float(sample_count - 1)))
 	return result
 
-func _has_irregular_cell_offsets(multimesh: MultiMesh) -> bool:
+func _buffer_origin(buffer: PackedFloat32Array, index: int) -> Vector3:
+	var offset := index * MULTIMESH_3D_STRIDE
+	return Vector3(buffer[offset + 3], buffer[offset + 7], buffer[offset + 11])
+
+func _has_irregular_cell_offsets(buffer: PackedFloat32Array, instance_count: int) -> bool:
 	var seen: Dictionary = {}
-	for index in _sample_indices(multimesh.instance_count, 2048):
-		var origin := multimesh.get_instance_transform(index).origin
+	for index in _sample_indices(instance_count, 2048):
+		var origin := _buffer_origin(buffer, index)
 		var x_mod := fposmod(origin.x, GRID_SIZE_M)
 		var z_mod := fposmod(origin.z, GRID_SIZE_M)
 		var key := "%d:%d" % [int(floor(x_mod / 25.0)), int(floor(z_mod / 25.0))]
 		seen[key] = true
 	if seen.size() < 24:
-		print("CITY_LIGHT_DIAG irregular_offset_bucket_count=%d instances=%d" % [seen.size(), multimesh.instance_count])
+		print("CITY_LIGHT_DIAG irregular_offset_bucket_count=%d instances=%d" % [seen.size(), instance_count])
 	return seen.size() >= 24
 
-func _has_large_geographic_span(multimesh: MultiMesh) -> bool:
-	if multimesh.instance_count < 2:
+func _has_large_geographic_span(buffer: PackedFloat32Array, instance_count: int) -> bool:
+	if instance_count < 2:
 		return false
 	var min_x := INF
 	var max_x := -INF
 	var min_z := INF
 	var max_z := -INF
-	for index in range(multimesh.instance_count):
-		var origin := multimesh.get_instance_transform(index).origin
+	for index in range(instance_count):
+		var origin := _buffer_origin(buffer, index)
 		min_x = minf(min_x, origin.x)
 		max_x = maxf(max_x, origin.x)
 		min_z = minf(min_z, origin.z)
@@ -134,7 +140,7 @@ func _has_large_geographic_span(multimesh: MultiMesh) -> bool:
 	var span_x := max_x - min_x
 	var span_z := max_z - min_z
 	if span_x < 100000.0 or span_z < 100000.0:
-		print("CITY_LIGHT_DIAG span_x=%.1f span_z=%.1f instances=%d" % [span_x, span_z, multimesh.instance_count])
+		print("CITY_LIGHT_DIAG span_x=%.1f span_z=%.1f instances=%d" % [span_x, span_z, instance_count])
 	return span_x >= 100000.0 and span_z >= 100000.0
 
 func _assert(condition: bool, message: String) -> void:
