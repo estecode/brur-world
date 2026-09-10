@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Builds a complete #126 Windows client ZIP only when explicitly requested.
-# Dependencies: Godot with Windows export templates, Python 3, and local existing world_data runtime exports.
+# Dependencies: Godot with Windows export templates, Python 3, git, and local existing world_data runtime exports.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GODOT="${GODOT_BIN:-godot}"
 PYTHON="${PYTHON_BIN:-python3}"
 WORLD_DATA="${1:-$ROOT/world_data}"
-OUTPUT_DIR="${2:-$ROOT/dist/windows-client}"
+DROPBOX_OUTPUT="${BRUR_WINDOWS_DROPBOX_DIR:-$HOME/Dropbox/BRUR}"
+OUTPUT_DIR="${2:-$DROPBOX_OUTPUT}"
 
 if [[ ! -d "$WORLD_DATA" ]]; then
   printf 'WINDOWS_CLIENT=FAIL missing world_data: %s\n' "$WORLD_DATA" >&2
@@ -24,33 +25,34 @@ done
 COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
 SHORT_SHA="${COMMIT:0:12}"
 BUILD_NAME="brur-poc128-${SHORT_SHA}-win64"
-BINARY_DIR="$OUTPUT_DIR/$BUILD_NAME-binary"
 ZIP_PATH="$OUTPUT_DIR/$BUILD_NAME-client.zip"
-PROJECT_COPY="$OUTPUT_DIR/$BUILD_NAME-project.godot"
+BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/brur-windows-client.XXXXXX")"
+SOURCE_ROOT="$BUILD_ROOT/source"
+BINARY_DIR="$BUILD_ROOT/binary"
 
-rm -rf "$BINARY_DIR"
-mkdir -p "$BINARY_DIR" "$OUTPUT_DIR"
-cp "$ROOT/project.godot" "$PROJECT_COPY"
-restore_project() {
-  cp "$PROJECT_COPY" "$ROOT/project.godot"
-  rm -f "$PROJECT_COPY"
+cleanup() {
+  rm -rf "$BUILD_ROOT"
 }
-trap restore_project EXIT
+trap cleanup EXIT
 
-"$PYTHON" - "$ROOT/project.godot" <<'PY'
+mkdir -p "$SOURCE_ROOT" "$BINARY_DIR" "$OUTPUT_DIR"
+
+git -C "$ROOT" archive "$COMMIT" | tar -x -C "$SOURCE_ROOT"
+
+"$PYTHON" - "$SOURCE_ROOT/project.godot" <<'PY'
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
-text = text.replace(
-    'run/main_scene="res://harness/world_showcase/world_showcase.tscn"',
-    'run/main_scene="res://harness/world_showcase/world_showcase_windows.tscn"',
-)
-path.write_text(text, encoding="utf-8")
+old = 'run/main_scene="res://harness/world_showcase/world_showcase.tscn"'
+new = 'run/main_scene="res://harness/world_showcase/world_showcase_windows.tscn"'
+if old not in text:
+    raise SystemExit("WINDOWS_CLIENT=FAIL expected showcase main scene was not found")
+path.write_text(text.replace(old, new), encoding="utf-8")
 PY
 
 printf 'WINDOWS_CLIENT=EXPORT commit=%s\n' "$SHORT_SHA"
-"$GODOT" --headless --path "$ROOT" --export-release "Windows Desktop" "$BINARY_DIR/$BUILD_NAME.exe"
+"$GODOT" --headless --path "$SOURCE_ROOT" --export-release "Windows Desktop" "$BINARY_DIR/$BUILD_NAME.exe"
 test -s "$BINARY_DIR/$BUILD_NAME.exe"
 test -s "$BINARY_DIR/$BUILD_NAME.pck"
 
@@ -58,7 +60,7 @@ printf '{\n  "pr": 128,\n  "commit": "%s",\n  "short_commit": "%s",\n  "godot": 
   "$COMMIT" "$SHORT_SHA" > "$BINARY_DIR/build_info.json"
 
 printf 'WINDOWS_CLIENT=PACKAGE runtime_source=%s\n' "$WORLD_DATA"
-"$PYTHON" "$ROOT/tools/package_world_showcase_client.py" \
+"$PYTHON" "$SOURCE_ROOT/tools/package_world_showcase_client.py" \
   "$BINARY_DIR" "$WORLD_DATA" --output "$ZIP_PATH"
 
 test -s "$ZIP_PATH"
