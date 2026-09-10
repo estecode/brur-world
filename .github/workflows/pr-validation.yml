@@ -29,6 +29,9 @@ jobs:
       - name: Run traffic signal compiler tests
         run: python -m unittest tests.test_traffic_signals
 
+      - name: Run world showcase cache preparation tests
+        run: python -m unittest tests.test_world_showcase_prepare
+
       - name: Install Godot 4 headless runtime
         shell: bash
         run: |
@@ -64,6 +67,10 @@ jobs:
       - name: Run world streaming foundation tests
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_streaming_foundation.gd
+
+      - name: Run continuous world showcase tests
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_showcase.gd
 
       - name: Run portable vehicle dynamics tests
         run: |
