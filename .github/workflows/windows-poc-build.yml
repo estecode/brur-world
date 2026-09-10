@@ -9,6 +9,8 @@ on:
       - "harness/world_showcase/**"
       - "scripts/**"
       - "scenes/**"
+      - "tools/package_world_showcase_client.py"
+      - "tools/prepare_world_showcase.py"
       - "project.godot"
       - "export_presets.cfg"
       - ".github/workflows/windows-poc-build.yml"
