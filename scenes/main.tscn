@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=3]
+[gd_scene load_steps=16 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -14,6 +14,7 @@
 [ext_resource path="res://scripts/overlay_window_header.gd" type="Script" id="12_overlay_header"]
 [ext_resource path="res://scripts/cloud_field_renderer.gd" type="Script" id="13_clouds"]
 [ext_resource path="res://scripts/map_controls_ui.gd" type="Script" id="14_map_controls"]
+[ext_resource path="res://scripts/day_night_environment_adapter.gd" type="Script" id="15_day_night"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -78,6 +79,11 @@ latitude_deg = 59.3293
 longitude_deg = 18.0686
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+
+[node name="DayNightEnvironment" type="Node" parent="."]
+script = ExtResource("15_day_night")
+sun_controller_path = NodePath("../SunRuntimeController")
+world_environment_path = NodePath("../WorldEnvironment")
 
 [node name="CameraAltitudeUi" type="CanvasLayer" parent="."]
 layer = 20

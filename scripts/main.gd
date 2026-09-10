@@ -5,9 +5,11 @@ extends Node3D
 ## Dependencies:
 ## - world_coordinates.gd owns projected/world/tile coordinate conversion.
 ## - CameraRig supplies visible world bounds and zoom distance.
-## - world_data manifest, BRT1 tiles, and a BRM2 background provide runtime map data.
+## - city_light_renderer.gd consumes authoritative BRM2 urban geometry plus derived runtime POI density.
+## - world_data manifest, BRT1 tiles, BRM2 background, and city-light density provide runtime map data.
 
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
+const CityLightRendererScript = preload("res://scripts/city_light_renderer.gd")
 const WORLD_DIR: String = "res://world_data"
 const ROAD_MAGIC: String = "BRT1"
 const MAP_MAGIC: String = "BRM2"
@@ -37,6 +39,7 @@ var loaded: Dictionary = {}
 var mesh_cache: Dictionary = {}
 var mesh_cache_order: Array[String] = []
 var background_instances: Dictionary = {}
+var city_lights: Node3D
 
 var current_lod: int = -1
 var last_min_tile: Vector2i = Vector2i(999999, 999999)
@@ -62,6 +65,7 @@ func _ready() -> void:
 		push_error("No world_data/manifest.json. Run ./build_sweden.sh first.")
 		return
 	_setup_lighting()
+	_setup_city_lights()
 	_create_ground()
 	_load_background()
 	_update_depth_layout(true)
@@ -127,6 +131,13 @@ func _setup_lighting() -> void:
 	environment.ambient_light_energy = 1.05
 	world_environment.environment = environment
 
+func _setup_city_lights() -> void:
+	city_lights = CityLightRendererScript.new()
+	city_lights.name = "CityLights"
+	city_lights.sun_controller_path = NodePath("../SunRuntimeController")
+	city_lights.camera_rig_path = NodePath("../CameraRig")
+	add_child(city_lights)
+
 func _choose_lod(distance: float) -> int:
 	if current_lod < 0:
 		if distance > 180000.0:
@@ -152,6 +163,9 @@ func _layer_spacing() -> float:
 	return clampf(camera_rig.get_distance() / 6000.0, 4.0, 240.0)
 
 func _background_height(kind: int) -> float:
+	# Ocean base is y=0. Country land is the base overlay. Inland water must sit
+	# above land, but below farmland/forest/urban so broad water polygons cannot
+	# erase higher-detail land-use while the camera moves.
 	match kind:
 		MAP_LAND:
 			return current_layer_spacing * 1.0
@@ -178,6 +192,8 @@ func _update_depth_layout(force: bool) -> void:
 		var instance: MeshInstance3D = background_instances[kind] as MeshInstance3D
 		if instance != null:
 			instance.position.y = _background_height(kind)
+	if city_lights != null:
+		city_lights.set_base_height(_background_height(MAP_URBAN) + current_layer_spacing * 0.20)
 	var road_y: float = _road_height()
 	for key in loaded.keys():
 		var road_instance: MeshInstance3D = loaded[key] as MeshInstance3D
@@ -369,7 +385,7 @@ func _load_background() -> void:
 		return
 	var magic: String = file.get_buffer(4).get_string_from_ascii()
 	if magic != MAP_MAGIC:
-		push_error("Background map is old or invalid: " + path)
+		push_error("Background map is old or invalid. Re-run ./build_sweden.sh.")
 		return
 	var triangle_count: int = file.get_32()
 	var tools: Array[SurfaceTool] = []
@@ -377,6 +393,8 @@ func _load_background() -> void:
 		var tool: SurfaceTool = SurfaceTool.new()
 		tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 		tools.append(tool)
+	if city_lights != null:
+		city_lights.begin_urban_data()
 	var accepted: int = 0
 	for _triangle_index in range(triangle_count):
 		var kind: int = file.get_8()
@@ -392,6 +410,8 @@ func _load_background() -> void:
 		st.add_vertex(p2)
 		st.set_normal(Vector3.UP)
 		st.add_vertex(p3)
+		if kind == MAP_URBAN and city_lights != null:
+			city_lights.add_urban_triangle(p1, p2, p3)
 		accepted += 1
 	for kind in range(tools.size()):
 		var mesh: ArrayMesh = tools[kind].commit()
@@ -406,7 +426,37 @@ func _load_background() -> void:
 		instance.material_override = mat
 		world.add_child(instance)
 		background_instances[kind] = instance
-	print("Background triangles rendered: ", accepted, " | source: ", path)
+		if kind == MAP_URBAN and city_lights != null:
+			city_lights.set_urban_mesh(mesh)
+	if city_lights != null:
+		_load_city_light_poi_density()
+		city_lights.finish_urban_data()
+	print("Background triangles rendered: ", accepted, " | ocean base enabled")
+
+func _load_city_light_poi_density() -> void:
+	var path := WORLD_DIR + "/city_light_density.jsonl"
+	if not FileAccess.file_exists(path):
+		print("No city_light_density.jsonl yet. Re-run the Sweden build for POI-weighted city lights.")
+		return
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return
+	var samples := 0
+	while not file.eof_reached():
+		var line := file.get_line().strip_edges()
+		if line.is_empty():
+			continue
+		var parsed: Variant = JSON.parse_string(line)
+		if typeof(parsed) != TYPE_DICTIONARY:
+			continue
+		var record := parsed as Dictionary
+		var count := int(record.get("count", 0))
+		if count <= 0:
+			continue
+		var absolute := Vector2(float(record.get("x", 0.0)), float(record.get("y", 0.0)))
+		city_lights.add_poi_density_sample(world_coordinates.absolute_to_world(absolute), count)
+		samples += 1
+	print("City-light POI density samples loaded: ", samples)
 
 func _map_color(kind: int) -> Color:
 	match kind:

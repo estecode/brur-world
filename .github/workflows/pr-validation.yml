@@ -111,6 +111,9 @@ jobs:
       - name: Run objective astronomical sun tests
         run: bash tools/test_sun.sh
 
+      - name: Run objective city light tests
+        run: bash tools/test_city_lights.sh
+
       - name: Run objective UI overlay tests
         run: bash tools/test_ui_overlays.sh
 

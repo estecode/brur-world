@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Prepares and objectively validates the isolated #126 world showcase from existing runtime data only.
-# Dependencies: tools/prepare_world_showcase.py, existing world_data buildings/map runtime exports, and Godot supplied by PR check.
+# Prepares and objectively validates current PR-owned real-data integration checks.
+# Dependencies: existing local world_data, city-light density tooling, world showcase preparation, and Godot supplied by PR check.
 set -euo pipefail
 
 WORKTREE="${BRUR_PR_CHECK_WORKTREE:?}"
@@ -8,6 +8,13 @@ WORLD_DATA="${BRUR_PR_CHECK_WORLD_DATA:?}"
 PYTHON="${PYTHON_BIN:?}"
 GODOT="${GODOT_BIN:?}"
 CACHE="$WORKTREE/.poc_runtime/world_showcase"
+
+[[ -d "$WORLD_DATA/poi_tiles" ]] || { printf 'PR_CHECK=FAIL missing runtime POI tiles for city-light density\n' >&2; exit 66; }
+
+printf 'PR_CHECK=BUILD_CITY_LIGHT_DENSITY pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
+"$PYTHON" "$WORKTREE/tools/build_city_light_density.py" "$WORLD_DATA"
+printf 'PR_CHECK=CHECK_CITY_LIGHTS_REAL_DATA pr=%s\n' "$BRUR_PR_CHECK_PR"
+GODOT_BIN="$GODOT" bash "$WORKTREE/tools/test_city_lights_real_data.sh"
 
 printf 'PR_CHECK=PREPARE_WORLD_SHOWCASE pr=%s source=existing-runtime-data\n' "${BRUR_PR_CHECK_PR:?}"
 "$PYTHON" "$WORKTREE/tools/prepare_world_showcase.py" "$WORLD_DATA" --output "$CACHE"
