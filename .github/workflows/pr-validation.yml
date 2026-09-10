@@ -29,6 +29,9 @@ jobs:
       - name: Run traffic signal compiler tests
         run: python -m unittest tests.test_traffic_signals
 
+      - name: Run building POC cache preparation tests
+        run: python -m unittest tests.test_building_poc_prepare
+
       - name: Install Godot 4 headless runtime
         shell: bash
         run: |
@@ -60,6 +63,10 @@ jobs:
         run: |
           bash -n tools/run_pr_owned_check.sh
           bash tests/test_pr_owned_check.sh
+
+      - name: Run building POC geometry and streaming tests
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_building_poc.gd
 
       - name: Run portable vehicle dynamics tests
         run: |
