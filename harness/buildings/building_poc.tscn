@@ -1,0 +1,43 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
+[ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
+[ext_resource path="res://scripts/building_stream_layer.gd" type="Script" id="3_buildings"]
+[ext_resource path="res://harness/buildings/building_poc.gd" type="Script" id="4_poc"]
+
+[node name="BuildingPoc" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="World" type="Node3D" parent="."]
+
+[node name="CameraRig" type="Node3D" parent="."]
+script = ExtResource("2_camera")
+min_altitude_m = 80.0
+max_altitude_m = 1400000.0
+start_altitude_m = 180000.0
+gameplay_blend_start_altitude_m = 12000.0
+mode_transition_seconds = 1.1
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig"]
+current = true
+fov = 40.0
+near = 1.0
+far = 2000000.0
+
+[node name="BuildingLayer" type="Node3D" parent="."]
+script = ExtResource("3_buildings")
+active_radius_tiles = 1
+builds_per_frame = 1
+appear_altitude_m = 14000.0
+full_height_altitude_m = 2500.0
+base_height_m = 24.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-48, -32, 0)
+light_energy = 1.7
+shadow_enabled = false
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+
+[node name="PocController" type="Node" parent="."]
+script = ExtResource("4_poc")
