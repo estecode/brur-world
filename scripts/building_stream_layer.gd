@@ -79,10 +79,11 @@ func _refresh(request, force: bool) -> void:
 			_clear_all()
 		_last_visible = false
 		return
+	var became_visible := not _last_visible
 	_last_visible = true
 	var center_tile: Vector2i = _coordinates.world_to_tile(request.focus_world)
 	var prefetch_offset := _prefetch_offset(request)
-	if not force and center_tile == _last_center_tile and prefetch_offset == Vector2i.ZERO:
+	if not force and not became_visible and center_tile == _last_center_tile and prefetch_offset == Vector2i.ZERO:
 		return
 	_last_center_tile = center_tile
 	_wanted.clear()
@@ -130,9 +131,9 @@ func _prefetch_offset(request) -> Vector2i:
 	var x_step := 0
 	var y_step := 0
 	if absf(motion.x) >= absf(motion.y):
-		x_step = signi(roundi(motion.x))
+		x_step = 1 if motion.x > 0.0 else -1
 	else:
-		y_step = -signi(roundi(motion.y))
+		y_step = -1 if motion.y > 0.0 else 1
 	return Vector2i(x_step, y_step) * prefetch_tiles_ahead
 
 func _append_tile_square(target: Array[Vector2i], center: Vector2i, radius: int) -> void:
