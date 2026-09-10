@@ -54,7 +54,8 @@ func setup(world_coordinates, camera_rig: Node, tile_data_dir: String) -> void:
 	_camera_rig = camera_rig
 	_tile_data_dir = tile_data_dir.trim_suffix("/")
 	_material = StandardMaterial3D.new()
-	_material.albedo_color = Color(0.50, 0.51, 0.53, 1.0)
+	_material.albedo_color = Color.WHITE
+	_material.vertex_color_use_as_albedo = true
 	_material.roughness = 0.92
 	_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	var focus: Vector3 = _camera_rig.call("get_focus_world")
