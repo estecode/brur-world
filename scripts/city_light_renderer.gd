@@ -17,6 +17,7 @@ const GLOW_DIAMETER_M: float = 700.0
 const GLOW_HEIGHT_M: float = 20.0
 const LOCAL_POINT_DIAMETER_M: float = 24.0
 const LOCAL_POINT_HEIGHT_M: float = 18.0
+const MULTIMESH_3D_STRIDE: int = 12
 
 @export_node_path("Node") var sun_controller_path: NodePath
 @export_node_path("Node3D") var camera_rig_path: NodePath
@@ -133,9 +134,39 @@ func _create_multimesh_instance(name_value: String, material: StandardMaterial3D
 
 func _build_multimesh(multimesh: MultiMesh, points: Array[Vector3], scale_value: Vector3) -> void:
 	multimesh.instance_count = points.size()
-	var basis := Basis.IDENTITY.scaled(scale_value)
+	if points.is_empty():
+		multimesh.custom_aabb = AABB()
+		return
+
+	# Upload the complete transform buffer in one operation. Large MultiMeshes can
+	# collapse to repeated default transforms when tens of thousands of individual
+	# RenderingServer transform updates are queued back-to-back.
+	var buffer := PackedFloat32Array()
+	buffer.resize(points.size() * MULTIMESH_3D_STRIDE)
+	var min_position := Vector3(INF, INF, INF)
+	var max_position := Vector3(-INF, -INF, -INF)
+	var half_extent := scale_value * 0.5
 	for index in range(points.size()):
-		multimesh.set_instance_transform(index, Transform3D(basis, points[index] + Vector3(0.0, scale_value.y * 0.5, 0.0)))
+		var origin := points[index] + Vector3(0.0, scale_value.y * 0.5, 0.0)
+		var offset := index * MULTIMESH_3D_STRIDE
+		# Godot's 3D MultiMesh buffer stores three affine rows:
+		# basis X + origin.x, basis Y + origin.y, basis Z + origin.z.
+		buffer[offset + 0] = scale_value.x
+		buffer[offset + 1] = 0.0
+		buffer[offset + 2] = 0.0
+		buffer[offset + 3] = origin.x
+		buffer[offset + 4] = 0.0
+		buffer[offset + 5] = scale_value.y
+		buffer[offset + 6] = 0.0
+		buffer[offset + 7] = origin.y
+		buffer[offset + 8] = 0.0
+		buffer[offset + 9] = 0.0
+		buffer[offset + 10] = scale_value.z
+		buffer[offset + 11] = origin.z
+		min_position = min_position.min(origin - half_extent)
+		max_position = max_position.max(origin + half_extent)
+	multimesh.buffer = buffer
+	multimesh.custom_aabb = AABB(min_position, max_position - min_position)
 
 func _apply_material_intensity() -> void:
 	if _glow_material == null or _point_material == null:
