@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Prepare disposable multi-city building tiles from the existing runtime export.
+"""Prepare disposable multi-city building and map data from existing runtime exports.
 
 Dependencies:
-- Reads only world_data/manifest.json and world_data/buildings.jsonl.
-- Does not read Sweden PBF or rebuild existing world/routing/search data.
+- Reads only world_data/manifest.json, world_data/buildings.jsonl, and world_data/background.brmap.
+- Does not read Sweden PBF or rebuild authoritative world/routing/search data.
 - Writes experiment-only cache files outside world_data.
 """
 
@@ -13,6 +13,7 @@ import argparse
 import json
 import math
 import shutil
+import struct
 import time
 from pathlib import Path
 
@@ -21,14 +22,70 @@ CITY_CENTERS = {
     "goteborg": (1_333_006.3744531337, 7_906_413.516421634),
     "stockholm": (2_011_387.3513473428, 8_251_904.234165725),
 }
-# Keep the POC's fully extruded working set local enough to be genuinely playable.
-# The previous 7.5 km square radius pushed hundreds of square kilometres of
-# building geometry into one coarse world tile, making the visual POC GPU-bound.
 DEFAULT_RADIUS_M = 1_500.0
+BACKGROUND_RADIUS_M = 50_000.0
 PROGRESS_INTERVAL = 250_000
+MAP_MAGIC = b"BRM2"
+MAP_TRIANGLE = struct.Struct("<Bffffff")
 
 
-def prepare(source_dir: Path, output_dir: Path, radius_m: float = DEFAULT_RADIUS_M) -> dict:
+def _prepare_background(source_dir: Path, output_dir: Path, radius_m: float) -> dict[str, int]:
+    path = source_dir / "background.brmap"
+    if not path.is_file():
+        raise SystemExit(f"missing existing map runtime export: {path}")
+
+    outputs: dict[str, object] = {}
+    counts = {city: 0 for city in CITY_CENTERS}
+    try:
+        for city in CITY_CENTERS:
+            handle = (output_dir / f"background_{city}.brmap").open("wb+")
+            handle.write(MAP_MAGIC)
+            handle.write(struct.pack("<I", 0))
+            outputs[city] = handle
+
+        with path.open("rb") as source:
+            if source.read(4) != MAP_MAGIC:
+                raise SystemExit(f"invalid background map magic: {path}")
+            header = source.read(4)
+            if len(header) != 4:
+                raise SystemExit(f"truncated background map header: {path}")
+            triangle_count = struct.unpack("<I", header)[0]
+            for index in range(triangle_count):
+                raw = source.read(MAP_TRIANGLE.size)
+                if len(raw) != MAP_TRIANGLE.size:
+                    raise SystemExit(f"truncated background map at triangle {index}")
+                _kind, x1, y1, x2, y2, x3, y3 = MAP_TRIANGLE.unpack(raw)
+                min_x = min(x1, x2, x3)
+                max_x = max(x1, x2, x3)
+                min_y = min(y1, y2, y3)
+                max_y = max(y1, y2, y3)
+                for city, (cx, cy) in CITY_CENTERS.items():
+                    if (
+                        max_x >= cx - radius_m
+                        and min_x <= cx + radius_m
+                        and max_y >= cy - radius_m
+                        and min_y <= cy + radius_m
+                    ):
+                        outputs[city].write(raw)
+                        counts[city] += 1
+    finally:
+        for city, handle in outputs.items():
+            handle.seek(4)
+            handle.write(struct.pack("<I", counts[city]))
+            handle.close()
+
+    missing = [city for city, count in counts.items() if count <= 0]
+    if missing:
+        raise SystemExit("existing background.brmap contained no local map triangles for: " + ", ".join(missing))
+    return counts
+
+
+def prepare(
+    source_dir: Path,
+    output_dir: Path,
+    radius_m: float = DEFAULT_RADIUS_M,
+    background_radius_m: float = BACKGROUND_RADIUS_M,
+) -> dict:
     manifest_path = source_dir / "manifest.json"
     buildings_path = source_dir / "buildings.jsonl"
     if not manifest_path.is_file():
@@ -96,15 +153,18 @@ def prepare(source_dir: Path, output_dir: Path, radius_m: float = DEFAULT_RADIUS
         for handle in files.values():
             handle.close()
 
+    background_by_city = _prepare_background(source_dir, output_dir, background_radius_m)
     report = {
-        "source": "world_data/buildings.jsonl",
+        "source": "world_data/buildings.jsonl + world_data/background.brmap",
         "source_rebuilt": False,
         "centers_absolute": {name: list(center) for name, center in CITY_CENTERS.items()},
         "radius_m": radius_m,
+        "background_radius_m": background_radius_m,
         "tile_size": tile_size,
         "scanned_records": scanned,
         "selected_records": selected,
         "selected_by_city": selected_by_city,
+        "background_triangles_by_city": background_by_city,
         "tile_count": len(files),
     }
     (output_dir / "showcase_manifest.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -118,7 +178,7 @@ def prepare(source_dir: Path, output_dir: Path, radius_m: float = DEFAULT_RADIUS
 
     print(
         f"[world-showcase] ready selected={selected:,} tiles={len(files)} "
-        f"elapsed={time.monotonic() - started:.1f}s",
+        f"background={background_by_city} elapsed={time.monotonic() - started:.1f}s",
         flush=True,
     )
     return report
@@ -127,10 +187,11 @@ def prepare(source_dir: Path, output_dir: Path, radius_m: float = DEFAULT_RADIUS
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("source_dir", type=Path, help="Existing world_data directory")
-    parser.add_argument("--output", type=Path, required=True, help="Disposable showcase tile directory")
+    parser.add_argument("--output", type=Path, required=True, help="Disposable showcase data directory")
     parser.add_argument("--radius-m", type=float, default=DEFAULT_RADIUS_M)
+    parser.add_argument("--background-radius-m", type=float, default=BACKGROUND_RADIUS_M)
     args = parser.parse_args()
-    prepare(args.source_dir, args.output, args.radius_m)
+    prepare(args.source_dir, args.output, args.radius_m, args.background_radius_m)
 
 
 if __name__ == "__main__":
