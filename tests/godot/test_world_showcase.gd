@@ -9,6 +9,8 @@ const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 const WorldAtmosphereScript = preload("res://scripts/world_atmosphere.gd")
 const CameraControllerScript = preload("res://scripts/camera_controller.gd")
 
+var _failed := false
+
 class DummyCameraRig:
 	extends Node
 	var focus := Vector3(10.0, 0.0, -10.0)
@@ -19,10 +21,17 @@ class DummyCameraRig:
 		return altitude
 
 func _init() -> void:
+	call_deferred("_run")
+
+func _run() -> void:
 	_test_deterministic_building_appearance()
 	_test_atmosphere_profile()
 	_test_showcase_streaming_bounds()
+	await process_frame
 	_test_camera_scale_transition()
+	if _failed:
+		quit(1)
+		return
 	print("world showcase tests: OK")
 	quit(0)
 
@@ -41,6 +50,8 @@ func _test_deterministic_building_appearance() -> void:
 	_assert(base_a.get_luminance() < wall_a.get_luminance(), "building base is darker for contact shading")
 	var mesh: ArrayMesh = BuildingMeshBuilderScript.build_tile_mesh([record_a, record_b], Vector2.ZERO)
 	_assert(mesh != null and mesh.get_surface_count() == 1, "multiple buildings remain one batched tile surface")
+	if mesh == null:
+		return
 	var arrays := mesh.surface_get_arrays(0)
 	var vertex_colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
 	_assert(not vertex_colors.is_empty(), "batched mesh carries deterministic vertex colors")
@@ -66,7 +77,6 @@ func _test_showcase_streaming_bounds() -> void:
 	_write_tile(cache_dir, Vector2i(0, 0), _record(10.0, 10.0, "way/0"))
 	_write_tile(cache_dir, Vector2i(1, 0), _record(110.0, 10.0, "way/1"))
 	_write_tile(cache_dir, Vector2i(2, 0), _record(210.0, 10.0, "way/2"))
-
 	var coordinates = WorldCoordinatesScript.new(Vector2.ZERO, 100.0)
 	var camera := DummyCameraRig.new()
 	get_root().add_child(camera)
@@ -83,8 +93,9 @@ func _test_showcase_streaming_bounds() -> void:
 	_assert(layer.pending_tile_count() == 2, "showcase queue remains bounded")
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 1, "showcase builds at most one configured tile per frame")
-	var first_instance: MeshInstance3D = layer._active.values()[0] as MeshInstance3D
-	_assert(first_instance.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "showcase building batches do not cast expensive dynamic shadows by default")
+	if layer.active_tile_count() > 0:
+		var first_instance: MeshInstance3D = layer._active.values()[0] as MeshInstance3D
+		_assert(first_instance.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "showcase building batches do not cast expensive dynamic shadows by default")
 	camera.altitude = 16800.0
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 1, "showcase keeps geometry through visibility hysteresis")
@@ -105,6 +116,8 @@ func _test_camera_scale_transition() -> void:
 	rig.overview_pitch_degrees = 84.0
 	rig.gameplay_pitch_degrees = 36.0
 	rig.gameplay_blend_start_altitude_m = 30000.0
+	if rig.altitude_model == null:
+		rig._ready()
 	rig.set_altitude(30000.0)
 	var high_pitch := rad_to_deg(float(rig._pitch_radians()))
 	rig.set_altitude(1400.0)
@@ -121,23 +134,19 @@ func _test_camera_scale_transition() -> void:
 	_assert(rig.is_mode_transition_active(), "manual drive handoff uses production smooth mode transition")
 
 func _record(x: float, y: float, source_id: String) -> Dictionary:
-	return {
-		"id": source_id,
-		"x": x,
-		"y": y,
-		"geometry": [{"outer": [[x - 5.0, y - 5.0], [x + 5.0, y - 5.0], [x + 5.0, y + 5.0], [x - 5.0, y + 5.0]], "holes": []}],
-		"tags": {"building": "yes", "building:levels": "4"},
-	}
+	return {"id": source_id, "x": x, "y": y, "geometry": [{"outer": [[x - 5.0, y - 5.0], [x + 5.0, y - 5.0], [x + 5.0, y + 5.0], [x - 5.0, y + 5.0]], "holes": []}], "tags": {"building": "yes", "building:levels": "4"}}
 
 func _write_tile(cache_dir: String, tile: Vector2i, record: Dictionary) -> void:
 	var path := "%s/%d_%d.jsonl" % [cache_dir, tile.x, tile.y]
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	_assert(file != null, "showcase test tile is writable")
+	if file == null:
+		return
 	file.store_line(JSON.stringify(record))
 	file.close()
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:
 		return
+	_failed = true
 	push_error("world showcase test failed: " + message)
-	quit(1)
