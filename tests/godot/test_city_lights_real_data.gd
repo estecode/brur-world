@@ -100,7 +100,7 @@ func _sample_indices(instance_count: int, requested_count: int) -> Array[int]:
 
 func _has_irregular_cell_offsets(multimesh: MultiMesh) -> bool:
 	var seen: Dictionary = {}
-	for index in _sample_indices(multimesh.instance_count, 512):
+	for index in _sample_indices(multimesh.instance_count, 2048):
 		var origin := multimesh.get_instance_transform(index).origin
 		var x_mod := fposmod(origin.x, GRID_SIZE_M)
 		var z_mod := fposmod(origin.z, GRID_SIZE_M)
@@ -115,7 +115,7 @@ func _has_large_geographic_span(multimesh: MultiMesh) -> bool:
 	var max_x := -INF
 	var min_z := INF
 	var max_z := -INF
-	for index in _sample_indices(multimesh.instance_count, 1024):
+	for index in range(multimesh.instance_count):
 		var origin := multimesh.get_instance_transform(index).origin
 		min_x = minf(min_x, origin.x)
 		max_x = maxf(max_x, origin.x)
