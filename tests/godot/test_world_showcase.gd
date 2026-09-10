@@ -83,6 +83,8 @@ func _test_showcase_streaming_bounds() -> void:
 	_assert(layer.pending_tile_count() == 2, "showcase queue remains bounded")
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 1, "showcase builds at most one configured tile per frame")
+	var first_instance: MeshInstance3D = layer._active.values()[0] as MeshInstance3D
+	_assert(first_instance.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "showcase building batches do not cast expensive dynamic shadows by default")
 	camera.altitude = 16800.0
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 1, "showcase keeps geometry through visibility hysteresis")
