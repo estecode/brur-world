@@ -6,6 +6,7 @@ extends SceneTree
 const CityLightModelScript = preload("res://scripts/city_light_model.gd")
 const CityLightRendererScript = preload("res://scripts/city_light_renderer.gd")
 const DayNightEnvironmentAdapterScript = preload("res://scripts/day_night_environment_adapter.gd")
+const MULTIMESH_3D_STRIDE: int = 12
 
 class MockCameraRig:
 	extends Node3D
@@ -178,7 +179,9 @@ func _test_renderer_visual_contracts() -> void:
 	var points := renderer.get_node_or_null("LocalLightPoints") as MultiMeshInstance3D
 	_assert(points != null and points.scale.is_equal_approx(Vector3.ONE), "MultiMesh owner never rescales world positions")
 	_assert(not _contains_dynamic_light(renderer), "nationwide layer contains no dynamic OmniLight3D")
-	var first_origin := points.multimesh.get_instance_transform(0).origin
+	var point_buffer := points.multimesh.buffer
+	_assert(point_buffer.size() == points.multimesh.instance_count * MULTIMESH_3D_STRIDE, "local-light MultiMesh exposes the complete production transform buffer")
+	var first_origin := _buffer_origin(point_buffer, 0)
 	camera.distance_m = 180000.0
 	await process_frame
 	stats = renderer.get_render_stats()
@@ -187,7 +190,7 @@ func _test_renderer_visual_contracts() -> void:
 	await process_frame
 	stats = renderer.get_render_stats()
 	_assert(bool(stats["glow_visible"]) and not bool(stats["points_visible"]), "400 km view uses overview clusters only")
-	_assert(points.multimesh.get_instance_transform(0).origin.is_equal_approx(first_origin), "LOD never moves physical lights")
+	_assert(_buffer_origin(points.multimesh.buffer, 0).is_equal_approx(first_origin), "LOD never moves physical lights")
 	renderer.apply_solar_state({"valid": true, "elevation_deg": 8.0})
 	await process_frame
 	stats = renderer.get_render_stats()
@@ -215,13 +218,19 @@ func _test_large_renderer_multimesh_distribution() -> void:
 	var points := renderer.get_node_or_null("LocalLightPoints") as MultiMeshInstance3D
 	_assert(points != null and points.multimesh != null, "large renderer fixture creates production MultiMesh")
 	_assert(points.multimesh.instance_count == 60000, "large renderer fixture reaches the production local-light budget")
-	var first := points.multimesh.get_instance_transform(0).origin
-	var middle := points.multimesh.get_instance_transform(30000).origin
-	var last := points.multimesh.get_instance_transform(59999).origin
-	_assert(first.distance_to(middle) > 10000.0 or first.distance_to(last) > 10000.0, "60k MultiMesh upload preserves distinct large-scale light positions")
+	var buffer := points.multimesh.buffer
+	_assert(buffer.size() == 60000 * MULTIMESH_3D_STRIDE, "60k MultiMesh keeps a complete transform buffer")
+	var first := _buffer_origin(buffer, 0)
+	var middle := _buffer_origin(buffer, 30000)
+	var last := _buffer_origin(buffer, 59999)
+	_assert(first.distance_to(middle) > 10000.0 or first.distance_to(last) > 10000.0, "60k MultiMesh buffer preserves distinct large-scale light positions")
 	renderer.queue_free()
 	camera.queue_free()
 	await process_frame
+
+func _buffer_origin(buffer: PackedFloat32Array, index: int) -> Vector3:
+	var offset := index * MULTIMESH_3D_STRIDE
+	return Vector3(buffer[offset + 3], buffer[offset + 7], buffer[offset + 11])
 
 func _contains_dynamic_light(node: Node) -> bool:
 	for child in node.get_children():
