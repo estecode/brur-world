@@ -29,14 +29,14 @@ static func build_tile_mesh(records: Array, tile_origin_absolute: Vector2) -> Ar
 		if typeof(value) != TYPE_DICTIONARY:
 			continue
 		var record: Dictionary = value
-		var tags: Dictionary = record.get("tags", {}) as Dictionary
+		var tags: Dictionary = record.get("tags", {})
 		var height := height_from_tags(tags)
-		var polygons: Array = record.get("geometry", []) as Array
+		var polygons: Array = record.get("geometry", [])
 		for polygon_value in polygons:
 			if typeof(polygon_value) != TYPE_DICTIONARY:
 				continue
 			var polygon: Dictionary = polygon_value
-			var raw_outer: Array = polygon.get("outer", []) as Array
+			var raw_outer: Array = polygon.get("outer", [])
 			var outer := _tile_local_ring(raw_outer, tile_origin_absolute)
 			if outer.size() < 3:
 				continue
@@ -51,7 +51,7 @@ static func _tile_local_ring(raw: Array, tile_origin_absolute: Vector2) -> Packe
 	for point_value in raw:
 		if typeof(point_value) != TYPE_ARRAY:
 			continue
-		var pair: Array = point_value as Array
+		var pair: Array = point_value
 		if pair.size() < 2:
 			continue
 		result.append(Vector2(float(pair[0]) - tile_origin_absolute.x, -(float(pair[1]) - tile_origin_absolute.y)))
@@ -96,7 +96,7 @@ static func _numeric_tag(value: Variant) -> float:
 		return 0.0
 	var number := ""
 	for character in text:
-		if character in "0123456789.+-":
+		if "0123456789.+-".contains(character):
 			number += character
 		elif not number.is_empty():
 			break
