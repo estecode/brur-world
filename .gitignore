@@ -1,5 +1,6 @@
 .godot/
 world_data/
+.poc_runtime/
 *.osm.pbf
 *.pbf
 .venv/
