@@ -1,6 +1,6 @@
 [application]
-config/name="Brur World POC"
-run/main_scene="res://scenes/main.tscn"
+config/name="Brur World POC — 3D Buildings #120"
+run/main_scene="res://harness/buildings/building_poc.tscn"
 
 [display]
 window/size/viewport_width=1280
