@@ -36,6 +36,15 @@ func absolute_to_tile(absolute_position: Vector2) -> Vector2i:
 func world_to_tile(world_position: Vector3) -> Vector2i:
 	return absolute_to_tile(world_to_absolute(world_position))
 
+func tile_identity(tile: Vector2i) -> String:
+	return "%d:%d" % [tile.x, tile.y]
+
+func absolute_tile_identity(absolute_position: Vector2) -> String:
+	return tile_identity(absolute_to_tile(absolute_position))
+
+func world_tile_identity(world_position: Vector3) -> String:
+	return tile_identity(world_to_tile(world_position))
+
 func tile_origin_absolute(tile: Vector2i) -> Vector2:
 	return Vector2(float(tile.x) * tile_size, float(tile.y) * tile_size)
 
