@@ -1,0 +1,93 @@
+name: Windows POC build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - issue/126-continuous-world-poc
+    paths:
+      - "harness/world_showcase/**"
+      - "scripts/**"
+      - "scenes/**"
+      - "tools/package_world_showcase_client.py"
+      - "tools/prepare_world_showcase.py"
+      - "project.godot"
+      - "export_presets.cfg"
+      - ".github/workflows/windows-poc-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  export-windows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@v4
+
+      - name: Prepare traceable build identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA::12}"
+          echo "SHORT_SHA=$SHORT_SHA" >> "$GITHUB_ENV"
+          echo "BUILD_NAME=brur-poc128-${SHORT_SHA}-win64" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME=brur-poc128-${SHORT_SHA}-win64-binary-only" >> "$GITHUB_ENV"
+
+      - name: Install Godot 4.7.2 and Windows export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT_VERSION="4.7.2-stable"
+          GODOT_TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          curl -fsSL \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" \
+            -o "$RUNNER_TEMP/godot.zip"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          GODOT_BIN="$RUNNER_TEMP/godot/Godot_v${GODOT_VERSION}_linux.x86_64"
+          chmod +x "$GODOT_BIN"
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+
+          curl -fsSL \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_export_templates.tpz" \
+            -o "$RUNNER_TEMP/templates.tpz"
+          mkdir -p "$RUNNER_TEMP/templates" "$GODOT_TEMPLATE_DIR"
+          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
+          cp -a "$RUNNER_TEMP/templates/templates/." "$GODOT_TEMPLATE_DIR/"
+
+      - name: Select exported Windows showcase scene
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("project.godot")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              'run/main_scene="res://harness/world_showcase/world_showcase.tscn"',
+              'run/main_scene="res://harness/world_showcase/world_showcase_windows.tscn"',
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Export Windows runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "dist/BRUR"
+          "$GODOT_BIN" --headless --path . --export-release "Windows Desktop" "dist/BRUR/${BUILD_NAME}.exe"
+          test -s "dist/BRUR/${BUILD_NAME}.exe"
+          test -s "dist/BRUR/${BUILD_NAME}.pck"
+          printf '{\n  "pr": 128,\n  "commit": "%s",\n  "short_commit": "%s",\n  "godot": "4.7.2.stable",\n  "platform": "windows-x86_64",\n  "client_ready": false\n}\n' \
+            "$GITHUB_SHA" "$SHORT_SHA" > "dist/BRUR/build_info.json"
+          printf 'BINARY-ONLY ARTIFACT\n\nThis artifact intentionally contains no world runtime data and is not client-ready.\nCreate a client ZIP with tools/package_world_showcase_client.py on a machine that has the matching local world_data runtime exports.\n' > "dist/BRUR/NOT_CLIENT_READY.txt"
+
+      - name: Upload traceable binary-only Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: dist/BRUR
+          if-no-files-found: error
+          retention-days: 30

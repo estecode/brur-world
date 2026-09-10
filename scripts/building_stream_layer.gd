@@ -26,6 +26,7 @@ const STATE_VISIBLE := "visible"
 @export var hide_altitude_m: float = 15000.0
 @export var full_height_altitude_m: float = 2500.0
 @export var base_height_m: float = 0.0
+@export var cast_shadows: bool = false
 
 var _coordinates = null
 var _camera_rig: Node = null
@@ -54,7 +55,8 @@ func setup(world_coordinates, camera_rig: Node, tile_data_dir: String) -> void:
 	_camera_rig = camera_rig
 	_tile_data_dir = tile_data_dir.trim_suffix("/")
 	_material = StandardMaterial3D.new()
-	_material.albedo_color = Color(0.50, 0.51, 0.53, 1.0)
+	_material.albedo_color = Color.WHITE
+	_material.vertex_color_use_as_albedo = true
 	_material.roughness = 0.92
 	_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	var focus: Vector3 = _camera_rig.call("get_focus_world")
@@ -77,16 +79,16 @@ func _process(_delta: float) -> void:
 	_apply_altitude_blend(request.altitude_m)
 
 func _refresh(request, force: bool) -> void:
-	var visible_now := _visibility_with_hysteresis(request.altitude_m)
+	var visible_now: bool = _visibility_with_hysteresis(request.altitude_m)
 	if not visible_now:
 		if force or _last_visible:
 			_clear_all()
 		_last_visible = false
 		return
-	var became_visible := not _last_visible
+	var became_visible: bool = not _last_visible
 	_last_visible = true
 	var center_tile: Vector2i = _coordinates.world_to_tile(request.focus_world)
-	var prefetch_offset := _prefetch_offset(request)
+	var prefetch_offset: Vector2i = _prefetch_offset(request)
 	if not force and not became_visible and center_tile == _last_center_tile and prefetch_offset == Vector2i.ZERO:
 		return
 	_last_center_tile = center_tile
@@ -190,6 +192,7 @@ func _build_tile(tile: Vector2i) -> Dictionary:
 	instance.mesh = mesh
 	instance.material_override = _material
 	instance.position = _coordinates.tile_origin_world(tile, base_height_m)
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return {"instance": instance, "records": records.size()}
 
 func _read_tile_records(path: String) -> Array:
