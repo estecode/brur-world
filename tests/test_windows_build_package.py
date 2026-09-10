@@ -2,6 +2,7 @@
 
 Dependencies:
 - Imports tools/windows_build/package.py directly.
+- Checks the selected-revision target invokes the existing showcase preparation CLI correctly.
 - Uses temporary synthetic binaries/runtime data; it does not require Godot or real world data.
 """
 
@@ -14,7 +15,9 @@ import unittest
 import zipfile
 from pathlib import Path
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "windows_build" / "package.py"
+ROOT = Path(__file__).resolve().parents[1]
+MODULE_PATH = ROOT / "tools" / "windows_build" / "package.py"
+TARGET_PATH = ROOT / "tools" / "windows_build" / "target.sh"
 spec = importlib.util.spec_from_file_location("windows_package", MODULE_PATH)
 assert spec and spec.loader
 windows_package = importlib.util.module_from_spec(spec)
@@ -101,6 +104,13 @@ class WindowsPackageTests(unittest.TestCase):
                     path.rmdir()
             with self.assertRaises(SystemExit):
                 windows_package.package_client(binary, runtime, build_info, source_manifest, root / "client.zip")
+
+    def test_target_passes_required_output_flag_to_showcase_preparer(self) -> None:
+        target = TARGET_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            '"$BRUR_WINDOWS_WORLD_DATA" --output "$BRUR_WINDOWS_RUNTIME_DATA_OUT"',
+            target,
+        )
 
 
 if __name__ == "__main__":
