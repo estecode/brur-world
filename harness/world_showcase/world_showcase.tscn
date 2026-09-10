@@ -1,0 +1,22 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource path="res://harness/world_showcase/world_showcase.gd" type="Script" id="1_showcase"]
+[ext_resource path="res://scenes/main.tscn" type="PackedScene" id="2_main"]
+[ext_resource path="res://scripts/building_stream_layer.gd" type="Script" id="3_buildings"]
+[ext_resource path="res://scripts/world_atmosphere.gd" type="Script" id="4_atmosphere"]
+
+[node name="WorldShowcase" type="Node"]
+script = ExtResource("1_showcase")
+
+[node name="Main" parent="." instance=ExtResource("2_main")]
+background_source_path = "res://.poc_runtime/world_showcase/background_malmo.brmap"
+
+[node name="BuildingLayer" type="Node3D" parent="Main"]
+script = ExtResource("3_buildings")
+active_radius_tiles = 0
+prefetch_tiles_ahead = 0
+cast_shadows = false
+
+[node name="WorldAtmosphere" type="Node" parent="Main"]
+script = ExtResource("4_atmosphere")
+enable_dynamic_shadows = false
