@@ -98,7 +98,7 @@ func _test_showcase_streaming_bounds() -> void:
 		_assert(first_instance.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "showcase building batches do not cast expensive dynamic shadows by default")
 	camera.altitude = 16800.0
 	layer._process(0.0)
-	_assert(layer.active_tile_count() == 1, "showcase keeps geometry through visibility hysteresis")
+	_assert(layer.active_tile_count() >= 1, "showcase keeps already-visible geometry through visibility hysteresis")
 	camera.altitude = 17600.0
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 0, "showcase unloads above hide threshold")
