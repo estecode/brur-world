@@ -12,13 +12,11 @@ It composes production systems rather than reimplementing them:
 
 The Safe Check prepares `.poc_runtime/world_showcase/` only from the already-built `world_data/buildings.jsonl`. It does **not** read the Sweden PBF or rebuild authoritative world data.
 
-## Performance-first budget
+The local objective hook is fail-closed across supported Godot versions: script parse/compile/runtime-test errors make the Safe Check fail instead of allowing the visual harness to open on a broken revision.
 
-The fully extruded building working set is limited to a 1.5 km radius around each demo city center. The earlier 7.5 km radius placed an unnecessarily large city-wide mesh into one coarse world tile and measured about 6 FPS on the project leader's Mac. The POC needs to prove the continuous map-to-street experience, not render hundreds of square kilometres of full-detail buildings at once.
+## Performance profile
 
-Dynamic building/directional shadows are disabled by default in the showcase. Depth still comes from normals, deterministic roof/wall/base tones, haze and the existing astronomical light direction. Proper distance-based shadow LOD can be promoted later once production presentation cells are finer than the coarse world tile.
-
-The target for this POC is **at least 30 FPS on the project leader's test machine**, with **100 FPS or better preferred**.
+The showcase intentionally keeps full-detail extruded buildings local to roughly 1.5 km around Malmö, Göteborg and Stockholm, disables building shadow casting and dynamic directional shadows, and streams only the local world tile. This keeps the POC useful for evaluating the continuous map-to-street experience without attempting to render city-scale full-detail geometry unnecessarily.
 
 ## Human flow
 
@@ -28,5 +26,7 @@ The target for this POC is **at least 30 FPS on the project leader's test machin
 4. Below 5 km press **Manual Drive** and verify the existing chase-camera handoff feels continuous.
 5. Press **Return from drive to map world** to leave driving without restarting the scene.
 6. Run **Stress: Malmö → Göteborg → Stockholm → Malmö** and watch streaming metrics while old city geometry unloads.
+
+Performance acceptance on the project-leader machine is at least 30 FPS during normal showcase use, with 100+ FPS preferred.
 
 The branch startup override, disposable cache preparation and branch-specific local PR check are experiment-only and must not be promoted unchanged to `main`.
