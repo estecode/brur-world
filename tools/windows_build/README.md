@@ -28,6 +28,22 @@ GODOT_BIN=/path/to/godot \
 bash tools/windows_build.sh --ref <ref>
 ```
 
+## Safe Command trigger
+
+The common project-leader action is the same repo-owned command through Safe Command Links. Approve it once on the local machine:
+
+```bash
+bash allow-project.sh /absolute/path/to/brur-world windows-build . /bin/bash tools/windows_build.sh --param pr:positive-int
+```
+
+A PR can then be built with:
+
+```text
+http://127.0.0.1:17384/safecommand/project?repo=estecode/brur-world&command=windows-build&pr=<PR number>
+```
+
+Safe Command owns only validation/launch. All revision resolution, isolated checkout, export, runtime-data preparation, manifests, packaging and delivery remain in this repository.
+
 ## Target contract
 
 A revision that supports the build provides `tools/windows_build/target.sh`. The generic builder passes explicit environment paths for the isolated source checkout, authoritative local world data, temporary runtime-data output, binary output, build name and Godot binary. The target prepares only the runtime files it actually needs and exports the Windows EXE/PCK pair. It does not own ZIP packaging or build identity.
