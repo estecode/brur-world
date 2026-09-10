@@ -1,11 +1,11 @@
 extends Node3D
 
-## Streams portable BRT1 road tiles and renders the BRM2 Sweden background map.
+## Streams portable BRT1 road tiles and renders a configured BRM2 background map.
 ##
 ## Dependencies:
 ## - world_coordinates.gd owns projected/world/tile coordinate conversion.
 ## - CameraRig supplies visible world bounds and zoom distance.
-## - world_data manifest, BRT1 tiles, and BRM2 background provide runtime map data.
+## - world_data manifest, BRT1 tiles, and a BRM2 background provide runtime map data.
 
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 const WORLD_DIR: String = "res://world_data"
@@ -19,6 +19,8 @@ const MAP_FARMLAND: int = 1
 const MAP_FOREST: int = 2
 const MAP_URBAN: int = 3
 const MAP_WATER: int = 4
+
+@export var background_source_path: String = WORLD_DIR + "/background.brmap"
 
 @onready var world: Node3D = $World
 @onready var camera_rig: Node3D = $CameraRig
@@ -96,6 +98,21 @@ func _load_manifest() -> bool:
 func get_world_coordinates():
 	return world_coordinates
 
+func set_background_source(path: String) -> void:
+	if path.is_empty() or path == background_source_path:
+		return
+	background_source_path = path
+	_clear_background()
+	_load_background()
+	_update_depth_layout(true)
+
+func _clear_background() -> void:
+	for instance_value in background_instances.values():
+		var instance: Node = instance_value as Node
+		if instance != null:
+			instance.queue_free()
+	background_instances.clear()
+
 func _setup_lighting() -> void:
 	sun.rotation_degrees = Vector3(-48.0, -32.0, 0.0)
 	sun.light_color = Color(1.0, 0.965, 0.90)
@@ -135,9 +152,6 @@ func _layer_spacing() -> float:
 	return clampf(camera_rig.get_distance() / 6000.0, 4.0, 240.0)
 
 func _background_height(kind: int) -> float:
-	# Ocean base is y=0. Country land is the base overlay. Inland water must sit
-	# above land, but below farmland/forest/urban so broad water polygons cannot
-	# erase higher-detail land-use while the camera moves.
 	match kind:
 		MAP_LAND:
 			return current_layer_spacing * 1.0
@@ -346,16 +360,16 @@ func consume_perf_metrics() -> Dictionary:
 	return result
 
 func _load_background() -> void:
-	var path: String = WORLD_DIR + "/background.brmap"
+	var path: String = background_source_path
 	if not FileAccess.file_exists(path):
-		print("No background.brmap yet. Re-run ./build_sweden.sh to build the map background.")
+		push_error("Missing BRM2 background: " + path)
 		return
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null or file.get_length() < 8:
 		return
 	var magic: String = file.get_buffer(4).get_string_from_ascii()
 	if magic != MAP_MAGIC:
-		push_error("Background map is old or invalid. Re-run ./build_sweden.sh.")
+		push_error("Background map is old or invalid: " + path)
 		return
 	var triangle_count: int = file.get_32()
 	var tools: Array[SurfaceTool] = []
@@ -392,7 +406,7 @@ func _load_background() -> void:
 		instance.material_override = mat
 		world.add_child(instance)
 		background_instances[kind] = instance
-	print("Background triangles rendered: ", accepted, " | ocean base enabled")
+	print("Background triangles rendered: ", accepted, " | source: ", path)
 
 func _map_color(kind: int) -> Color:
 	match kind:
