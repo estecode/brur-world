@@ -37,9 +37,9 @@ var _wanted: Dictionary = {}
 var _tile_states: Dictionary = {}
 var _tile_record_counts: Dictionary = {}
 var _last_center_tile := Vector2i(999999, 999999)
-var _last_visible = false
+var _last_visible := false
 var _last_focus_world := Vector3.ZERO
-var _has_last_focus = false
+var _has_last_focus := false
 var _material: StandardMaterial3D = null
 var _perf_build_ms: float = 0.0
 var _perf_build_max_ms: float = 0.0
@@ -79,16 +79,16 @@ func _process(_delta: float) -> void:
 	_apply_altitude_blend(request.altitude_m)
 
 func _refresh(request, force: bool) -> void:
-	var visible_now := _visibility_with_hysteresis(request.altitude_m)
+	var visible_now: bool = _visibility_with_hysteresis(request.altitude_m)
 	if not visible_now:
 		if force or _last_visible:
 			_clear_all()
 		_last_visible = false
 		return
-	var became_visible := not _last_visible
+	var became_visible: bool = not _last_visible
 	_last_visible = true
 	var center_tile: Vector2i = _coordinates.world_to_tile(request.focus_world)
-	var prefetch_offset := _prefetch_offset(request)
+	var prefetch_offset: Vector2i = _prefetch_offset(request)
 	if not force and not became_visible and center_tile == _last_center_tile and prefetch_offset == Vector2i.ZERO:
 		return
 	_last_center_tile = center_tile
@@ -191,8 +191,8 @@ func _build_tile(tile: Vector2i) -> Dictionary:
 	instance.name = "Buildings_%s" % _coordinates.tile_identity(tile).replace(":", "_")
 	instance.mesh = mesh
 	instance.material_override = _material
-	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	instance.position = _coordinates.tile_origin_world(tile, base_height_m)
+	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return {"instance": instance, "records": records.size()}
 
 func _read_tile_records(path: String) -> Array:
