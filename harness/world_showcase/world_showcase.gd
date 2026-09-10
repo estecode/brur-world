@@ -51,7 +51,7 @@ func _ready() -> void:
 func _initialize() -> void:
 	_coordinates = _main.call("get_world_coordinates")
 	_configure_camera_for_continuous_scale()
-	_disable_non_showcase_poi_work()
+	_disable_non_showcase_work()
 	_buildings.active_radius_tiles = 0
 	_buildings.builds_per_frame = 1
 	_buildings.build_budget_ms = 3.5
@@ -68,13 +68,16 @@ func _initialize() -> void:
 	_update_controls()
 	_update_status()
 
-func _disable_non_showcase_poi_work() -> void:
+func _disable_non_showcase_work() -> void:
 	var poi_layer := _main.get_node_or_null("PoiLayer")
-	if poi_layer == null:
-		return
-	if poi_layer.has_method("set_presentation_enabled"):
-		poi_layer.call("set_presentation_enabled", false)
-	poi_layer.set_process(false)
+	if poi_layer != null:
+		if poi_layer.has_method("set_presentation_enabled"):
+			poi_layer.call("set_presentation_enabled", false)
+		poi_layer.set_process(false)
+	var cloud_field := _main.get_node_or_null("CloudField")
+	if cloud_field != null:
+		cloud_field.visible = false
+		cloud_field.set_process(false)
 
 func _configure_camera_for_continuous_scale() -> void:
 	_camera_rig.overview_pitch_degrees = 84.0
@@ -301,7 +304,7 @@ func _build_ui() -> void:
 	box.add_child(reset)
 
 	var hint := Label.new()
-	hint.text = "Mouse wheel/drag/WASD still work in map mode.\nPOI streaming is disabled in this performance POC.\nManual Drive: W/S throttle, A/D steer, Space brake."
+	hint.text = "Mouse wheel/drag/WASD still work in map mode.\nPOIs/clouds are disabled in this performance POC.\nManual Drive: W/S throttle, A/D steer, Space brake."
 	box.add_child(hint)
 
 	_stress_timer = Timer.new()
