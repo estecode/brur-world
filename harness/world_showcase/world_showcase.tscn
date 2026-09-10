@@ -12,6 +12,10 @@ script = ExtResource("1_showcase")
 
 [node name="BuildingLayer" type="Node3D" parent="Main"]
 script = ExtResource("3_buildings")
+active_radius_tiles = 0
+prefetch_tiles_ahead = 0
+cast_shadows = false
 
 [node name="WorldAtmosphere" type="Node" parent="Main"]
 script = ExtResource("4_atmosphere")
+enable_dynamic_shadows = false
