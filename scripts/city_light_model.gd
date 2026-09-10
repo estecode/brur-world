@@ -16,6 +16,7 @@ const DEFAULT_MAX_POINTS: int = 60000
 const BASE_LOCAL_POINTS_PER_CELL: int = 4
 const MAX_LOCAL_POINTS_PER_CELL: int = 16
 const MAX_GLOW_POINTS_PER_CELL: int = 4
+const HASH_MAX_VALUE: float = 2147483647.0
 
 var _cell_points: Dictionary = {}
 var _poi_density: Dictionary = {}
@@ -52,9 +53,11 @@ func overview_points(max_points: int = DEFAULT_MAX_POINTS) -> Array[Vector3]:
 	if max_points <= 0 or _cell_points.is_empty():
 		return []
 	var result: Array[Vector3] = []
-	for center in _weighted_cells():
-		var glow_count := _glow_points_for_density(_density_near(center))
-		for glow_index in range(glow_count):
+	var cells := _cells_by_stable_hash()
+	for glow_index in range(MAX_GLOW_POINTS_PER_CELL):
+		for center in cells:
+			if glow_index >= _glow_points_for_density(_density_near(center)):
+				continue
 			if result.size() >= max_points:
 				return result
 			result.append(center + _deterministic_glow_offset(center, glow_index))
@@ -64,9 +67,11 @@ func local_light_points(max_points: int = DEFAULT_MAX_POINTS) -> Array[Vector3]:
 	if max_points <= 0 or _cell_points.is_empty():
 		return []
 	var result: Array[Vector3] = []
-	for center in _weighted_cells():
-		var local_count := _local_points_for_density(_density_near(center))
-		for local_index in range(local_count):
+	var cells := _cells_by_stable_hash()
+	for local_index in range(MAX_LOCAL_POINTS_PER_CELL):
+		for center in cells:
+			if local_index >= _local_points_for_density(_density_near(center)):
+				continue
 			if result.size() >= max_points:
 				return result
 			result.append(center + _deterministic_local_offset(center, local_index))
@@ -99,23 +104,16 @@ func night_intensity(solar_elevation_deg: float) -> float:
 		1.0
 	)
 
-func _weighted_cells() -> Array[Vector3]:
+func _cells_by_stable_hash() -> Array[Vector3]:
 	var keys: Array = _cell_points.keys()
-	keys.sort_custom(_compare_cells_by_density_then_hash)
+	keys.sort_custom(func(a: Variant, b: Variant) -> bool:
+		return _stable_key_hash(String(a)) < _stable_key_hash(String(b))
+	)
 	var result: Array[Vector3] = []
 	result.resize(keys.size())
 	for index in range(keys.size()):
 		result[index] = _cell_points[keys[index]] as Vector3
 	return result
-
-func _compare_cells_by_density_then_hash(a: Variant, b: Variant) -> bool:
-	var a_center := _cell_points[a] as Vector3
-	var b_center := _cell_points[b] as Vector3
-	var a_density := _density_near(a_center)
-	var b_density := _density_near(b_center)
-	if a_density != b_density:
-		return a_density > b_density
-	return _stable_key_hash(String(a)) < _stable_key_hash(String(b))
 
 func _density_near(world_position: Vector3) -> int:
 	if _poi_density.is_empty():
@@ -165,7 +163,8 @@ func _deterministic_local_offset(center: Vector3, local_index: int) -> Vector3:
 func _deterministic_offset(center: Vector3, index: int, spread: float) -> Vector3:
 	var cell_x := int(round(center.x / LIGHT_CELL_SIZE_M - 0.5))
 	var cell_z := int(round(center.z / LIGHT_CELL_SIZE_M - 0.5))
-	var seed := absi(cell_x * 73856093 + cell_z * 19349663 + index * 83492791)
-	var x_unit := float(seed % 997) / 996.0
-	var z_unit := float((int(seed / 997)) % 991) / 990.0
+	var x_hash := _stable_key_hash("%d:%d:%d:x" % [cell_x, cell_z, index])
+	var z_hash := _stable_key_hash("%d:%d:%d:z" % [cell_x, cell_z, index])
+	var x_unit := float(x_hash) / HASH_MAX_VALUE
+	var z_unit := float(z_hash) / HASH_MAX_VALUE
 	return Vector3((x_unit - 0.5) * spread, 0.0, (z_unit - 0.5) * spread)
