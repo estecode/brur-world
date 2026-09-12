@@ -39,7 +39,9 @@ func _test_poi_visibility_preserves_data() -> void:
 func _test_teleport_is_explicit_and_preserves_vehicle_identity() -> void:
 	var player_scene := load("res://scenes/player_vehicle.tscn") as PackedScene
 	var player: Node3D = player_scene.instantiate() as Node3D
+	get_root().add_child(player)
 	var route_layer: Node = GpsRouteLayerScript.new()
+	get_root().add_child(route_layer)
 	route_layer.set("player", player)
 	player.call("set_world_position", Vector3(10.0, 2.0, 20.0))
 	player.call("set_motion_state", 12.0)
@@ -52,8 +54,8 @@ func _test_teleport_is_explicit_and_preserves_vehicle_identity() -> void:
 	_assert(player.get_instance_id() == identity, "teleport preserves the same player vehicle instance")
 	_assert(_approx(player.global_position.x, 55.0) and _approx(player.global_position.z, -44.0), "teleport moves to the requested world coordinate")
 	_assert(_approx(float(player.call("speed_mps")), 0.0), "teleport resets vehicle speed")
-	player.free()
-	route_layer.free()
+	player.queue_free()
+	route_layer.queue_free()
 
 func _test_map_controls_ui_builds_headlessly() -> void:
 	var controls: CanvasLayer = MapControlsUiScript.new()
