@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build bounded runtime building tiles from the authoritative buildings JSONL export.
+"""Build and validate bounded runtime building tiles derived from authoritative buildings JSONL.
 
 Dependencies:
 - Reads world_data/buildings.jsonl and manifest.json produced by the existing offline pipeline.
@@ -82,6 +82,36 @@ def _builder_sha256() -> str:
     return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
+def building_tiles_cache_valid(world_dir: Path, tile_size: float = DEFAULT_TILE_SIZE) -> bool:
+    """Return whether the derived cache matches its authoritative source and this builder contract."""
+    manifest_path = world_dir / "manifest.json"
+    buildings_path = world_dir / "buildings.jsonl"
+    tile_dir = world_dir / "building_tiles"
+    if not manifest_path.is_file() or not buildings_path.is_file() or not tile_dir.is_dir():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        source_stat = buildings_path.stat()
+        features = manifest.get("features", {})
+        if features.get("building_tiles_dir") != "building_tiles":
+            return False
+        if float(features.get("building_tile_size", 0.0)) != float(tile_size):
+            return False
+        if int(features.get("building_tile_format_version", 0)) != BUILDING_TILE_FORMAT_VERSION:
+            return False
+        if int(features.get("runtime_buildings_total", 0)) <= 0:
+            return False
+        if int(features.get("building_tiles_source_size", -1)) != source_stat.st_size:
+            return False
+        if int(features.get("building_tiles_source_mtime_ns", -1)) != source_stat.st_mtime_ns:
+            return False
+        if features.get("building_tiles_builder_sha256") != _builder_sha256():
+            return False
+        return next(tile_dir.glob("*.jsonl"), None) is not None
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def build_building_tiles(world_dir: Path, tile_size: float = DEFAULT_TILE_SIZE) -> dict:
     manifest_path = world_dir / "manifest.json"
     buildings_path = world_dir / "buildings.jsonl"
@@ -146,7 +176,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("world_dir", type=Path, nargs="?", default=Path("world_data"))
     parser.add_argument("--tile-size", type=float, default=DEFAULT_TILE_SIZE)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="exit successfully only when the existing cache matches the source and builder contract",
+    )
     args = parser.parse_args()
+    if args.check:
+        valid = building_tiles_cache_valid(args.world_dir, args.tile_size)
+        print(f"[building-tiles] cache={'valid' if valid else 'invalid'}", flush=True)
+        raise SystemExit(0 if valid else 1)
     build_building_tiles(args.world_dir, args.tile_size)
 
 
