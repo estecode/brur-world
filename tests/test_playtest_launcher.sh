@@ -16,10 +16,10 @@ printf 'scene\n' > "$FAKE_ROOT/scenes/main.tscn"
 printf 'scene\n' > "$FAKE_ROOT/harness/gps/gps_harness.tscn"
 printf 'scene\n' > "$FAKE_ROOT/harness/driving/driving_harness.tscn"
 printf 'requirements\n' > "$FAKE_ROOT/requirements.txt"
-for name in manifest.json routing.brg routing_snap.brs search_index.bsi; do
+for name in manifest.json routing.brg routing_snap.brs routing_geometry.brh routing_stats.json search_index.bsi; do
   printf 'data\n' > "$FAKE_ROOT/world_data/$name"
 done
-for name in build_sweden.py build_roads.py build_routing.py build_background.py build_features.py build_search_index.py build_search_binary.py build_snap_index.py routing_graph.py world_common.py; do
+for name in build_sweden.py build_roads.py build_routing.py build_routing_dataset.py build_background.py build_features.py build_search_index.py build_search_binary.py compressed_routing.py gps_snap_index.py route_geometry.py routing_graph.py routing_graph_view.py world_common.py; do
   printf 'builder\n' > "$FAKE_ROOT/tools/$name"
 done
 sleep 1
@@ -50,8 +50,7 @@ grep -q -- "--path $FAKE_ROOT $FAKE_ROOT/scenes/main.tscn" "$GODOT_LOG"
 
 : > "$GODOT_LOG"
 BRUR_GODOT="$TMP/godot" bash "$FAKE_ROOT/tools/playtest.sh" gps >"$TMP/gps.out"
-grep -q 'PLAYTEST=READY routing' "$TMP/gps.out"
-grep -q 'PLAYTEST=READY routing-snap' "$TMP/gps.out"
+grep -q 'PLAYTEST=READY routing-dataset' "$TMP/gps.out"
 grep -q -- "--path $FAKE_ROOT $FAKE_ROOT/harness/gps/gps_harness.tscn" "$GODOT_LOG"
 
 : > "$GODOT_LOG"
@@ -59,10 +58,10 @@ BRUR_GODOT="$TMP/godot" bash "$FAKE_ROOT/tools/playtest.sh" driving >"$TMP/drivi
 grep -q 'PLAYTEST=RUN target=driving scene=harness/driving/driving_harness.tscn' "$TMP/driving.out"
 grep -q -- "--path $FAKE_ROOT $FAKE_ROOT/harness/driving/driving_harness.tscn" "$GODOT_LOG"
 
-rm "$FAKE_ROOT/world_data/routing.brg"
+rm "$FAKE_ROOT/world_data/routing_geometry.brh"
 : > "$GODOT_LOG"
 if BRUR_GODOT="$TMP/godot" bash "$FAKE_ROOT/tools/playtest.sh" gps >"$TMP/missing.out" 2>"$TMP/missing.err"; then
-  echo 'expected missing routing data without PBF to fail' >&2
+  echo 'expected missing route geometry without PBF to fail' >&2
   exit 1
 fi
 grep -q 'set BRUR_WORLD_PBF' "$TMP/missing.err"
