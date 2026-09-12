@@ -1,9 +1,10 @@
 extends SceneTree
 
-## Verifies the promoted world-streaming, building batching, and coordinate contracts.
-## Dependencies: production WorldCoordinates, WorldStreamRequest, BuildingMeshBuilder, and BuildingStreamLayer.
+## Verifies promoted world-streaming, road-LOD, building batching, and coordinate contracts.
+## Dependencies: production WorldCoordinates, RoadLodPolicy, WorldStreamRequest, BuildingMeshBuilder, and BuildingStreamLayer.
 
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
+const RoadLodPolicyScript = preload("res://scripts/road_lod_policy.gd")
 const WorldStreamRequestScript = preload("res://scripts/world_stream_request.gd")
 const BuildingMeshBuilderScript = preload("res://scripts/building_mesh_builder.gd")
 const BuildingStreamLayerScript = preload("res://scripts/building_stream_layer.gd")
@@ -21,6 +22,7 @@ class DummyCameraRig:
 
 func _init() -> void:
 	_test_coordinate_and_request_contracts()
+	_test_road_lod_policy()
 	_test_building_identity_and_mesh()
 	_test_bounded_streaming_and_hysteresis()
 	if _failed:
@@ -44,6 +46,23 @@ func _test_coordinate_and_request_contracts() -> void:
 	_assert(request.focus_world == Vector3(1.0, 2.0, 3.0), "stream request preserves focus")
 	_assert(is_equal_approx(request.altitude_m, 4500.0), "stream request preserves altitude")
 	_assert(request.horizontal_motion() == Vector2(4.0, -6.0), "stream request exposes horizontal motion without presentation policy")
+
+func _test_road_lod_policy() -> void:
+	var motorway_width := RoadLodPolicyScript.road_width_m(0)
+	var residential_width := RoadLodPolicyScript.road_width_m(5)
+	_assert(is_equal_approx(motorway_width, 24.0), "motorway width stays metre-scale instead of zoom-scale")
+	_assert(is_equal_approx(RoadLodPolicyScript.road_width_m(0), motorway_width), "road width is independent of LOD")
+	_assert(motorway_width > residential_width, "road classes preserve realistic relative widths")
+	_assert(residential_width > RoadLodPolicyScript.road_width_m(6), "local road hierarchy remains monotonic")
+	_assert(RoadLodPolicyScript.choose_lod(315000.0, -1) == 0, "far map view selects simplified LOD")
+	_assert(RoadLodPolicyScript.choose_lod(150000.0, -1) == 1, "regional map view selects medium LOD")
+	_assert(RoadLodPolicyScript.choose_lod(43000.0, -1) == 2, "reference map view keeps full road detail")
+	_assert(RoadLodPolicyScript.choose_lod(160000.0, 0) == 0, "LOD0 hysteresis avoids transition flapping")
+	_assert(RoadLodPolicyScript.choose_lod(150000.0, 0) == 1, "LOD0 transitions inward after hysteresis threshold")
+	_assert(RoadLodPolicyScript.can_build_more(0.0, 0), "build scheduler always allows one pending tile")
+	_assert(RoadLodPolicyScript.can_build_more(2.0, 3), "cheap tiles can drain multiple times per frame")
+	_assert(not RoadLodPolicyScript.can_build_more(3.0, 3), "tile builds stop at the frame-time budget")
+	_assert(not RoadLodPolicyScript.can_build_more(0.5, RoadLodPolicyScript.MAX_TILES_PER_FRAME), "tile builds retain an absolute per-frame cap")
 
 func _test_building_identity_and_mesh() -> void:
 	var record := _record(10.0, 10.0, "way/123")
