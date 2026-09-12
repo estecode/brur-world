@@ -11,6 +11,7 @@ const MAGIC := "BMC1"
 const FORMAT_VERSION := 1
 const HEADER_BYTES := 12
 const VERTEX_BYTES := 28
+const MAX_MESH_BATCH_VERTICES := 12000
 
 static func decode_file(path: String) -> Dictionary:
 	var bytes := FileAccess.get_file_as_bytes(path)
@@ -64,6 +65,7 @@ static func decode_file(path: String) -> Dictionary:
 static func stage_chunks(specs: Array, cached_chunks: Dictionary) -> Dictionary:
 	var decoded_chunks: Dictionary = {}
 	var render_chunks: Array = []
+	var render_batches: Array = []
 	var total_vertices := 0
 	var total_bytes := 0
 	var cache_hits := 0
@@ -88,23 +90,55 @@ static func stage_chunks(specs: Array, cached_chunks: Dictionary) -> Dictionary:
 			decoded_chunks[key] = chunk
 		total_vertices += int(chunk.get("vertices", 0))
 		total_bytes += int(chunk.get("bytes", 0))
-		render_chunks.append({
+		var render_chunk := {
 			"key": key,
 			"positions": chunk.get("positions", PackedVector3Array()),
 			"normals": chunk.get("normals", PackedVector3Array()),
 			"colors": chunk.get("colors", PackedColorArray()),
 			"origin_world": spec.get("origin_world", Vector3.ZERO),
 			"vertices": int(chunk.get("vertices", 0)),
-		})
+		}
+		render_chunks.append(render_chunk)
+		render_batches.append_array(split_mesh_batches(render_chunk))
 	return {
 		"ok": true,
 		"render_chunks": render_chunks,
+		"render_batches": render_batches,
 		"decoded_chunks": decoded_chunks,
 		"vertices": total_vertices,
 		"bytes": total_bytes,
 		"cache_hits": cache_hits,
 		"cache_misses": cache_misses,
 	}
+
+static func split_mesh_batches(chunk: Dictionary, max_vertices: int = MAX_MESH_BATCH_VERTICES) -> Array:
+	var positions: PackedVector3Array = chunk.get("positions", PackedVector3Array())
+	var normals: PackedVector3Array = chunk.get("normals", PackedVector3Array())
+	var colors: PackedColorArray = chunk.get("colors", PackedColorArray())
+	var result: Array = []
+	if positions.is_empty():
+		return result
+	var triangle_aligned_limit := maxi(3, max_vertices - (max_vertices % 3))
+	var start := 0
+	var batch_index := 0
+	while start < positions.size():
+		var end := mini(positions.size(), start + triangle_aligned_limit)
+		if end < positions.size():
+			end -= (end - start) % 3
+		if end <= start:
+			end = mini(positions.size(), start + 3)
+		result.append({
+			"key": "%s#%d" % [String(chunk.get("key", "")), batch_index],
+			"source_key": String(chunk.get("key", "")),
+			"positions": positions.slice(start, end),
+			"normals": normals.slice(start, end),
+			"colors": colors.slice(start, end),
+			"origin_world": chunk.get("origin_world", Vector3.ZERO),
+			"vertices": end - start,
+		})
+		start = end
+		batch_index += 1
+	return result
 
 static func combine_chunks(specs: Array, cached_chunks: Dictionary) -> Dictionary:
 	# Kept as a deterministic/reference helper for tests and tooling. Production
