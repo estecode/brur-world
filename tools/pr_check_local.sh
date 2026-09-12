@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepares and objectively validates current PR-owned real-data integration checks.
+# Prepares and objectively validates current PR-owned real-data integration checks, then opens the exact rebuilt PR runtime for visual review.
 # Dependencies: existing local world_data, Sweden PBF, city-light density tooling, world showcase preparation, and Godot supplied by PR check.
 set -euo pipefail
 
@@ -181,3 +181,7 @@ printf 'PR_CHECK=CHECK_ROAD_SURFACE_REAL_DATA pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_test res://tests/godot/test_road_surface_query_real_data.gd
 printf 'PR_CHECK=CHECK_PRODUCTION_FPS_REAL_DATA pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_window_test res://tests/godot/test_production_fps_real_data.gd
+
+printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "${BRUR_PR_CHECK_PR:?}" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
+printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION inspect roads around 43 km, 150 km, and 315 km; close Godot when finished\n'
+"$GODOT" --path "$WORKTREE"
