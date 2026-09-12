@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prepares and objectively validates current PR-owned real-data integration checks, then opens the exact rebuilt PR runtime for visual review.
-# Dependencies: existing local world_data, Sweden PBF, city-light density tooling, world showcase preparation, and Godot supplied by PR check.
+# Dependencies: existing local world_data, Sweden PBF, city-light/building-tile tooling, world showcase preparation, and Godot supplied by PR check.
 set -euo pipefail
 
 WORKTREE="${BRUR_PR_CHECK_WORKTREE:?}"
@@ -36,7 +36,7 @@ prepare_runtime_world_data() {
   for entry in "$WORLD_DATA"/*; do
     name="$(basename "$entry")"
     case "$name" in
-      lod0|lod1|lod2|manifest.json) continue ;;
+      lod0|lod1|lod2|building_tiles|manifest.json) continue ;;
     esac
     ln -s "$entry" "$RUNTIME_WORLD_DATA/$name"
   done
@@ -65,6 +65,39 @@ if not (int(lods[0]["segments"]) < int(lods[1]["segments"]) < int(lods[2]["segme
     print(f"PR_CHECK=FAIL road LOD segment counts are not progressively detailed: {lods}")
     raise SystemExit(1)
 print(f"PR_CHECK=ROAD_LODS_REAL_DATA_OK lods={lods}")
+PY
+
+  [[ -f "$RUNTIME_WORLD_DATA/buildings.jsonl" ]] || {
+    printf 'PR_CHECK=FAIL missing existing buildings.jsonl for production building tiles\n' >&2
+    return 1
+  }
+  printf 'PR_CHECK=BUILD_BUILDING_TILES pr=%s source=existing-buildings-jsonl\n' "${BRUR_PR_CHECK_PR:?}"
+  "$PYTHON" "$WORKTREE/tools/build_building_tiles.py" "$RUNTIME_WORLD_DATA"
+
+  "$PYTHON" - "$RUNTIME_WORLD_DATA/manifest.json" "$RUNTIME_WORLD_DATA/building_tiles" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+features = manifest.get("features", {})
+tile_dir = Path(sys.argv[2])
+if features.get("building_tiles_dir") != "building_tiles":
+    print("PR_CHECK=FAIL production building tile manifest is missing directory metadata")
+    raise SystemExit(1)
+if float(features.get("building_tile_size", 0.0)) != 2000.0:
+    print(f"PR_CHECK=FAIL unexpected production building tile size: {features.get('building_tile_size')}")
+    raise SystemExit(1)
+if int(features.get("runtime_buildings_total", 0)) <= 0:
+    print("PR_CHECK=FAIL production building tile cache is empty")
+    raise SystemExit(1)
+if not tile_dir.is_dir() or not any(tile_dir.glob("*.jsonl")):
+    print("PR_CHECK=FAIL production building tile files are missing")
+    raise SystemExit(1)
+print(
+    "PR_CHECK=BUILDING_TILES_REAL_DATA_OK "
+    f"records={features['runtime_buildings_total']} tile_size={features['building_tile_size']}"
+)
 PY
 
   rm -f "$WORKTREE/world_data"
@@ -131,7 +164,7 @@ run_godot_test() {
     rm -f "$log"
     return 1
   fi
-  if grep -Eq 'SCRIPT ERROR:|Failed to load script|world (streaming foundation|showcase) test failed:|road-surface real-data test failed:' "$log"; then
+  if grep -Eq 'SCRIPT ERROR:|Failed to load script|world (streaming foundation|showcase) test failed:|map-controls test failed:|road-surface real-data test failed:' "$log"; then
     printf 'PR_CHECK=FAIL Godot reported script/test errors for %s\n' "$script" >&2
     rm -f "$log"
     return 1
@@ -177,11 +210,13 @@ PY
 printf 'PR_CHECK=CHECK_WORLD_SHOWCASE_HEADLESS pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_test res://tests/godot/test_world_streaming_foundation.gd
 run_godot_test res://tests/godot/test_world_showcase.gd
+printf 'PR_CHECK=CHECK_MAP_CONTROLS_HEADLESS pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
+run_godot_test res://tests/godot/test_map_controls.gd
 printf 'PR_CHECK=CHECK_ROAD_SURFACE_REAL_DATA pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_test res://tests/godot/test_road_surface_query_real_data.gd
 printf 'PR_CHECK=CHECK_PRODUCTION_FPS_REAL_DATA pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_window_test res://tests/godot/test_production_fps_real_data.gd
 
 printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "${BRUR_PR_CHECK_PR:?}" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
-printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION inspect roads around 43 km, 150 km, and 315 km; close Godot when finished\n'
+printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION confirm HUS starts OFF; turn HUS ON near street/city altitude and verify nearby buildings appear, then OFF and verify they disappear; close Godot when finished\n'
 "$GODOT" --path "$WORKTREE"
