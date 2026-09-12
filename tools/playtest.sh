@@ -138,12 +138,20 @@ routing_dataset_inputs() {
   printf '%s\n' \
     "$ROOT/tools/build_routing.py" \
     "$ROOT/tools/build_routing_dataset.py" \
+    "$ROOT/tools/check_routing_dataset.py" \
     "$ROOT/tools/compressed_routing.py" \
     "$ROOT/tools/gps_snap_index.py" \
     "$ROOT/tools/route_geometry.py" \
     "$ROOT/tools/routing_graph.py" \
     "$ROOT/tools/routing_graph_view.py" \
     "$ROOT/tools/world_common.py"
+}
+
+routing_dataset_valid() {
+  [[ -f "$ROOT/tools/check_routing_dataset.py" ]] || return 1
+  local python
+  python="$(resolve_python)"
+  "$python" "$ROOT/tools/check_routing_dataset.py" "$WORLD_DATA" >/dev/null
 }
 
 ensure_gps_data() {
@@ -170,6 +178,9 @@ ensure_gps_data() {
   if [[ "$rebuild" -eq 0 ]] && stamp_mismatch "$stamp" "$fingerprint"; then
     rebuild=1
   fi
+  if [[ "$rebuild" -eq 0 ]] && ! routing_dataset_valid; then
+    rebuild=1
+  fi
 
   if [[ "$rebuild" -eq 1 ]]; then
     require_pbf
@@ -184,6 +195,7 @@ ensure_gps_data() {
   for artifact in "${required[@]}"; do
     [[ -f "$artifact" ]] || fail "missing $artifact after preparation"
   done
+  routing_dataset_valid || fail "routing dataset failed identity validation after preparation"
   printf '%s\n' "$fingerprint" > "$stamp"
 }
 
@@ -220,6 +232,9 @@ ensure_game_data() {
   if [[ "$rebuild" -eq 0 ]] && stamp_mismatch "$stamp" "$fingerprint"; then
     rebuild=1
   fi
+  if [[ "$rebuild" -eq 0 ]] && ! routing_dataset_valid; then
+    rebuild=1
+  fi
 
   if [[ "$rebuild" -eq 1 ]]; then
     require_pbf
@@ -234,6 +249,7 @@ ensure_game_data() {
   for artifact in "${required[@]}"; do
     [[ -f "$artifact" ]] || fail "world build did not produce $artifact"
   done
+  routing_dataset_valid || fail "routing dataset failed identity validation after world preparation"
   printf '%s\n' "$fingerprint" > "$stamp"
 }
 
