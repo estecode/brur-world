@@ -78,3 +78,24 @@ run_godot_test() {
 printf 'PR_CHECK=CHECK_WORLD_SHOWCASE_HEADLESS pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_test res://tests/godot/test_world_streaming_foundation.gd
 run_godot_test res://tests/godot/test_world_showcase.gd
+
+# Diagnostic #136: objective checks above use the untouched production code. Only
+# the temporary detached PR-check worktree is patched before the human FPS A/B.
+"$PYTHON" - "$WORKTREE/scripts/main.gd" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+needle = "\t_create_ground()\n\t_load_background()\n\t_update_depth_layout(true)"
+replacement = (
+    "\t_create_ground()\n"
+    "\t# Diagnostic #136: skip the full-Sweden BRM2 background for the FPS A/B.\n"
+    "\t_update_depth_layout(true)"
+)
+if text.count(needle) != 1:
+    print("PR_CHECK=FAIL background-off diagnostic could not find exact startup sequence")
+    raise SystemExit(1)
+path.write_text(text.replace(needle, replacement), encoding="utf-8")
+print("PR_CHECK=DIAGNOSTIC background=off clouds=production roads=production")
+PY
