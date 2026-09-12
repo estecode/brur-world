@@ -14,7 +14,7 @@ func _init() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(_root_dir + "/lod2"))
 	_test_classification_and_bin_boundary()
 	_test_dense_tile_candidate_reduction()
-	_test_long_diagonal_index_is_linear()
+	_test_long_diagonal_index_is_bounded()
 	if _failed:
 		quit(1)
 		return
@@ -44,13 +44,16 @@ func _test_dense_tile_candidate_reduction() -> void:
 	query.setup(_root_dir, coordinates)
 	var probe_absolute := Vector2(32450.0, 460.0)
 	query.surface_at(coordinates.absolute_to_world(probe_absolute))
-	var metrics: Dictionary = query.consume_perf_metrics()
-	_assert(int(metrics["queries"]) == 1, "performance metrics count one surface query")
-	_assert(int(metrics["segments_checked"]) < 50, "dense tile query checks only local spatial candidates")
+	var first_metrics: Dictionary = query.consume_perf_metrics()
+	_assert(int(first_metrics["queries"]) == 1, "performance metrics count one surface query")
+	_assert(int(first_metrics["segments_checked"]) < 50, "dense tile query checks only local spatial candidates")
+	_assert(int(first_metrics["bins_built"]) > 0, "first query builds only the spatial bins it needs")
+	query.surface_at(coordinates.absolute_to_world(probe_absolute))
+	var warm_metrics: Dictionary = query.consume_perf_metrics()
+	_assert(int(warm_metrics["bins_built"]) == 0, "repeated query reuses cached spatial bins")
+	_assert(int(warm_metrics["segments_checked"]) < 50, "warm query remains bounded by local spatial candidates")
 
-func _test_long_diagonal_index_is_linear() -> void:
-	# Keep this fixture outside the 3x3 neighborhood of the dense-tile fixture so
-	# index-entry accounting measures only the long segment under test.
+func _test_long_diagonal_index_is_bounded() -> void:
 	_write_tile(Vector2i(4, 0), [
 		{"class": 0, "a": Vector2(100.0, 100.0), "b": Vector2(30000.0, 30000.0)},
 	])
@@ -60,7 +63,7 @@ func _test_long_diagonal_index_is_linear() -> void:
 	var probe_absolute := Vector2(128100.0, 100.0)
 	query.surface_at(coordinates.absolute_to_world(probe_absolute))
 	var metrics: Dictionary = query.consume_perf_metrics()
-	_assert(int(metrics["index_entries"]) < 10000, "long diagonal indexing grows with segment length instead of its full AABB area")
+	_assert(int(metrics["index_entries"]) < 100, "one queried bin does not prebuild a long segment across the whole tile")
 
 func _write_tile(tile: Vector2i, segments: Array[Dictionary]) -> void:
 	var path := "%s/lod2/%d_%d.brtile" % [_root_dir, tile.x, tile.y]
