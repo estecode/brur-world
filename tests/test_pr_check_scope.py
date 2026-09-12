@@ -27,10 +27,12 @@ from pr_check_scope import (  # noqa: E402
 
 BUILDING_UI_PR_FILES = (
     "scenes/main.tscn",
+    "scripts/building_lod_policy.gd",
+    "scripts/building_mesh_chunk_codec.gd",
     "scripts/building_stream_layer.gd",
     "scripts/map_controls_ui.gd",
     "tests/godot/test_map_controls.gd",
-    "tools/build_building_tiles.py",
+    "tools/build_building_mesh_pyramid.py",
     "tools/build_sweden.py",
 )
 
@@ -50,7 +52,7 @@ def main() -> None:
         "production building/UI changes must not prepare the old world showcase"
     )
     assert building_tiles_required(BUILDING_UI_PR_FILES), (
-        "production building changes must prepare or reuse building-tile runtime data"
+        "production building changes must prepare or reuse derived building runtime data"
     )
 
     for path in (
@@ -89,10 +91,17 @@ def main() -> None:
     assert not world_showcase_real_data_required(("harness/world_showcase/world_showcase.tscn",))
     assert not world_showcase_real_data_required(("scripts/building_stream_layer.gd",))
 
-    assert building_tiles_required(("tools/build_building_tiles.py",))
-    assert building_tiles_required(("tools/build_sweden.py",))
-    assert building_tiles_required(("scripts/building_runtime_composition.gd",))
-    assert building_tiles_required(("scenes/main.tscn",))
+    for path in (
+        "tools/build_building_tiles.py",
+        "tools/build_building_mesh_pyramid.py",
+        "tools/build_sweden.py",
+        "scripts/building_lod_policy.gd",
+        "scripts/building_mesh_chunk_codec.gd",
+        "scripts/building_stream_layer.gd",
+        "scripts/building_runtime_composition.gd",
+        "scenes/main.tscn",
+    ):
+        assert building_tiles_required((path,)), f"building runtime owner must trigger preparation: {path}"
     assert not building_tiles_required(("scripts/map_controls_ui.gd",)), (
         "pure HUS UI changes do not need building data preparation"
     )

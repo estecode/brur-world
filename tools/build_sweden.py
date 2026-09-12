@@ -12,6 +12,7 @@ import argparse
 from pathlib import Path
 
 from build_background import build_background
+from build_building_mesh_pyramid import build_building_mesh_pyramid
 from build_building_tiles import build_building_tiles
 from build_city_light_density import build_city_light_density
 from build_features import build_buildings, build_pois
@@ -57,6 +58,10 @@ def main() -> None:
     print()
     print("=== BUILD BUILDING TILES ===")
     build_building_tiles(args.output)
+
+    print()
+    print("=== BUILD BUILDING MESH LOD PYRAMID ===")
+    build_building_mesh_pyramid(args.output)
 
     print()
     print("=== BUILD CITY-LIGHT POI DENSITY ===")

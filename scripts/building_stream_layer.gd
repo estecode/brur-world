@@ -1,31 +1,20 @@
 extends Node3D
 class_name BuildingStreamLayer
 
-## Streams camera-visible batched building tiles with altitude LOD, bounded work, hysteresis, and metrics.
+## Stages complete camera-visible prebuilt building LOD chunks off-thread and swaps the viewport atomically.
 ##
 ## Dependencies:
-## - building_lod_policy.gd selects building detail from altitude and footprint size.
-## - building_mesh_builder.gd builds tile-local meshes from existing OSM-derived building records.
+## - building_lod_policy.gd selects altitude detail and spatial chunk scale.
+## - building_mesh_chunk_codec.gd decodes prebuilt BMC1 render chunks without triangulation.
 ## - world_coordinates.gd is supplied explicitly by composition and remains the coordinate owner.
-## - world_stream_request.gd carries camera demand without owning layer policy.
-## - Composition supplies a camera rig and an explicit directory containing tile JSONL building records.
+## - Composition supplies a camera rig and the derived building_mesh_lod directory.
 
 const BuildingLodPolicyScript = preload("res://scripts/building_lod_policy.gd")
-const BuildingMeshBuilderScript = preload("res://scripts/building_mesh_builder.gd")
-const WorldStreamRequestScript = preload("res://scripts/world_stream_request.gd")
+const BuildingMeshChunkCodecScript = preload("res://scripts/building_mesh_chunk_codec.gd")
 
-const STATE_REQUESTED := "requested"
-const STATE_PREPARING := "preparing"
-const STATE_READY := "ready"
-const STATE_VISIBLE := "visible"
-
-@export var active_radius_tiles: int = 1
-@export var max_view_radius_tiles: int = 4
-@export var view_margin_tiles: int = 1
-@export var builds_per_frame: int = 1
-@export var build_budget_ms: float = 4.0
-@export var max_pending_tiles: int = 96
-@export var prefetch_tiles_ahead: int = 1
+@export var view_margin_chunks: int = 1
+@export var max_view_chunks: int = 64
+@export var max_cache_chunks: int = 96
 @export var appear_altitude_m: float = 14000.0
 @export var hide_altitude_m: float = 15000.0
 @export var full_height_altitude_m: float = 2500.0
@@ -35,45 +24,54 @@ const STATE_VISIBLE := "visible"
 
 var _coordinates = null
 var _camera_rig: Node = null
-var _tile_data_dir: String = ""
-var _active: Dictionary = {}
-var _pending: Array[Vector2i] = []
-var _wanted: Dictionary = {}
-var _tile_states: Dictionary = {}
-var _tile_record_counts: Dictionary = {}
-var _last_center_tile := Vector2i(999999, 999999)
-var _last_view_radius_tiles := -1
-var _last_lod := -1
-var _last_visible := false
-var _last_focus_world := Vector3.ZERO
-var _has_last_focus := false
+var _mesh_data_dir := ""
 var _material: StandardMaterial3D = null
-var _perf_build_ms: float = 0.0
-var _perf_build_max_ms: float = 0.0
-var _perf_tiles_built: int = 0
-var _perf_records_built: int = 0
-var _perf_dropped_requests: int = 0
+var _active_instance: MeshInstance3D = null
+var _active_signature := ""
+var _active_lod := -1
+var _active_chunks := 0
+var _active_vertices := 0
+var _desired_request: Dictionary = {}
+var _desired_signature := ""
+var _last_visible := false
+var _request_generation := 0
+var _stage_thread: Thread = null
+var _stage_generation := -1
+var _cache: Dictionary = {}
+var _cache_lru: Array[String] = []
+var _perf_stage_ms := 0.0
+var _perf_stage_max_ms := 0.0
+var _perf_publish_ms := 0.0
+var _perf_publish_max_ms := 0.0
+var _perf_cache_hits := 0
+var _perf_cache_misses := 0
+var _perf_bytes_loaded := 0
+var _perf_chunks_loaded := 0
+var _perf_stale_stages := 0
+var _last_stage_ms := 0.0
+var _last_publish_ms := 0.0
 
-func setup(world_coordinates, camera_rig: Node, tile_data_dir: String) -> void:
+func setup(world_coordinates, camera_rig: Node, mesh_data_dir: String) -> void:
 	assert(world_coordinates != null, "BuildingStreamLayer requires WorldCoordinates")
 	assert(camera_rig != null, "BuildingStreamLayer requires a camera rig")
-	assert(not tile_data_dir.is_empty(), "BuildingStreamLayer requires an explicit tile data directory")
+	assert(not mesh_data_dir.is_empty(), "BuildingStreamLayer requires an explicit mesh LOD directory")
 	_coordinates = world_coordinates
 	_camera_rig = camera_rig
-	_tile_data_dir = tile_data_dir.trim_suffix("/")
+	_mesh_data_dir = mesh_data_dir.trim_suffix("/")
 	_material = StandardMaterial3D.new()
 	_material.albedo_color = Color.WHITE
 	_material.vertex_color_use_as_albedo = true
 	_material.roughness = 0.92
 	_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var focus: Vector3 = _camera_rig.call("get_focus_world")
-	_last_focus_world = focus
-	_has_last_focus = true
 	set_process(streaming_enabled)
 	if streaming_enabled:
-		_refresh(WorldStreamRequestScript.new(focus, float(_camera_rig.call("get_altitude"))), true)
+		_update_desired_request(true)
 	else:
-		_clear_all()
+		_clear_presentation()
+
+func _exit_tree() -> void:
+	if _stage_thread != null and _stage_thread.is_started():
+		_stage_thread.wait_to_finish()
 
 func set_streaming_enabled(enabled: bool) -> void:
 	if streaming_enabled == enabled:
@@ -81,290 +79,308 @@ func set_streaming_enabled(enabled: bool) -> void:
 	streaming_enabled = enabled
 	set_process(enabled)
 	if not enabled:
+		_request_generation += 1
+		_desired_request.clear()
+		_desired_signature = ""
 		_last_visible = false
-		_last_center_tile = Vector2i(999999, 999999)
-		_last_view_radius_tiles = -1
-		_last_lod = -1
-		_clear_all()
+		_clear_presentation()
 		return
 	if _coordinates == null or _camera_rig == null:
 		return
-	var focus: Vector3 = _camera_rig.call("get_focus_world")
-	_last_focus_world = focus
-	_has_last_focus = true
-	_refresh(WorldStreamRequestScript.new(focus, float(_camera_rig.call("get_altitude"))), true)
+	_update_desired_request(true)
 
 func is_streaming_enabled() -> bool:
 	return streaming_enabled
 
+func is_viewport_ready() -> bool:
+	return streaming_enabled and not _desired_signature.is_empty() and _active_signature == _desired_signature and not _stage_in_flight()
+
 func _process(_delta: float) -> void:
 	if not streaming_enabled or _coordinates == null or _camera_rig == null:
 		return
-	var focus: Vector3 = _camera_rig.call("get_focus_world")
-	var motion := Vector3.ZERO
-	if _has_last_focus:
-		motion = focus - _last_focus_world
-	_last_focus_world = focus
-	_has_last_focus = true
-	var request = WorldStreamRequestScript.new(focus, float(_camera_rig.call("get_altitude")), motion)
-	_refresh(request, false)
-	_process_pending()
-	_apply_altitude_blend(request.altitude_m)
+	_poll_stage()
+	_update_desired_request(false)
+	_start_stage_if_needed()
+	_apply_altitude_blend(float(_camera_rig.call("get_altitude")))
 
-func _refresh(request, force: bool) -> void:
-	var visible_now: bool = _visibility_with_hysteresis(request.altitude_m)
+func _update_desired_request(force: bool) -> void:
+	var altitude := float(_camera_rig.call("get_altitude"))
+	var visible_now := _visibility_with_hysteresis(altitude)
 	if not visible_now:
 		if force or _last_visible:
-			_clear_all()
+			_request_generation += 1
+			_desired_request.clear()
+			_desired_signature = ""
+			_clear_presentation()
 		_last_visible = false
 		return
-	var became_visible: bool = not _last_visible
 	_last_visible = true
-	var center_tile: Vector2i = _coordinates.world_to_tile(request.focus_world)
-	var view_radius_tiles := _view_radius_tiles(center_tile)
-	var lod: int = BuildingLodPolicyScript.choose_lod(request.altitude_m)
-	var prefetch_offset: Vector2i = _prefetch_offset(request)
-	var lod_changed := _last_lod != -1 and lod != _last_lod
-	if lod_changed:
-		_clear_all()
-	if not force and not became_visible and not lod_changed and center_tile == _last_center_tile and view_radius_tiles == _last_view_radius_tiles and prefetch_offset == Vector2i.ZERO:
+	var request := _select_viewport_request(altitude)
+	var signature := String(request.get("signature", ""))
+	if not force and signature == _desired_signature:
 		return
-	_last_center_tile = center_tile
-	_last_view_radius_tiles = view_radius_tiles
-	_last_lod = lod
-	_wanted.clear()
-	var ordered: Array[Vector2i] = []
-	_append_tile_square(ordered, center_tile, view_radius_tiles)
-	if prefetch_offset != Vector2i.ZERO:
-		_append_tile_square(ordered, center_tile + prefetch_offset, view_radius_tiles)
-	_sort_tiles_nearest_first(ordered, center_tile)
+	_request_generation += 1
+	request["generation"] = _request_generation
+	_desired_request = request
+	_desired_signature = signature
+	_start_stage_if_needed()
 
-	for tile in ordered:
-		var path := _tile_path(tile)
-		if not FileAccess.file_exists(path):
-			continue
-		_wanted[tile] = true
-		if not _active.has(tile) and not _pending.has(tile):
-			if _pending.size() >= maxi(1, max_pending_tiles):
-				_perf_dropped_requests += 1
+func _select_viewport_request(altitude: float) -> Dictionary:
+	var lod := BuildingLodPolicyScript.choose_lod(altitude)
+	var bounds := _chunk_bounds(lod, maxi(0, view_margin_chunks))
+	while _bounds_chunk_count(bounds) > maxi(1, max_view_chunks) and lod > BuildingLodPolicyScript.LOD_COARSE:
+		lod -= 1
+		bounds = _chunk_bounds(lod, maxi(0, view_margin_chunks))
+	if _bounds_chunk_count(bounds) > maxi(1, max_view_chunks) and view_margin_chunks > 0:
+		bounds = _chunk_bounds(lod, 0)
+
+	var specs: Array[Dictionary] = []
+	var chunk_size := BuildingLodPolicyScript.chunk_size_m(lod)
+	for chunk_y in range(int(bounds["min_y"]), int(bounds["max_y"]) + 1):
+		for chunk_x in range(int(bounds["min_x"]), int(bounds["max_x"]) + 1):
+			var chunk := Vector2i(chunk_x, chunk_y)
+			var path := _chunk_path(lod, chunk)
+			if not FileAccess.file_exists(path):
 				continue
-			_pending.append(tile)
-			_tile_states[tile] = STATE_REQUESTED
+			var absolute_origin := Vector2(float(chunk_x) * chunk_size, float(chunk_y) * chunk_size)
+			specs.append({
+				"key": _chunk_key(lod, chunk),
+				"path": path,
+				"origin_world": _coordinates.absolute_to_world(absolute_origin, base_height_m),
+			})
+	var signature := "L%d:%d:%d:%d:%d" % [lod, bounds["min_x"], bounds["max_x"], bounds["min_y"], bounds["max_y"]]
+	return {
+		"signature": signature,
+		"lod": lod,
+		"specs": specs,
+		"coverage_chunks": _bounds_chunk_count(bounds),
+		"render_chunks": specs.size(),
+		"bounds": bounds,
+	}
 
-	for tile_value in _active.keys():
-		if not _wanted.has(tile_value):
-			_unload_tile(tile_value)
+func _chunk_bounds(lod: int, margin_chunks: int) -> Dictionary:
+	var chunk_size := BuildingLodPolicyScript.chunk_size_m(lod)
+	var world_points: Array[Vector3] = []
+	if _camera_rig.has_method("get_ground_view_corners"):
+		var corners: Variant = _camera_rig.call("get_ground_view_corners")
+		if typeof(corners) == TYPE_PACKED_VECTOR3_ARRAY or typeof(corners) == TYPE_ARRAY:
+			for value in corners:
+				if typeof(value) == TYPE_VECTOR3 and (value as Vector3).is_finite():
+					world_points.append(value)
+	if world_points.is_empty():
+		world_points.append(_camera_rig.call("get_focus_world"))
+	var first_absolute: Vector2 = _coordinates.world_to_absolute(world_points[0])
+	var min_x := first_absolute.x
+	var max_x := first_absolute.x
+	var min_y := first_absolute.y
+	var max_y := first_absolute.y
+	for index in range(1, world_points.size()):
+		var absolute: Vector2 = _coordinates.world_to_absolute(world_points[index])
+		min_x = minf(min_x, absolute.x)
+		max_x = maxf(max_x, absolute.x)
+		min_y = minf(min_y, absolute.y)
+		max_y = maxf(max_y, absolute.y)
+	var margin_m := float(margin_chunks) * chunk_size
+	return {
+		"min_x": floori((min_x - margin_m) / chunk_size),
+		"max_x": floori((max_x + margin_m) / chunk_size),
+		"min_y": floori((min_y - margin_m) / chunk_size),
+		"max_y": floori((max_y + margin_m) / chunk_size),
+	}
 
-	var retained: Array[Vector2i] = []
-	for pending_tile in _pending:
-		if _wanted.has(pending_tile):
-			retained.append(pending_tile)
-		else:
-			_tile_states.erase(pending_tile)
-	_pending = retained
+func _bounds_chunk_count(bounds: Dictionary) -> int:
+	return maxi(0, int(bounds["max_x"]) - int(bounds["min_x"]) + 1) * maxi(0, int(bounds["max_y"]) - int(bounds["min_y"]) + 1)
 
-func _view_radius_tiles(center_tile: Vector2i) -> int:
-	var minimum_radius := maxi(0, active_radius_tiles)
-	var maximum_radius := maxi(minimum_radius, max_view_radius_tiles)
-	if _camera_rig == null or not _camera_rig.has_method("get_ground_view_corners"):
-		return minimum_radius
-	var corners: Variant = _camera_rig.call("get_ground_view_corners")
-	var corners_type := typeof(corners)
-	if corners_type != TYPE_PACKED_VECTOR3_ARRAY and corners_type != TYPE_ARRAY:
-		return minimum_radius
-	var radius := minimum_radius
-	var has_corner := false
-	for corner_value in corners:
-		if typeof(corner_value) != TYPE_VECTOR3:
-			continue
-		var corner: Vector3 = corner_value
-		if not corner.is_finite():
-			continue
-		has_corner = true
-		var tile: Vector2i = _coordinates.world_to_tile(corner)
-		var x_radius := absi(tile.x - center_tile.x)
-		var y_radius := absi(tile.y - center_tile.y)
-		radius = maxi(radius, maxi(x_radius, y_radius))
-	if has_corner:
-		radius += maxi(0, view_margin_tiles)
-	return mini(radius, maximum_radius)
+func _start_stage_if_needed() -> void:
+	if not streaming_enabled or _desired_request.is_empty() or _desired_signature == _active_signature or _stage_in_flight():
+		return
+	var specs: Array = _desired_request.get("specs", [])
+	var cached_chunks: Dictionary = {}
+	for spec_value in specs:
+		var spec: Dictionary = spec_value
+		var key := String(spec.get("key", ""))
+		if _cache.has(key):
+			cached_chunks[key] = _cache[key]
+	_stage_generation = int(_desired_request.get("generation", _request_generation))
+	_stage_thread = Thread.new()
+	var start_error := _stage_thread.start(Callable(self, "_stage_worker").bind(_stage_generation, specs, cached_chunks))
+	if start_error != OK:
+		push_error("Building viewport staging thread failed to start: %s" % error_string(start_error))
+		_stage_thread = null
+		_stage_generation = -1
+
+func _stage_worker(generation: int, specs: Array, cached_chunks: Dictionary) -> Dictionary:
+	var started := Time.get_ticks_usec()
+	var result: Dictionary = BuildingMeshChunkCodecScript.combine_chunks(specs, cached_chunks)
+	result["generation"] = generation
+	result["stage_ms"] = float(Time.get_ticks_usec() - started) / 1000.0
+	return result
+
+func _poll_stage() -> void:
+	if not _stage_in_flight() or _stage_thread.is_alive():
+		return
+	var result: Variant = _stage_thread.wait_to_finish()
+	_stage_thread = null
+	_stage_generation = -1
+	if typeof(result) != TYPE_DICTIONARY:
+		push_error("Building viewport staging returned invalid data")
+		_start_stage_if_needed()
+		return
+	var stage: Dictionary = result
+	_last_stage_ms = float(stage.get("stage_ms", 0.0))
+	_perf_stage_ms += _last_stage_ms
+	_perf_stage_max_ms = maxf(_perf_stage_max_ms, _last_stage_ms)
+	_perf_cache_hits += int(stage.get("cache_hits", 0))
+	_perf_cache_misses += int(stage.get("cache_misses", 0))
+	_perf_bytes_loaded += int(stage.get("bytes", 0))
+	if not bool(stage.get("ok", false)):
+		push_error("Building viewport staging failed: %s" % String(stage.get("error", "unknown")))
+		_start_stage_if_needed()
+		return
+	_cache_decoded_chunks(stage.get("decoded_chunks", {}))
+	if int(stage.get("generation", -1)) != _request_generation:
+		_perf_stale_stages += 1
+		_start_stage_if_needed()
+		return
+	_publish_stage(stage)
+	_start_stage_if_needed()
+
+func _publish_stage(stage: Dictionary) -> void:
+	var started := Time.get_ticks_usec()
+	var positions: PackedVector3Array = stage.get("positions", PackedVector3Array())
+	var next_instance: MeshInstance3D = null
+	if not positions.is_empty():
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, BuildingMeshChunkCodecScript.arrays_for_mesh(stage))
+		next_instance = MeshInstance3D.new()
+		next_instance.name = "BuildingViewport_L%d" % int(_desired_request.get("lod", -1))
+		next_instance.mesh = mesh
+		next_instance.material_override = _material
+		next_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		next_instance.visible = false
+		add_child(next_instance)
+
+	var previous := _active_instance
+	if previous != null and is_instance_valid(previous):
+		previous.visible = false
+	if next_instance != null:
+		next_instance.visible = true
+	_active_instance = next_instance
+	_active_signature = _desired_signature
+	_active_lod = int(_desired_request.get("lod", -1))
+	_active_chunks = int(_desired_request.get("render_chunks", 0))
+	_active_vertices = positions.size()
+	if previous != null and is_instance_valid(previous):
+		previous.queue_free()
+	for spec_value in _desired_request.get("specs", []):
+		_cache_touch(String((spec_value as Dictionary).get("key", "")))
+	_perf_chunks_loaded += int(stage.get("cache_misses", 0))
+	_last_publish_ms = float(Time.get_ticks_usec() - started) / 1000.0
+	_perf_publish_ms += _last_publish_ms
+	_perf_publish_max_ms = maxf(_perf_publish_max_ms, _last_publish_ms)
+
+func _cache_decoded_chunks(decoded: Dictionary) -> void:
+	for key_value in decoded.keys():
+		var key := String(key_value)
+		_cache[key] = decoded[key_value]
+		_cache_touch(key)
+	while _cache_lru.size() > maxi(1, max_cache_chunks):
+		var evicted := _cache_lru.pop_front()
+		_cache.erase(evicted)
+
+func _cache_touch(key: String) -> void:
+	if key.is_empty() or not _cache.has(key):
+		return
+	var existing := _cache_lru.find(key)
+	if existing >= 0:
+		_cache_lru.remove_at(existing)
+	_cache_lru.append(key)
+
+func _stage_in_flight() -> bool:
+	return _stage_thread != null and _stage_thread.is_started()
 
 func _visibility_with_hysteresis(altitude_m: float) -> bool:
 	if _last_visible:
 		return altitude_m < hide_altitude_m
 	return altitude_m < appear_altitude_m
 
-func _prefetch_offset(request) -> Vector2i:
-	if prefetch_tiles_ahead <= 0:
-		return Vector2i.ZERO
-	var motion: Vector2 = request.horizontal_motion()
-	if motion.length() < 1.0:
-		return Vector2i.ZERO
-	var x_step := 0
-	var y_step := 0
-	if absf(motion.x) >= absf(motion.y):
-		x_step = 1 if motion.x > 0.0 else -1
-	else:
-		y_step = -1 if motion.y > 0.0 else 1
-	return Vector2i(x_step, y_step) * prefetch_tiles_ahead
-
-func _append_tile_square(target: Array[Vector2i], center: Vector2i, radius: int) -> void:
-	for ty in range(center.y - radius, center.y + radius + 1):
-		for tx in range(center.x - radius, center.x + radius + 1):
-			var tile := Vector2i(tx, ty)
-			if not target.has(tile):
-				target.append(tile)
-
-func _sort_tiles_nearest_first(tiles: Array[Vector2i], center: Vector2i) -> void:
-	tiles.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-		var da := absi(a.x - center.x) + absi(a.y - center.y)
-		var db := absi(b.x - center.x) + absi(b.y - center.y)
-		if da == db:
-			return a.y < b.y if a.y != b.y else a.x < b.x
-		return da < db
-	)
-
-func _process_pending() -> void:
-	var built := 0
-	var frame_started := Time.get_ticks_usec()
-	while built < maxi(1, builds_per_frame) and not _pending.is_empty():
-		if built > 0 and _elapsed_ms(frame_started) >= maxf(0.1, build_budget_ms):
-			break
-		var tile: Vector2i = _pending.pop_front()
-		if _active.has(tile) or not _wanted.has(tile):
-			continue
-		_tile_states[tile] = STATE_PREPARING
-		var started := Time.get_ticks_usec()
-		var build_result := _build_tile(tile, _last_lod)
-		var elapsed := float(Time.get_ticks_usec() - started) / 1000.0
-		_perf_build_ms += elapsed
-		_perf_build_max_ms = maxf(_perf_build_max_ms, elapsed)
-		var instance: MeshInstance3D = build_result.get("instance")
-		if instance != null:
-			_tile_states[tile] = STATE_READY
-			add_child(instance)
-			_active[tile] = instance
-			_tile_record_counts[tile] = int(build_result.get("records", 0))
-			_tile_states[tile] = STATE_VISIBLE
-			_perf_tiles_built += 1
-			_perf_records_built += int(build_result.get("records", 0))
-		else:
-			_tile_states.erase(tile)
-		built += 1
-
-func _elapsed_ms(started_usec: int) -> float:
-	return float(Time.get_ticks_usec() - started_usec) / 1000.0
-
-func _build_tile(tile: Vector2i, lod: int) -> Dictionary:
-	var records := _read_tile_records(_tile_path(tile))
-	if records.is_empty():
-		return {"instance": null, "records": 0}
-	var visible_records: Array = BuildingLodPolicyScript.filter_records(records, lod)
-	if visible_records.is_empty():
-		return {"instance": null, "records": 0}
-	var tile_origin_absolute: Vector2 = _coordinates.tile_origin_absolute(tile)
-	var mesh: ArrayMesh = BuildingMeshBuilderScript.build_tile_mesh(visible_records, tile_origin_absolute)
-	if mesh == null:
-		return {"instance": null, "records": visible_records.size()}
-	var instance := MeshInstance3D.new()
-	instance.name = "Buildings_%s_L%d" % [_coordinates.tile_identity(tile).replace(":", "_"), lod]
-	instance.mesh = mesh
-	instance.material_override = _material
-	instance.position = _coordinates.tile_origin_world(tile, base_height_m)
-	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	return {"instance": instance, "records": visible_records.size()}
-
-func _read_tile_records(path: String) -> Array:
-	var result: Array = []
-	var file := FileAccess.open(path, FileAccess.READ)
-	if file == null:
-		return result
-	while not file.eof_reached():
-		var line := file.get_line()
-		if line.is_empty():
-			continue
-		var parsed: Variant = JSON.parse_string(line)
-		if typeof(parsed) == TYPE_DICTIONARY:
-			result.append(parsed)
-	return result
-
 func _apply_altitude_blend(altitude: float) -> void:
-	if _active.is_empty():
+	if _active_instance == null or not is_instance_valid(_active_instance):
 		return
 	var blend := 1.0
 	if altitude > full_height_altitude_m:
 		blend = 1.0 - inverse_lerp(full_height_altitude_m, appear_altitude_m, altitude)
 	blend = clampf(blend, 0.0, 1.0)
 	var eased := blend * blend * (3.0 - 2.0 * blend)
-	for node_value in _active.values():
-		var instance := node_value as MeshInstance3D
-		if instance != null:
-			instance.scale.y = maxf(0.02, eased)
-			instance.visible = eased > 0.01
+	_active_instance.scale.y = maxf(0.02, eased)
+	_active_instance.visible = eased > 0.01
 
-func _tile_path(tile: Vector2i) -> String:
-	return "%s/%d_%d.jsonl" % [_tile_data_dir, tile.x, tile.y]
+func _chunk_path(lod: int, chunk: Vector2i) -> String:
+	return "%s/lod%d/%d_%d.bmc" % [_mesh_data_dir, lod, chunk.x, chunk.y]
 
-func _unload_tile(tile: Vector2i) -> void:
-	var instance: Node = _active.get(tile) as Node
-	if instance != null:
-		instance.queue_free()
-	_active.erase(tile)
-	_tile_record_counts.erase(tile)
-	_tile_states.erase(tile)
+func _chunk_key(lod: int, chunk: Vector2i) -> String:
+	return "L%d:%d:%d" % [lod, chunk.x, chunk.y]
 
-func _clear_all() -> void:
-	_pending.clear()
-	_wanted.clear()
-	for tile in _active.keys():
-		_unload_tile(tile)
-	_tile_states.clear()
+func _clear_presentation() -> void:
+	if _active_instance != null and is_instance_valid(_active_instance):
+		_active_instance.queue_free()
+	_active_instance = null
+	_active_signature = ""
+	_active_lod = -1
+	_active_chunks = 0
+	_active_vertices = 0
 
 func active_tile_count() -> int:
-	return _active.size()
+	return _active_chunks
 
 func pending_tile_count() -> int:
-	return _pending.size()
+	return int(_desired_request.get("render_chunks", 0)) if _stage_in_flight() else 0
 
 func active_mesh_count() -> int:
-	return _active.size()
-
-func tile_state(tile: Vector2i) -> String:
-	return String(_tile_states.get(tile, "unloaded"))
+	return 1 if _active_instance != null and is_instance_valid(_active_instance) else 0
 
 func debug_snapshot() -> Dictionary:
-	var ids: Array[String] = []
-	for tile in _active.keys():
-		ids.append(_coordinates.tile_identity(tile))
-	ids.sort()
-	var records := 0
-	for count in _tile_record_counts.values():
-		records += int(count)
 	return {
 		"streaming_enabled": streaming_enabled,
-		"active_tiles": _active.size(),
-		"pending_tiles": _pending.size(),
-		"wanted_tiles": _wanted.size(),
-		"active_tile_ids": ids,
-		"active_records": records,
-		"building_lod": _last_lod,
-		"view_radius_tiles": _last_view_radius_tiles,
-		"last_center_tile": _coordinates.tile_identity(_last_center_tile) if _coordinates != null else "",
+		"viewport_ready": is_viewport_ready(),
+		"active_signature": _active_signature,
+		"desired_signature": _desired_signature,
+		"building_lod": _active_lod,
+		"desired_lod": int(_desired_request.get("lod", -1)),
+		"active_chunks": _active_chunks,
+		"coverage_chunks": int(_desired_request.get("coverage_chunks", 0)),
+		"render_chunks": int(_desired_request.get("render_chunks", 0)),
+		"active_vertices": _active_vertices,
+		"stage_in_flight": _stage_in_flight(),
+		"cache_chunks": _cache.size(),
+		"last_stage_ms": _last_stage_ms,
+		"last_publish_ms": _last_publish_ms,
 	}
 
 func consume_perf_metrics() -> Dictionary:
 	var result := {
-		"building_build_ms": _perf_build_ms,
-		"building_build_max_ms": _perf_build_max_ms,
-		"building_tiles_built": _perf_tiles_built,
-		"building_records_built": _perf_records_built,
-		"building_active_tiles": _active.size(),
-		"building_pending_tiles": _pending.size(),
-		"building_dropped_requests": _perf_dropped_requests,
+		"building_stage_ms": _perf_stage_ms,
+		"building_stage_max_ms": _perf_stage_max_ms,
+		"building_publish_ms": _perf_publish_ms,
+		"building_publish_max_ms": _perf_publish_max_ms,
+		"building_last_stage_ms": _last_stage_ms,
+		"building_last_publish_ms": _last_publish_ms,
+		"building_cache_hits": _perf_cache_hits,
+		"building_cache_misses": _perf_cache_misses,
+		"building_bytes_loaded": _perf_bytes_loaded,
+		"building_chunks_loaded": _perf_chunks_loaded,
+		"building_stale_stages": _perf_stale_stages,
+		"building_active_chunks": _active_chunks,
+		"building_active_vertices": _active_vertices,
+		"building_cache_chunks": _cache.size(),
 	}
-	_perf_build_ms = 0.0
-	_perf_build_max_ms = 0.0
-	_perf_tiles_built = 0
-	_perf_records_built = 0
-	_perf_dropped_requests = 0
+	_perf_stage_ms = 0.0
+	_perf_stage_max_ms = 0.0
+	_perf_publish_ms = 0.0
+	_perf_publish_max_ms = 0.0
+	_perf_cache_hits = 0
+	_perf_cache_misses = 0
+	_perf_bytes_loaded = 0
+	_perf_chunks_loaded = 0
+	_perf_stale_stages = 0
 	return result
