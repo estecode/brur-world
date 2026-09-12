@@ -78,3 +78,6 @@ run_godot_test() {
 printf 'PR_CHECK=CHECK_WORLD_SHOWCASE_HEADLESS pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_test res://tests/godot/test_world_streaming_foundation.gd
 run_godot_test res://tests/godot/test_world_showcase.gd
+
+printf 'PR_CHECK=RUN_FRAME_PACING_DIAGNOSTIC pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
+bash "$WORKTREE/tools/run_frame_pacing_diagnostic.sh"
