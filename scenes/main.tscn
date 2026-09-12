@@ -1,4 +1,4 @@
-[gd_scene load_steps=16 format=3]
+[gd_scene load_steps=18 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -15,6 +15,8 @@
 [ext_resource path="res://scripts/cloud_field_renderer.gd" type="Script" id="13_clouds"]
 [ext_resource path="res://scripts/map_controls_ui.gd" type="Script" id="14_map_controls"]
 [ext_resource path="res://scripts/day_night_environment_adapter.gd" type="Script" id="15_day_night"]
+[ext_resource path="res://scripts/building_stream_layer.gd" type="Script" id="16_buildings"]
+[ext_resource path="res://scripts/building_runtime_composition.gd" type="Script" id="17_building_composition"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -36,6 +38,22 @@ script = ExtResource("13_clouds")
 [node name="PoiLayer" type="Node3D" parent="."]
 script = ExtResource("4_poi")
 
+[node name="BuildingLayer" type="Node3D" parent="."]
+script = ExtResource("16_buildings")
+active_radius_tiles = 0
+builds_per_frame = 1
+build_budget_ms = 3.0
+max_pending_tiles = 4
+prefetch_tiles_ahead = 0
+base_height_m = 24.0
+streaming_enabled = false
+
+[node name="BuildingRuntimeComposition" type="Node" parent="."]
+script = ExtResource("17_building_composition")
+main_path = NodePath("..")
+camera_rig_path = NodePath("../CameraRig")
+building_layer_path = NodePath("../BuildingLayer")
+
 [node name="GpsRouteLayer" type="Node3D" parent="."]
 script = ExtResource("5_gps")
 main_path = NodePath("..")
@@ -53,6 +71,7 @@ route_layer_path = NodePath("../GpsRouteLayer")
 [node name="MapControlsUi" type="CanvasLayer" parent="."]
 script = ExtResource("14_map_controls")
 poi_layer_path = NodePath("../PoiLayer")
+building_layer_path = NodePath("../BuildingLayer")
 gps_route_layer_path = NodePath("../GpsRouteLayer")
 camera_rig_path = NodePath("../CameraRig")
 
