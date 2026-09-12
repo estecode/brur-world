@@ -14,8 +14,11 @@ const MAX_HEIGHT_M: float = 120.0
 
 static func stable_source_id(record: Dictionary) -> String:
 	for key in ["id", "osm_id", "source_id"]:
-		if record.has(key) and not String(record[key]).is_empty():
-			return String(record[key])
+		if not record.has(key):
+			continue
+		var source_id := str(record[key])
+		if not source_id.is_empty():
+			return source_id
 	return "xy:%.3f:%.3f" % [float(record.get("x", 0.0)), float(record.get("y", 0.0))]
 
 static func stable_seed(record: Dictionary) -> int:
@@ -118,7 +121,7 @@ static func _add_extruded_polygon(st: SurfaceTool, outer: PackedVector2Array, he
 	return count
 
 static func _numeric_tag(value: Variant) -> float:
-	var text := String(value).strip_edges().replace(",", ".")
+	var text := str(value).strip_edges().replace(",", ".")
 	if text.is_empty():
 		return 0.0
 	var number := ""
