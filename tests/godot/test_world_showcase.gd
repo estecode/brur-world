@@ -1,8 +1,9 @@
 extends SceneTree
 
-## Verifies #126 deterministic appearance, atmosphere, streaming, and camera-scale contracts.
-## Dependencies: production building, atmosphere, coordinates, and camera modules only.
+## Verifies world-showcase appearance, background compositing, atmosphere, streaming, and camera-scale contracts.
+## Dependencies: production map, building, atmosphere, coordinates, and camera modules only.
 
+const MainScript = preload("res://scripts/main.gd")
 const BuildingMeshBuilderScript = preload("res://scripts/building_mesh_builder.gd")
 const BuildingStreamLayerScript = preload("res://scripts/building_stream_layer.gd")
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
@@ -25,6 +26,7 @@ func _init() -> void:
 
 func _run() -> void:
 	_test_deterministic_building_appearance()
+	_test_background_compositing()
 	_test_atmosphere_profile()
 	_test_showcase_streaming_bounds()
 	await process_frame
@@ -61,6 +63,28 @@ func _test_deterministic_building_appearance() -> void:
 		min_luma = minf(min_luma, color.get_luminance())
 		max_luma = maxf(max_luma, color.get_luminance())
 	_assert(max_luma - min_luma > 0.04, "roof/wall/base shading remains visible inside one batch")
+
+func _test_background_compositing() -> void:
+	var main = MainScript.new()
+	var ocean: StandardMaterial3D = main._background_material(MainScript.MAP_WATER, true)
+	var land: StandardMaterial3D = main._background_material(MainScript.MAP_LAND)
+	var water: StandardMaterial3D = main._background_material(MainScript.MAP_WATER)
+	var farmland: StandardMaterial3D = main._background_material(MainScript.MAP_FARMLAND)
+	var forest: StandardMaterial3D = main._background_material(MainScript.MAP_FOREST)
+	var urban: StandardMaterial3D = main._background_material(MainScript.MAP_URBAN)
+	var layers: Array[StandardMaterial3D] = [ocean, land, water, farmland, forest, urban]
+	for material in layers:
+		_assert(material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA, "background layers use the ordered transparent pass")
+		_assert(material.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED, "background layers never compete by writing depth")
+		_assert(not material.no_depth_test, "background layers still respect opaque road/building depth")
+	_assert(ocean.render_priority < land.render_priority, "ocean renders before country land")
+	_assert(land.render_priority < water.render_priority, "inland water renders above land")
+	_assert(water.render_priority < farmland.render_priority, "farmland renders above broad water")
+	_assert(farmland.render_priority < forest.render_priority, "forest renders above farmland")
+	_assert(forest.render_priority < urban.render_priority, "urban renders last among background classes")
+	main._setup_road_material()
+	_assert(main.road_material.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED, "roads remain opaque")
+	_assert(main.road_material.depth_draw_mode != BaseMaterial3D.DEPTH_DRAW_DISABLED, "roads keep depth writes for foreground occlusion")
 
 func _test_atmosphere_profile() -> void:
 	var high: Dictionary = WorldAtmosphereScript.profile_for_altitude(30000.0)
