@@ -4,19 +4,19 @@
 Dependencies:
 - Reads OSM through pyosmium for production PBF input.
 - Uses the standard-library XML reader for tiny deterministic test fixtures.
-- Uses shared world projection helpers; does not create a runtime road graph.
+- Uses shared source identity and world projection helpers; does not create a runtime road graph.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from traffic_signals import SignalDraft, build_runtime_dataset, save_runtime_dataset
+from source_identity import compute_source_identity, reusable_output, write_manifest_entry
+from traffic_signals import SignalDraft, build_runtime_dataset, load_runtime_dataset, save_runtime_dataset
 from world_common import ensure_pbf, project
 
 PROGRESS_INTERVAL = 5_000_000
@@ -140,9 +140,38 @@ def _source(path: Path) -> tuple[list[SourceSignal], dict[int, list[int]]]:
     return signals, _pbf_memberships(path, {signal.osm_id for signal in signals})
 
 
+def _cached_stats(dataset: dict, destination: Path) -> dict:
+    stats = dict(dataset["stats"])
+    stats["output_bytes"] = destination.stat().st_size
+    stats["build_seconds"] = 0.0
+    stats["reused"] = True
+    return stats
+
+
 def build_traffic_signals(source: Path, output: Path) -> dict:
     started = time.perf_counter()
     output.mkdir(parents=True, exist_ok=True)
+    destination = output / "traffic_signals.json"
+    manifest_path = output / "manifest.json"
+    source_identity = compute_source_identity(source)
+
+    cached = reusable_output(
+        manifest_path,
+        "traffic_signals",
+        source_identity,
+        destination,
+        load_runtime_dataset,
+    )
+    if cached is not None:
+        stats = _cached_stats(cached, destination)
+        print(
+            "[traffic-signals] reuse "
+            f"source={stats['source_signal_count']:,} exported={stats['exported_signal_count']:,} "
+            f"bytes={stats['output_bytes']:,}",
+            flush=True,
+        )
+        return stats
+
     signals, memberships = _source(source)
 
     drafts: list[SignalDraft] = []
@@ -151,23 +180,25 @@ def build_traffic_signals(source: Path, output: Path) -> dict:
         drafts.append(SignalDraft(signal.osm_id, x, y, signal.tags, tuple(sorted(set(memberships.get(signal.osm_id, []))))))
 
     dataset = build_runtime_dataset(drafts)
-    destination = output / "traffic_signals.json"
     save_runtime_dataset(destination, dataset)
 
     stats = dict(dataset["stats"])
     elapsed = time.perf_counter() - started
     stats["output_bytes"] = destination.stat().st_size
     stats["build_seconds"] = round(elapsed, 3)
+    stats["reused"] = False
 
-    manifest_path = output / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
-    manifest["traffic_signals"] = {
-        "format": dataset["format"],
-        "file": destination.name,
-        "source_signal_count": stats["source_signal_count"],
-        "exported_signal_count": stats["exported_signal_count"],
-    }
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    write_manifest_entry(
+        manifest_path,
+        "traffic_signals",
+        {
+            "format": dataset["format"],
+            "file": destination.name,
+            "source": source_identity,
+            "source_signal_count": stats["source_signal_count"],
+            "exported_signal_count": stats["exported_signal_count"],
+        },
+    )
 
     print(
         "[traffic-signals] "
