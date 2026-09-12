@@ -169,19 +169,22 @@ func _view_radius_tiles(center_tile: Vector2i) -> int:
 	if _camera_rig == null or not _camera_rig.has_method("get_ground_view_corners"):
 		return minimum_radius
 	var corners: Variant = _camera_rig.call("get_ground_view_corners")
-	if not (corners is PackedVector3Array) and not (corners is Array):
+	var corners_type := typeof(corners)
+	if corners_type != TYPE_PACKED_VECTOR3_ARRAY and corners_type != TYPE_ARRAY:
 		return minimum_radius
 	var radius := minimum_radius
 	var has_corner := false
 	for corner_value in corners:
-		if not (corner_value is Vector3):
+		if typeof(corner_value) != TYPE_VECTOR3:
 			continue
 		var corner: Vector3 = corner_value
 		if not corner.is_finite():
 			continue
 		has_corner = true
 		var tile: Vector2i = _coordinates.world_to_tile(corner)
-		radius = maxi(radius, absi(tile.x - center_tile.x), absi(tile.y - center_tile.y))
+		var x_radius := absi(tile.x - center_tile.x)
+		var y_radius := absi(tile.y - center_tile.y)
+		radius = maxi(radius, maxi(x_radius, y_radius))
 	if has_corner:
 		radius += maxi(0, view_margin_tiles)
 	return mini(radius, maximum_radius)
