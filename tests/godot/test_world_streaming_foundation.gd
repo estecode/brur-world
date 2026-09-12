@@ -68,9 +68,16 @@ func _test_building_identity_and_mesh() -> void:
 	var record := _record(10.0, 10.0, "way/123")
 	_assert(BuildingMeshBuilderScript.stable_source_id(record) == "way/123", "source identity uses stable source ID")
 	_assert(BuildingMeshBuilderScript.stable_seed(record) == BuildingMeshBuilderScript.stable_seed(record.duplicate(true)), "procedural seed survives reload")
-	_assert(is_equal_approx(BuildingMeshBuilderScript.height_from_tags({"building:levels": "4"}), 12.0), "building levels derive stable height")
-	var mesh: ArrayMesh = BuildingMeshBuilderScript.build_tile_mesh([record], Vector2.ZERO)
-	_assert(mesh != null, "building footprint produces a mesh")
+	var numeric_id_record := record.duplicate(true)
+	numeric_id_record["id"] = 123456789
+	_assert(BuildingMeshBuilderScript.stable_source_id(numeric_id_record) == "123456789", "numeric source identity converts without String constructor")
+	_assert(BuildingMeshBuilderScript.stable_seed(numeric_id_record) == BuildingMeshBuilderScript.stable_seed(numeric_id_record.duplicate(true)), "numeric source ID keeps a deterministic seed")
+	_assert(not BuildingMeshBuilderScript.appearance_colors(numeric_id_record).is_empty(), "numeric source ID supports appearance generation")
+	_assert(is_equal_approx(BuildingMeshBuilderScript.height_from_tags({"building:levels": "4"}), 12.0), "string building levels derive stable height")
+	_assert(is_equal_approx(BuildingMeshBuilderScript.height_from_tags({"building:levels": 4}), 12.0), "numeric building levels derive stable height")
+	_assert(is_equal_approx(BuildingMeshBuilderScript.height_from_tags({"height": 17.5}), 17.5), "numeric explicit height derives stable height")
+	var mesh: ArrayMesh = BuildingMeshBuilderScript.build_tile_mesh([numeric_id_record], Vector2.ZERO)
+	_assert(mesh != null, "building footprint with numeric source ID produces a mesh")
 	if mesh == null:
 		return
 	_assert(mesh.get_surface_count() == 1, "one tile batch produces one mesh surface")
