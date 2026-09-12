@@ -233,7 +233,7 @@ func _poll_stage() -> void:
 	_perf_cache_hits += int(stage.get("cache_hits", 0))
 	_perf_cache_misses += int(stage.get("cache_misses", 0))
 	_perf_bytes_loaded += int(stage.get("bytes", 0))
-	if not bool(stage.get("ok", false)):
+	if stage.get("ok", false) != true:
 		push_error("Building viewport staging failed: %s" % String(stage.get("error", "unknown")))
 		_start_stage_if_needed()
 		return
@@ -285,7 +285,7 @@ func _cache_decoded_chunks(decoded: Dictionary) -> void:
 		_cache[key] = decoded[key_value]
 		_cache_touch(key)
 	while _cache_lru.size() > maxi(1, max_cache_chunks):
-		var evicted := _cache_lru.pop_front()
+		var evicted: String = String(_cache_lru.pop_front())
 		_cache.erase(evicted)
 
 func _cache_touch(key: String) -> void:
