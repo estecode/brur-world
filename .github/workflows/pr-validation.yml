@@ -29,6 +29,9 @@ jobs:
       - name: Guard production startup scene
         run: python -m unittest tests.test_project_entrypoint
 
+      - name: Run OSM source cache tests
+        run: python -m unittest tests.test_osm_source_cache
+
       - name: Run road LOD build policy tests
         run: python -m unittest tests.test_build_roads_lod
 
