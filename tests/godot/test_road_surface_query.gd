@@ -14,6 +14,7 @@ func _init() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(_root_dir + "/lod2"))
 	_test_classification_and_bin_boundary()
 	_test_dense_tile_candidate_reduction()
+	_test_long_diagonal_index_is_linear()
 	if _failed:
 		quit(1)
 		return
@@ -46,6 +47,18 @@ func _test_dense_tile_candidate_reduction() -> void:
 	var metrics: Dictionary = query.consume_perf_metrics()
 	_assert(int(metrics["queries"]) == 1, "performance metrics count one surface query")
 	_assert(int(metrics["segments_checked"]) < 50, "dense tile query checks only local spatial candidates")
+
+func _test_long_diagonal_index_is_linear() -> void:
+	_write_tile(Vector2i(2, 0), [
+		{"class": 0, "a": Vector2(100.0, 100.0), "b": Vector2(30000.0, 30000.0)},
+	])
+	var coordinates = WorldCoordinatesScript.new(Vector2.ZERO, 32000.0)
+	var query = RoadSurfaceQueryScript.new()
+	query.setup(_root_dir, coordinates)
+	var probe_absolute := Vector2(64100.0, 100.0)
+	query.surface_at(coordinates.absolute_to_world(probe_absolute))
+	var metrics: Dictionary = query.consume_perf_metrics()
+	_assert(int(metrics["index_entries"]) < 10000, "long diagonal indexing grows with segment length instead of its full AABB area")
 
 func _write_tile(tile: Vector2i, segments: Array[Dictionary]) -> void:
 	var path := "%s/lod2/%d_%d.brtile" % [_root_dir, tile.x, tile.y]
