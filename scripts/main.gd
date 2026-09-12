@@ -5,7 +5,7 @@ extends Node3D
 ## Dependencies:
 ## - world_coordinates.gd owns projected/world/tile coordinate conversion.
 ## - road_lod_policy.gd owns road widths, view-distance LOD, and build budgeting.
-## - CameraRig supplies visible world bounds and zoom distance.
+## - CameraRig supplies visible world bounds, zoom distance and explicit map/drive mode state.
 ## - city_light_renderer.gd consumes authoritative BRM2 urban geometry plus derived runtime POI density.
 ## - world_data manifest, BRT1 tiles, BRM2 background, and city-light density provide runtime map data.
 
@@ -16,6 +16,7 @@ const WORLD_DIR: String = "res://world_data"
 const ROAD_MAGIC: String = "BRT1"
 const MAP_MAGIC: String = "BRM2"
 const ROAD_MESH_CACHE_LIMIT: int = 512
+const DRIVE_LAYER_SPACING_M: float = 0.01
 
 const MAP_LAND: int = 0
 const MAP_FARMLAND: int = 1
@@ -106,6 +107,9 @@ func _load_manifest() -> bool:
 func get_world_coordinates():
 	return world_coordinates
 
+func get_road_surface_height() -> float:
+	return _road_height()
+
 func set_background_source(path: String) -> void:
 	if path.is_empty() or path == background_source_path:
 		return
@@ -153,6 +157,8 @@ func _choose_lod(distance: float) -> int:
 	return RoadLodPolicyScript.choose_lod(distance, current_lod)
 
 func _layer_spacing() -> float:
+	if camera_rig != null and camera_rig.has_method("is_driving_view") and bool(camera_rig.call("is_driving_view")):
+		return DRIVE_LAYER_SPACING_M
 	return clampf(camera_rig.get_distance() / 6000.0, 4.0, 240.0)
 
 func _background_height(kind: int) -> float:
