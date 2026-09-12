@@ -57,7 +57,7 @@ PY
 run_godot_test() {
   local script="$1"
   local log status
-  log="$(mktemp "${TMPDIR:-/tmp}/brur-world-showcase-test.XXXXXX.log")"
+  log="$(mktemp "${TMPDIR:-/tmp}/brur-world-test.XXXXXX.log")"
   set +e
   "$GODOT" --headless --path "$WORKTREE" --script "$script" 2>&1 | tee "$log"
   status=${PIPESTATUS[0]}
@@ -75,8 +75,31 @@ run_godot_test() {
   rm -f "$log"
 }
 
+run_godot_window_test() {
+  local script="$1"
+  local log status
+  log="$(mktemp "${TMPDIR:-/tmp}/brur-world-window-test.XXXXXX.log")"
+  set +e
+  "$GODOT" --path "$WORKTREE" --script "$script" 2>&1 | tee "$log"
+  status=${PIPESTATUS[0]}
+  set -e
+  if [[ $status -ne 0 ]]; then
+    printf 'PR_CHECK=FAIL Godot exited %d for %s\n' "$status" "$script" >&2
+    rm -f "$log"
+    return 1
+  fi
+  if grep -Eq 'SCRIPT ERROR:|Failed to load script|production FPS real-data test failed:' "$log"; then
+    printf 'PR_CHECK=FAIL Godot reported script/test errors for %s\n' "$script" >&2
+    rm -f "$log"
+    return 1
+  fi
+  rm -f "$log"
+}
+
 printf 'PR_CHECK=CHECK_WORLD_SHOWCASE_HEADLESS pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_test res://tests/godot/test_world_streaming_foundation.gd
 run_godot_test res://tests/godot/test_world_showcase.gd
 printf 'PR_CHECK=CHECK_ROAD_SURFACE_REAL_DATA pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_test res://tests/godot/test_road_surface_query_real_data.gd
+printf 'PR_CHECK=CHECK_PRODUCTION_FPS_REAL_DATA pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
+run_godot_window_test res://tests/godot/test_production_fps_real_data.gd
