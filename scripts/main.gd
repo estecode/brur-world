@@ -4,16 +4,17 @@ extends Node3D
 ##
 ## Dependencies:
 ## - world_coordinates.gd owns projected/world/tile coordinate conversion.
+## - road_lod_policy.gd owns road widths, view-distance LOD, and build budgeting.
 ## - CameraRig supplies visible world bounds and zoom distance.
 ## - city_light_renderer.gd consumes authoritative BRM2 urban geometry plus derived runtime POI density.
 ## - world_data manifest, BRT1 tiles, BRM2 background, and city-light density provide runtime map data.
 
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
+const RoadLodPolicyScript = preload("res://scripts/road_lod_policy.gd")
 const CityLightRendererScript = preload("res://scripts/city_light_renderer.gd")
 const WORLD_DIR: String = "res://world_data"
 const ROAD_MAGIC: String = "BRT1"
 const MAP_MAGIC: String = "BRM2"
-const ROAD_BUILDS_PER_FRAME: int = 1
 const ROAD_MESH_CACHE_LIMIT: int = 512
 
 const MAP_LAND: int = 0
@@ -40,6 +41,7 @@ var mesh_cache: Dictionary = {}
 var mesh_cache_order: Array[String] = []
 var background_instances: Dictionary = {}
 var city_lights: Node3D
+var road_material: StandardMaterial3D
 
 var current_lod: int = -1
 var last_min_tile: Vector2i = Vector2i(999999, 999999)
@@ -65,6 +67,7 @@ func _ready() -> void:
 		push_error("No world_data/manifest.json. Run ./build_sweden.sh first.")
 		return
 	_setup_lighting()
+	_setup_road_material()
 	_setup_city_lights()
 	_create_ground()
 	_load_background()
@@ -131,6 +134,13 @@ func _setup_lighting() -> void:
 	environment.ambient_light_energy = 1.05
 	world_environment.environment = environment
 
+func _setup_road_material() -> void:
+	road_material = StandardMaterial3D.new()
+	road_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	road_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	road_material.vertex_color_use_as_albedo = true
+	road_material.albedo_color = Color.WHITE
+
 func _setup_city_lights() -> void:
 	city_lights = CityLightRendererScript.new()
 	city_lights.name = "CityLights"
@@ -139,25 +149,7 @@ func _setup_city_lights() -> void:
 	add_child(city_lights)
 
 func _choose_lod(distance: float) -> int:
-	if current_lod < 0:
-		if distance > 180000.0:
-			return 0
-		if distance > 45000.0:
-			return 1
-		return 2
-	if current_lod == 0:
-		if distance < 155000.0:
-			return 1
-		return 0
-	if current_lod == 1:
-		if distance > 205000.0:
-			return 0
-		if distance < 38000.0:
-			return 2
-		return 1
-	if distance > 56000.0:
-		return 1
-	return 2
+	return RoadLodPolicyScript.choose_lod(distance, current_lod)
 
 func _layer_spacing() -> float:
 	return clampf(camera_rig.get_distance() / 6000.0, 4.0, 240.0)
@@ -253,8 +245,12 @@ func _refresh_tiles(force: bool) -> void:
 	perf_road_refresh_max_ms = maxf(perf_road_refresh_max_ms, elapsed_ms)
 
 func _process_pending_tiles() -> void:
+	var frame_started_usec: int = Time.get_ticks_usec()
 	var built_this_frame: int = 0
-	while built_this_frame < ROAD_BUILDS_PER_FRAME and not pending_tiles.is_empty():
+	while not pending_tiles.is_empty():
+		var elapsed_frame_ms: float = float(Time.get_ticks_usec() - frame_started_usec) / 1000.0
+		if not RoadLodPolicyScript.can_build_more(elapsed_frame_ms, built_this_frame):
+			break
 		var item: Dictionary = pending_tiles.pop_front()
 		var key: String = String(item["key"])
 		if loaded.has(key):
@@ -305,12 +301,7 @@ func _load_tile(path: String, tx: int, ty: int, lod: int) -> MeshInstance3D:
 	var instance: MeshInstance3D = MeshInstance3D.new()
 	instance.mesh = mesh
 	instance.position = world_coordinates.tile_origin_world(Vector2i(tx, ty), _road_height())
-	var mat: StandardMaterial3D = StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.vertex_color_use_as_albedo = true
-	mat.albedo_color = Color.WHITE
-	instance.material_override = mat
+	instance.material_override = road_material
 	return instance
 
 func _cache_mesh(path: String, mesh: ArrayMesh) -> void:
@@ -321,7 +312,7 @@ func _cache_mesh(path: String, mesh: ArrayMesh) -> void:
 		if mesh_cache.has(oldest):
 			mesh_cache.erase(oldest)
 
-func _build_tile_mesh(path: String, lod: int) -> ArrayMesh:
+func _build_tile_mesh(path: String, _lod: int) -> ArrayMesh:
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null or file.get_length() < 8:
 		return null
@@ -332,7 +323,6 @@ func _build_tile_mesh(path: String, lod: int) -> ArrayMesh:
 	var count: int = file.get_32()
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var base_widths: Array[float] = [1400.0, 300.0, 20.0]
 	for _i in range(count):
 		var road_class: int = file.get_8()
 		var x1: float = file.get_float()
@@ -344,7 +334,7 @@ func _build_tile_mesh(path: String, lod: int) -> ArrayMesh:
 		var d: Vector3 = b - a
 		if d.length_squared() < 0.01:
 			continue
-		var width: float = base_widths[lod] * (1.0 + float(maxi(0, 4 - road_class)) * 0.10)
+		var width: float = RoadLodPolicyScript.road_width_m(road_class)
 		var side: Vector3 = Vector3(-d.z, 0.0, d.x).normalized() * width * 0.5
 		st.set_color(_road_color(road_class))
 		st.add_vertex(a - side)
