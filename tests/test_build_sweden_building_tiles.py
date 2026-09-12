@@ -11,9 +11,10 @@ ROOT = Path(__file__).resolve().parents[1]
 class BuildSwedenBuildingTileStageTests(unittest.TestCase):
     def test_full_build_derives_building_tiles_after_buildings(self) -> None:
         text = (ROOT / "tools" / "build_sweden.py").read_text(encoding="utf-8")
-        buildings = text.index("build_buildings(args.pbf, args.output)")
-        tiles = text.index("build_building_tiles(args.output)")
-        lights = text.index("build_city_light_density(args.output)")
+        main = text[text.index("def main()") :]
+        buildings = main.index("build_buildings(")
+        tiles = main.index("build_building_tiles(args.output)")
+        lights = main.index("build_city_light_density(args.output)")
         self.assertLess(buildings, tiles)
         self.assertLess(tiles, lights)
 
