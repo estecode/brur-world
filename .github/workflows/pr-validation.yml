@@ -81,6 +81,11 @@ jobs:
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_streaming_foundation.gd
 
+      - name: Validate frame pacing diagnostic harness
+        run: |
+          bash -n tools/run_frame_pacing_diagnostic.sh
+          BRUR_PERF_MODE=light timeout 20s "$GODOT_BIN" --headless --path . --scene res://harness/perf_diagnostic/frame_pacing.tscn
+
       - name: Run continuous world showcase tests
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_showcase.gd
