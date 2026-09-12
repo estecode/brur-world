@@ -134,44 +134,56 @@ ensure_native() {
   done
 }
 
+routing_dataset_inputs() {
+  printf '%s\n' \
+    "$ROOT/tools/build_routing.py" \
+    "$ROOT/tools/build_routing_dataset.py" \
+    "$ROOT/tools/compressed_routing.py" \
+    "$ROOT/tools/gps_snap_index.py" \
+    "$ROOT/tools/route_geometry.py" \
+    "$ROOT/tools/routing_graph.py" \
+    "$ROOT/tools/routing_graph_view.py" \
+    "$ROOT/tools/world_common.py"
+}
+
 ensure_gps_data() {
   mkdir -p "$WORLD_DATA"
-  local graph="$WORLD_DATA/routing.brg"
-  local snap="$WORLD_DATA/routing_snap.brs"
-  local build_inputs=("$ROOT/tools/build_routing.py" "$ROOT/tools/routing_graph.py" "$ROOT/tools/build_snap_index.py" "$ROOT/tools/world_common.py")
+  local required=(
+    "$WORLD_DATA/routing.brg"
+    "$WORLD_DATA/routing_snap.brs"
+    "$WORLD_DATA/routing_geometry.brh"
+    "$WORLD_DATA/routing_stats.json"
+  )
+  local build_inputs=()
+  while IFS= read -r input; do
+    build_inputs+=("$input")
+  done < <(routing_dataset_inputs)
   local fingerprint
   fingerprint="$(fingerprint_files "${build_inputs[@]}")"
   local stamp="$WORLD_DATA/.playtest_gps_data_fingerprint"
-  local rebuild_graph=0
-
-  [[ -f "$graph" ]] || rebuild_graph=1
-  pbf_newer_than_any "$graph" && rebuild_graph=1
-  if [[ "$rebuild_graph" -eq 0 ]] && stamp_mismatch "$stamp" "$fingerprint"; then
-    rebuild_graph=1
+  local rebuild=0
+  local artifact
+  for artifact in "${required[@]}"; do
+    [[ -f "$artifact" ]] || rebuild=1
+  done
+  pbf_newer_than_any "${required[@]}" && rebuild=1
+  if [[ "$rebuild" -eq 0 ]] && stamp_mismatch "$stamp" "$fingerprint"; then
+    rebuild=1
   fi
 
-  if [[ "$rebuild_graph" -eq 1 ]]; then
+  if [[ "$rebuild" -eq 1 ]]; then
     require_pbf
     local python
     python="$(ensure_python_dependencies)"
-    printf 'PLAYTEST=PREPARE routing rebuild\n'
-    "$python" "$ROOT/tools/build_routing.py" "$PBF" --output "$WORLD_DATA"
+    printf 'PLAYTEST=PREPARE routing-dataset rebuild\n'
+    "$python" "$ROOT/tools/build_routing_dataset.py" "$PBF" --output "$WORLD_DATA"
   else
-    printf 'PLAYTEST=READY routing\n'
+    printf 'PLAYTEST=READY routing-dataset\n'
   fi
 
-  if [[ ! -f "$snap" || "$graph" -nt "$snap" || "$rebuild_graph" -eq 1 ]]; then
-    local python
-    python="$(ensure_python_dependencies)"
-    printf 'PLAYTEST=PREPARE routing-snap rebuild\n'
-    python="$(ensure_python_dependencies)"
-    "$python" "$ROOT/tools/build_snap_index.py" "$graph" --output "$snap"
-  else
-    printf 'PLAYTEST=READY routing-snap\n'
-  fi
-
-  [[ -f "$graph" ]] || fail "missing $graph after preparation"
-  [[ -f "$snap" ]] || fail "missing $snap after preparation"
+  for artifact in "${required[@]}"; do
+    [[ -f "$artifact" ]] || fail "missing $artifact after preparation"
+  done
   printf '%s\n' "$fingerprint" > "$stamp"
 }
 
@@ -181,18 +193,21 @@ ensure_game_data() {
     "$WORLD_DATA/manifest.json"
     "$WORLD_DATA/routing.brg"
     "$WORLD_DATA/routing_snap.brs"
+    "$WORLD_DATA/routing_geometry.brh"
+    "$WORLD_DATA/routing_stats.json"
     "$WORLD_DATA/search_index.bsi"
   )
   local build_inputs=(
     "$ROOT/tools/build_sweden.py"
     "$ROOT/tools/build_roads.py"
-    "$ROOT/tools/build_routing.py"
     "$ROOT/tools/build_background.py"
     "$ROOT/tools/build_features.py"
     "$ROOT/tools/build_search_index.py"
     "$ROOT/tools/build_search_binary.py"
-    "$ROOT/tools/world_common.py"
   )
+  while IFS= read -r input; do
+    build_inputs+=("$input")
+  done < <(routing_dataset_inputs)
   local fingerprint
   fingerprint="$(fingerprint_files "${build_inputs[@]}")"
   local stamp="$WORLD_DATA/.playtest_world_fingerprint"
