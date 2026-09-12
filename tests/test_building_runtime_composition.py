@@ -21,7 +21,9 @@ class BuildingRuntimeCompositionTests(unittest.TestCase):
 
         self.assertIn('tile_data_dir: String = "res://world_data/building_mesh_lod"', composition)
         self.assertIn("building_tile_size_m: float = 2000.0", composition)
-        self.assertIn("LodLevel(0, 16_000.0, 3_500.0, True)", builder)
+        self.assertIn("LodLevel(0, 16_000.0, 3_500.0, False)", builder)
+        self.assertIn("LodLevel(1, 8_000.0, 1_200.0, False)", builder)
+        self.assertIn("LodLevel(2, 4_000.0, 300.0, False)", builder)
         self.assertIn("LodLevel(3, 2_000.0, 0.0, False)", builder)
         self.assertIn("streaming_enabled = false", scene)
         self.assertIn("max_cache_chunks = 96", scene)
