@@ -89,6 +89,10 @@ class BuildingMeshPyramidTests(unittest.TestCase):
                 [item["chunk_size_m"] for item in report["levels"]],
                 [level.chunk_size_m for level in LOD_LEVELS],
             )
+            self.assertTrue(
+                all(not level.simplified for level in LOD_LEVELS),
+                "LOD changes building selection only; footprint silhouettes stay authoritative at every level",
+            )
             for level in LOD_LEVELS:
                 files = list((world / "building_mesh_lod" / f"lod{level.lod}").glob("*.bmc"))
                 self.assertTrue(files, f"lod{level.lod} emits at least one render chunk")
@@ -104,6 +108,7 @@ class BuildingMeshPyramidTests(unittest.TestCase):
             self.assertEqual(features["building_mesh_lod_dir"], "building_mesh_lod")
             self.assertEqual(features["building_mesh_lod_format_version"], FORMAT_VERSION)
             self.assertEqual(len(features["building_mesh_lod_levels"]), 4)
+            self.assertTrue(all(not item["simplified"] for item in features["building_mesh_lod_levels"]))
             self.assertTrue(building_mesh_pyramid_cache_valid(world))
 
             first_hashes = self._payload_hashes(world)
