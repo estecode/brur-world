@@ -67,7 +67,7 @@ run_godot_test() {
     rm -f "$log"
     return 1
   fi
-  if grep -Eq 'SCRIPT ERROR:|Failed to load script|world (streaming foundation|showcase) test failed:' "$log"; then
+  if grep -Eq 'SCRIPT ERROR:|Failed to load script|world (streaming foundation|showcase) test failed:|road-surface real-data test failed:' "$log"; then
     printf 'PR_CHECK=FAIL Godot reported script/test errors for %s\n' "$script" >&2
     rm -f "$log"
     return 1
@@ -78,3 +78,5 @@ run_godot_test() {
 printf 'PR_CHECK=CHECK_WORLD_SHOWCASE_HEADLESS pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_test res://tests/godot/test_world_streaming_foundation.gd
 run_godot_test res://tests/godot/test_world_showcase.gd
+printf 'PR_CHECK=CHECK_ROAD_SURFACE_REAL_DATA pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
+run_godot_test res://tests/godot/test_road_surface_query_real_data.gd
