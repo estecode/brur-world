@@ -10,6 +10,7 @@ Dependencies:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -20,12 +21,20 @@ from routing_graph_view import RoutingGraphView
 
 
 DATASET_FORMAT = "BRG1+BRS2+BRH1"
-DATASET_FILES = (
+DATASET_PAYLOAD_FILES = (
     "routing.brg",
     "routing_snap.brs",
     "routing_geometry.brh",
-    "routing_stats.json",
 )
+DATASET_FILES = (*DATASET_PAYLOAD_FILES, "routing_stats.json")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def build_routing_dataset(source: Path, output: Path) -> dict:
@@ -46,8 +55,16 @@ def build_routing_dataset(source: Path, output: Path) -> dict:
         with RoutingGraphView(graph_path) as graph:
             snap_report = build_snap_index(graph, snap_path)
 
+        for name in DATASET_PAYLOAD_FILES:
+            if not (staging / name).is_file():
+                raise RuntimeError(f"routing dataset build did not produce {name}")
+
         report = dict(report)
         report["routing_dataset_format"] = DATASET_FORMAT
+        report["routing_dataset_sha256"] = {
+            name: _sha256(staging / name)
+            for name in DATASET_PAYLOAD_FILES
+        }
         report["snap_output_bytes"] = snap_report["output_bytes"]
         report["snap_cell_count"] = snap_report["cell_count"]
         report["snap_reference_count"] = snap_report["reference_count"]
