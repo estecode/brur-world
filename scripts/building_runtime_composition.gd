@@ -31,4 +31,3 @@ func _compose() -> void:
 	var world_coordinates = main.call("get_world_coordinates")
 	var building_coordinates = WorldCoordinatesScript.new(world_coordinates.origin, building_tile_size_m)
 	building_layer.call("setup", building_coordinates, camera_rig, tile_data_dir)
-	building_layer.call("set_streaming_enabled", false)
