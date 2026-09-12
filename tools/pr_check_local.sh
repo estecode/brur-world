@@ -80,8 +80,38 @@ run_godot_window_test() {
   local log status
   log="$(mktemp "${TMPDIR:-/tmp}/brur-world-window-test.XXXXXX.log")"
   set +e
-  "$GODOT" --path "$WORKTREE" --script "$script" 2>&1 | tee "$log"
-  status=${PIPESTATUS[0]}
+  "$PYTHON" - "$log" "$GODOT" "$WORKTREE" "$script" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+log_path, godot, worktree, script = sys.argv[1:]
+cmd = [godot, "--path", worktree, "--script", script]
+try:
+    completed = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=45,
+        start_new_session=True,
+    )
+    output = completed.stdout or ""
+    status = completed.returncode
+except subprocess.TimeoutExpired as error:
+    output = error.stdout or ""
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    print(output, end="")
+    print(f"PR_CHECK=FAIL Godot window test timed out after 45s for {script}", file=sys.stderr)
+    raise SystemExit(124)
+with open(log_path, "w", encoding="utf-8") as handle:
+    handle.write(output)
+print(output, end="")
+raise SystemExit(status)
+PY
+  status=$?
   set -e
   if [[ $status -ne 0 ]]; then
     printf 'PR_CHECK=FAIL Godot exited %d for %s\n' "$status" "$script" >&2
