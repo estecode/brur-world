@@ -62,6 +62,20 @@ func _run() -> void:
 	_assert(reroute_count[0] == 1, "manual deviation requests a reroute without taking control")
 	_assert(int(player.call("control_owner")) == PLAYER_OWNER, "reroute request leaves manual control active")
 
+	var recalculated_route := PackedVector3Array([
+		Vector3(100.0, 0.0, 200.0),
+		Vector3(100.0, 0.0, 100.0),
+		Vector3(100.0, 0.0, 0.0),
+	])
+	route_follower.call("set_route", recalculated_route, PackedFloat32Array([13.9, 13.9, 13.9]))
+	route_follower.call("_physics_process", 1.0 / 60.0)
+	_assert(reroute_count[0] == 1, "route replacement does not immediately re-request reroute while still deviated")
+	player.call("set_world_position", Vector3(100.0, 0.0, 150.0))
+	route_follower.call("_physics_process", 1.0 / 60.0)
+	player.call("set_world_position", Vector3(180.0, 0.0, 150.0))
+	route_follower.call("_physics_process", 1.0 / 60.0)
+	_assert(reroute_count[0] == 2, "returning to the route corridor rearms one later deviation reroute")
+
 	var harness_scene := load("res://harness/driving/driving_harness.tscn") as PackedScene
 	_assert(harness_scene != null, "driving harness scene loads")
 	var harness: Node = harness_scene.instantiate()
