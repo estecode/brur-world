@@ -5,6 +5,7 @@ Dependencies:
 - Reads authoritative world_data/buildings.jsonl from the existing offline world pipeline.
 - Mirrors the explicit production building LOD thresholds/chunk sizes.
 - Preserves authoritative building footprint silhouettes at every LOD; LOD changes selection only.
+- Builds each source building geometry once, then reuses that geometry across qualifying LODs.
 - Writes only derived building_mesh_lod binary render chunks and manifest metadata.
 - Uses no Sweden PBF access and introduces no alternate building truth.
 """
@@ -24,11 +25,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Iterable
 
-FORMAT_VERSION = 1
-MAGIC = b"BMC1"
+FORMAT_VERSION = 2
+MAGIC = b"BMC2"
 HEADER_STRUCT = struct.Struct("<4sII")
+RECORD_STRUCT = struct.Struct("<ffI")
+SPOOL_KEY_STRUCT = struct.Struct("<ii")
 VERTEX_STRUCT = struct.Struct("<ffffffBBBB")
-DEFAULT_MAX_OPEN = 48
+DEFAULT_MAX_OPEN = 32
+SPOOL_SHARDS = 256
 DEFAULT_HEIGHT_M = 9.0
 LEVEL_HEIGHT_M = 3.0
 MIN_HEIGHT_M = 2.5
@@ -213,18 +217,6 @@ def triangulate_ring(points: list[tuple[float, float]]) -> list[tuple[int, int, 
     return triangles
 
 
-def _simplified_ring(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    if len(points) < 3:
-        return []
-    min_x = min(point[0] for point in points)
-    max_x = max(point[0] for point in points)
-    min_y = min(point[1] for point in points)
-    max_y = max(point[1] for point in points)
-    if max_x - min_x <= 0.01 or max_y - min_y <= 0.01:
-        return []
-    return [(min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y)]
-
-
 def _normalize_horizontal(x: float, z: float) -> tuple[float, float]:
     length = math.hypot(x, z)
     if length <= 1e-9:
@@ -247,9 +239,10 @@ def _vertex_bytes(
 def polygon_vertex_blob(
     points_absolute: list[tuple[float, float]],
     height_m: float,
-    chunk_origin: tuple[float, float],
+    mesh_origin: tuple[float, float],
     colors: tuple[tuple[int, int, int, int], ...],
 ) -> tuple[bytes, int]:
+    """Build one exact-footprint mesh blob relative to a reusable building origin."""
     if len(points_absolute) < 3:
         return b"", 0
     points = list(points_absolute)
@@ -257,7 +250,7 @@ def polygon_vertex_blob(
     if not triangles:
         return b"", 0
     wall, roof, base = colors
-    origin_x, origin_y = chunk_origin
+    origin_x, origin_y = mesh_origin
     blob = bytearray()
 
     def local(point: tuple[float, float], y: float) -> tuple[float, float, float]:
@@ -288,58 +281,115 @@ def polygon_vertex_blob(
 
 
 class ChunkWriter:
+    """Route records through bounded shard spools, then write every final chunk once."""
+
     def __init__(self, directory: Path, max_open: int = DEFAULT_MAX_OPEN) -> None:
         self.directory = directory
         stamp = f"{os.getpid()}-{time.time_ns()}"
         self.write_directory = directory.parent / f".{directory.name}.build-{stamp}"
         self.write_directory.mkdir(parents=True, exist_ok=False)
+        self.spool_directory = self.write_directory / ".spool"
+        self.spool_directory.mkdir()
         self.max_open = max_open
-        self.files: OrderedDict[tuple[int, int, int], BinaryIO] = OrderedDict()
+        self.files: OrderedDict[tuple[int, int], BinaryIO] = OrderedDict()
         self.vertex_counts: dict[tuple[int, int, int], int] = {}
         self.building_counts = {level.lod: 0 for level in LOD_LEVELS}
         self.bytes_written = {level.lod: 0 for level in LOD_LEVELS}
 
-    def _path(self, key: tuple[int, int, int]) -> Path:
+    @staticmethod
+    def _shard(chunk: tuple[int, int]) -> int:
+        x, y = chunk
+        return ((x * 73_856_093) ^ (y * 19_349_663)) % SPOOL_SHARDS
+
+    def _spool_path(self, lod: int, shard: int) -> Path:
+        return self.spool_directory / f"lod{lod}-{shard:03d}.spool"
+
+    def _output_path(self, key: tuple[int, int, int]) -> Path:
         lod, x, y = key
         directory = self.write_directory / f"lod{lod}"
         directory.mkdir(parents=True, exist_ok=True)
         return directory / f"{x}_{y}.bmc"
 
-    def write(self, level: LodLevel, chunk: tuple[int, int], blob: bytes, vertex_count: int) -> None:
+    def _spool_handle(self, lod: int, shard: int) -> BinaryIO:
+        handle_key = (lod, shard)
+        handle = self.files.pop(handle_key, None)
+        if handle is None:
+            handle = self._spool_path(lod, shard).open("ab", buffering=1024 * 1024)
+        self.files[handle_key] = handle
+        if len(self.files) > self.max_open:
+            _, oldest = self.files.popitem(last=False)
+            oldest.close()
+        return handle
+
+    def write(
+        self,
+        level: LodLevel,
+        chunk: tuple[int, int],
+        blob: bytes,
+        vertex_count: int,
+        record_offset: tuple[float, float],
+    ) -> None:
         if vertex_count <= 0 or not blob:
             return
         key = (level.lod, chunk[0], chunk[1])
-        handle = self.files.pop(key, None)
-        if handle is None:
-            path = self._path(key)
-            new_file = not path.exists()
-            handle = path.open("ab")
-            if new_file:
-                handle.write(HEADER_STRUCT.pack(MAGIC, FORMAT_VERSION, 0))
-        self.files[key] = handle
+        shard = self._shard(chunk)
+        handle = self._spool_handle(level.lod, shard)
+        handle.write(SPOOL_KEY_STRUCT.pack(chunk[0], chunk[1]))
+        handle.write(RECORD_STRUCT.pack(record_offset[0], record_offset[1], vertex_count))
         handle.write(blob)
         self.vertex_counts[key] = self.vertex_counts.get(key, 0) + vertex_count
         self.building_counts[level.lod] += 1
         self.bytes_written[level.lod] += len(blob)
-        if len(self.files) > self.max_open:
-            _, oldest = self.files.popitem(last=False)
-            oldest.close()
 
     def close(self) -> None:
         for handle in self.files.values():
             handle.close()
         self.files.clear()
 
-    def finalize_headers(self) -> None:
+    def _materialize_shard(self, level: LodLevel, spool_path: Path) -> None:
+        chunk_payloads: dict[tuple[int, int], bytearray] = {}
+        chunk_vertices: dict[tuple[int, int], int] = {}
+        with spool_path.open("rb", buffering=1024 * 1024) as source:
+            while True:
+                key_bytes = source.read(SPOOL_KEY_STRUCT.size)
+                if not key_bytes:
+                    break
+                if len(key_bytes) != SPOOL_KEY_STRUCT.size:
+                    raise RuntimeError(f"truncated building mesh spool key: {spool_path}")
+                chunk = SPOOL_KEY_STRUCT.unpack(key_bytes)
+                record_header = source.read(RECORD_STRUCT.size)
+                if len(record_header) != RECORD_STRUCT.size:
+                    raise RuntimeError(f"truncated building mesh spool record: {spool_path}")
+                _offset_x, _offset_z, vertex_count = RECORD_STRUCT.unpack(record_header)
+                blob_size = vertex_count * VERTEX_STRUCT.size
+                blob = source.read(blob_size)
+                if len(blob) != blob_size:
+                    raise RuntimeError(f"truncated building mesh spool payload: {spool_path}")
+                payload = chunk_payloads.setdefault(chunk, bytearray())
+                payload += record_header
+                payload += blob
+                chunk_vertices[chunk] = chunk_vertices.get(chunk, 0) + vertex_count
+
+        for chunk in sorted(chunk_payloads):
+            key = (level.lod, chunk[0], chunk[1])
+            path = self._output_path(key)
+            with path.open("wb", buffering=1024 * 1024) as output:
+                output.write(HEADER_STRUCT.pack(MAGIC, FORMAT_VERSION, chunk_vertices[chunk]))
+                output.write(chunk_payloads[chunk])
+        spool_path.unlink()
+
+    def finalize_chunks(self) -> None:
         self.close()
-        for key, count in self.vertex_counts.items():
-            path = self._path(key)
-            with path.open("r+b") as handle:
-                handle.seek(8)
-                handle.write(struct.pack("<I", count))
+        for level in LOD_LEVELS:
+            for shard in range(SPOOL_SHARDS):
+                spool_path = self._spool_path(level.lod, shard)
+                if spool_path.is_file():
+                    self._materialize_shard(level, spool_path)
+        if self.spool_directory.exists():
+            self.spool_directory.rmdir()
 
     def publish(self) -> None:
-        self.finalize_headers()
+        self.finalize_chunks()
         stale: Path | None = None
         if self.directory.exists():
             stale = self.directory.parent / f".{self.directory.name}.old-{os.getpid()}-{time.time_ns()}"
@@ -426,15 +476,6 @@ def _outer_area_m2(rings: Iterable[list[tuple[float, float]]]) -> float:
     return sum(abs(_signed_area(ring)) for ring in rings)
 
 
-def _simplify_rings(rings: Iterable[list[tuple[float, float]]]) -> list[list[tuple[float, float]]]:
-    result: list[list[tuple[float, float]]] = []
-    for ring in rings:
-        simplified = _simplified_ring(ring)
-        if len(simplified) >= 3:
-            result.append(simplified)
-    return result
-
-
 def _payload_bytes_written(writer: ChunkWriter) -> int:
     return sum(writer.bytes_written.values())
 
@@ -448,6 +489,20 @@ def _print_progress(source_records: int, started: float, writer: ChunkWriter) ->
         f"{elapsed:.1f}s | {payload_mib:,.1f} MiB",
         flush=True,
     )
+
+
+def _build_record_geometry(record: dict, rings: list[list[tuple[float, float]]]) -> tuple[bytes, int]:
+    """Generate exact building geometry once around the record anchor for all LODs."""
+    anchor = (float(record["x"]), float(record["y"]))
+    height = height_from_tags(record.get("tags", {}))
+    colors = appearance_rgba(record)
+    record_blob = bytearray()
+    vertex_count = 0
+    for ring in rings:
+        blob, count = polygon_vertex_blob(ring, height, anchor, colors)
+        record_blob += blob
+        vertex_count += count
+    return bytes(record_blob), vertex_count
 
 
 def build_building_mesh_pyramid(world_dir: Path) -> dict:
@@ -464,6 +519,7 @@ def build_building_mesh_pyramid(world_dir: Path) -> dict:
     writer = ChunkWriter(output_dir)
     started = time.monotonic()
     source_records = 0
+    geometry_builds = 0
     success = False
     interrupted = False
     try:
@@ -480,26 +536,23 @@ def build_building_mesh_pyramid(world_dir: Path) -> dict:
                 source_records += 1
                 full_rings = _clean_outer_rings(record)
                 area = _outer_area_m2(full_rings)
-                simplified_rings: list[list[tuple[float, float]]] | None = None
-                height = height_from_tags(record.get("tags", {}))
-                colors = appearance_rgba(record)
-                for level in LOD_LEVELS:
-                    if area < level.min_area_m2:
-                        continue
-                    rings = full_rings
-                    if level.simplified:
-                        if simplified_rings is None:
-                            simplified_rings = _simplify_rings(full_rings)
-                        rings = simplified_rings
-                    chunk = _chunk_key(record, level)
-                    origin = _chunk_origin(chunk, level)
-                    record_blob = bytearray()
-                    vertex_count = 0
-                    for ring in rings:
-                        blob, count = polygon_vertex_blob(ring, height, origin, colors)
-                        record_blob += blob
-                        vertex_count += count
-                    writer.write(level, chunk, bytes(record_blob), vertex_count)
+                qualifying_levels = [level for level in LOD_LEVELS if area >= level.min_area_m2]
+                if qualifying_levels and full_rings:
+                    blob, vertex_count = _build_record_geometry(record, full_rings)
+                    if vertex_count > 0:
+                        geometry_builds += 1
+                        anchor_x = float(record["x"])
+                        anchor_y = float(record["y"])
+                        for level in qualifying_levels:
+                            chunk = _chunk_key(record, level)
+                            origin_x, origin_y = _chunk_origin(chunk, level)
+                            writer.write(
+                                level,
+                                chunk,
+                                blob,
+                                vertex_count,
+                                (anchor_x - origin_x, -(anchor_y - origin_y)),
+                            )
                 if source_records % PROGRESS_EVERY_RECORDS == 0:
                     _print_progress(source_records, started, writer)
         _print_progress(source_records, started, writer)
@@ -520,8 +573,7 @@ def build_building_mesh_pyramid(world_dir: Path) -> dict:
 
     level_reports = []
     for level in LOD_LEVELS:
-        level_dir = output_dir / f"lod{level.lod}"
-        chunks = len(list(level_dir.glob("*.bmc"))) if level_dir.is_dir() else 0
+        chunks = sum(1 for lod, _x, _y in writer.vertex_counts if lod == level.lod)
         vertices = sum(count for (lod, _, _), count in writer.vertex_counts.items() if lod == level.lod)
         level_reports.append(
             {
@@ -543,6 +595,7 @@ def build_building_mesh_pyramid(world_dir: Path) -> dict:
     features["building_mesh_lod_policy_sha256"] = _policy_fingerprint()
     features["building_mesh_lod_source_size"] = source_stat.st_size
     features["building_mesh_lod_source_mtime_ns"] = source_stat.st_mtime_ns
+    features["building_mesh_lod_geometry_builds"] = geometry_builds
     features["building_mesh_lod_levels"] = level_reports
     manifest["features"] = features
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -550,6 +603,7 @@ def build_building_mesh_pyramid(world_dir: Path) -> dict:
     report = {
         "source": "buildings.jsonl",
         "source_records": source_records,
+        "geometry_builds": geometry_builds,
         "format_version": FORMAT_VERSION,
         "levels": level_reports,
         "elapsed_s": time.monotonic() - started,
@@ -560,7 +614,7 @@ def build_building_mesh_pyramid(world_dir: Path) -> dict:
             f"lod{item['lod']}={item['chunks']:,}chunks/{item['vertices']:,}v"
             for item in level_reports
         )
-        + f" elapsed={report['elapsed_s']:.1f}s",
+        + f" geometry_builds={geometry_builds:,} elapsed={report['elapsed_s']:.1f}s",
         flush=True,
     )
     return report
