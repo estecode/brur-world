@@ -53,7 +53,10 @@ WORLD_SHOWCASE_OWNERS = frozenset(
 BUILDING_TILE_OWNERS = frozenset(
     {
         "tools/build_building_tiles.py",
+        "tools/build_building_mesh_pyramid.py",
         "tools/build_sweden.py",
+        "scripts/building_lod_policy.gd",
+        "scripts/building_mesh_chunk_codec.gd",
         "scripts/building_stream_layer.gd",
         "scripts/building_runtime_composition.gd",
         "scenes/main.tscn",
@@ -101,7 +104,7 @@ def world_showcase_real_data_required(changed_paths: Iterable[str]) -> bool:
 
 
 def building_tiles_required(changed_paths: Iterable[str]) -> bool:
-    """Return whether production building-tile real-data preparation is relevant."""
+    """Return whether production building derived-data preparation is relevant."""
     return any(path in BUILDING_TILE_OWNERS for path in _paths(changed_paths))
 
 
