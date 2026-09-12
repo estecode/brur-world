@@ -4,6 +4,7 @@
 Dependencies:
 - Reads authoritative world_data/buildings.jsonl from the existing offline world pipeline.
 - Mirrors the explicit production building LOD thresholds/chunk sizes.
+- Preserves authoritative building footprint silhouettes at every LOD; LOD changes selection only.
 - Writes only derived building_mesh_lod binary render chunks and manifest metadata.
 - Uses no Sweden PBF access and introduces no alternate building truth.
 """
@@ -44,9 +45,9 @@ class LodLevel:
 
 
 LOD_LEVELS = (
-    LodLevel(0, 16_000.0, 3_500.0, True),
-    LodLevel(1, 8_000.0, 1_200.0, True),
-    LodLevel(2, 4_000.0, 300.0, True),
+    LodLevel(0, 16_000.0, 3_500.0, False),
+    LodLevel(1, 8_000.0, 1_200.0, False),
+    LodLevel(2, 4_000.0, 300.0, False),
     LodLevel(3, 2_000.0, 0.0, False),
 )
 
