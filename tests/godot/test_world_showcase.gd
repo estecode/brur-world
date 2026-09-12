@@ -98,9 +98,9 @@ func _test_atmosphere_profile() -> void:
 func _test_showcase_streaming_bounds() -> void:
 	var cache_dir := "user://world_showcase_test_%d" % Time.get_ticks_usec()
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(cache_dir))
-	_write_tile(cache_dir, Vector2i(0, 0), _record(10.0, 10.0, "way/0"))
-	_write_tile(cache_dir, Vector2i(1, 0), _record(110.0, 10.0, "way/1"))
-	_write_tile(cache_dir, Vector2i(2, 0), _record(210.0, 10.0, "way/2"))
+	_write_tile(cache_dir, Vector2i(0, 0), _record(10.0, 10.0, "way/0", 70.0))
+	_write_tile(cache_dir, Vector2i(1, 0), _record(110.0, 10.0, "way/1", 70.0))
+	_write_tile(cache_dir, Vector2i(2, 0), _record(210.0, 10.0, "way/2", 70.0))
 	var coordinates = WorldCoordinatesScript.new(Vector2.ZERO, 100.0)
 	var camera := DummyCameraRig.new()
 	get_root().add_child(camera)
@@ -122,7 +122,7 @@ func _test_showcase_streaming_bounds() -> void:
 		_assert(first_instance.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "showcase building batches do not cast expensive dynamic shadows by default")
 	camera.altitude = 16800.0
 	layer._process(0.0)
-	_assert(layer.active_tile_count() >= 1, "showcase keeps already-visible geometry through visibility hysteresis")
+	_assert(layer.active_tile_count() >= 1, "showcase keeps eligible geometry through visibility hysteresis")
 	camera.altitude = 17600.0
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 0, "showcase unloads above hide threshold")
@@ -157,8 +157,9 @@ func _test_camera_scale_transition() -> void:
 	_assert(rig.is_driving_view(), "manual drive handoff enters production drive camera state")
 	_assert(rig.is_mode_transition_active(), "manual drive handoff uses production smooth mode transition")
 
-func _record(x: float, y: float, source_id: String) -> Dictionary:
-	return {"id": source_id, "x": x, "y": y, "geometry": [{"outer": [[x - 5.0, y - 5.0], [x + 5.0, y - 5.0], [x + 5.0, y + 5.0], [x - 5.0, y + 5.0]], "holes": []}], "tags": {"building": "yes", "building:levels": "4"}}
+func _record(x: float, y: float, source_id: String, size_m: float = 10.0) -> Dictionary:
+	var half := size_m * 0.5
+	return {"id": source_id, "x": x, "y": y, "geometry": [{"outer": [[x - half, y - half], [x + half, y - half], [x + half, y + half], [x - half, y + half]], "holes": []}], "tags": {"building": "yes", "building:levels": "4"}}
 
 func _write_tile(cache_dir: String, tile: Vector2i, record: Dictionary) -> void:
 	var path := "%s/%d_%d.jsonl" % [cache_dir, tile.x, tile.y]

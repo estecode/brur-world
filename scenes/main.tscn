@@ -41,9 +41,11 @@ script = ExtResource("4_poi")
 [node name="BuildingLayer" type="Node3D" parent="."]
 script = ExtResource("16_buildings")
 active_radius_tiles = 0
+max_view_radius_tiles = 4
+view_margin_tiles = 1
 builds_per_frame = 1
 build_budget_ms = 3.0
-max_pending_tiles = 4
+max_pending_tiles = 96
 prefetch_tiles_ahead = 0
 base_height_m = 24.0
 streaming_enabled = false

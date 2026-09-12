@@ -11,7 +11,7 @@ signal map_follow_changed(enabled: bool)
 
 const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.gd")
 
-@export var min_altitude_m: float = 1000.0
+@export var min_altitude_m: float = 50.0
 @export var max_altitude_m: float = 1400000.0
 @export var start_altitude_m: float = 760000.0
 @export var move_speed_factor: float = 0.8
@@ -21,6 +21,9 @@ const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.g
 @export var gameplay_fov: float = 52.0
 @export var gameplay_forward_look: float = 0.42
 @export var gameplay_blend_start_altitude_m: float = 105000.0
+@export var low_altitude_blend_end_m: float = 750.0
+@export var low_altitude_pitch_degrees: float = 58.0
+@export var low_altitude_forward_look: float = 0.18
 @export var drive_height_m: float = 12.0
 @export var drive_distance_m: float = 24.0
 @export var drive_min_distance_m: float = 18.0
@@ -133,8 +136,19 @@ func _gameplay_blend() -> float:
 	var raw := 1.0 - inverse_lerp(min_altitude_m, gameplay_blend_start_altitude_m, get_altitude())
 	return raw * raw * (3.0 - 2.0 * raw)
 
+func _low_altitude_blend() -> float:
+	if get_altitude() >= low_altitude_blend_end_m:
+		return 0.0
+	var raw := 1.0 - inverse_lerp(min_altitude_m, maxf(min_altitude_m + 1.0, low_altitude_blend_end_m), get_altitude())
+	raw = clampf(raw, 0.0, 1.0)
+	return raw * raw * (3.0 - 2.0 * raw)
+
 func _pitch_radians() -> float:
-	return deg_to_rad(lerpf(overview_pitch_degrees, gameplay_pitch_degrees, _gameplay_blend()))
+	var normal_pitch := lerpf(overview_pitch_degrees, gameplay_pitch_degrees, _gameplay_blend())
+	return deg_to_rad(lerpf(normal_pitch, low_altitude_pitch_degrees, _low_altitude_blend()))
+
+func _map_forward_look() -> float:
+	return lerpf(gameplay_forward_look, low_altitude_forward_look, _low_altitude_blend())
 
 func _derived_distance() -> float:
 	var sine_pitch := sin(_pitch_radians())
@@ -146,12 +160,12 @@ func _apply_camera(delta_s: float = 0.0) -> void:
 		return
 	position = focus
 	var blend := _gameplay_blend()
-	var pitch := deg_to_rad(lerpf(overview_pitch_degrees, gameplay_pitch_degrees, blend))
+	var pitch := _pitch_radians()
 	var distance := _derived_distance()
 	camera.fov = lerpf(overview_fov, gameplay_fov, blend)
 	camera.position = Vector3(0.0, get_altitude(), cos(pitch) * distance)
-	camera.look_at(global_position + Vector3(0.0, 0.0, -distance * gameplay_forward_look * blend), Vector3.UP)
-	camera.near = clampf(distance * 0.0025, 5.0, 2500.0)
+	camera.look_at(global_position + Vector3(0.0, 0.0, -distance * _map_forward_look() * blend), Vector3.UP)
+	camera.near = clampf(distance * 0.0025, 0.5, 2500.0)
 	camera.far = maxf(maxf(25000.0, distance * 3.5), _required_ground_far(distance) * 1.12)
 	_apply_mode_transition(delta_s)
 	view_changed.emit(focus, distance, camera.global_position)
