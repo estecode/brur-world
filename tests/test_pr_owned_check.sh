@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verifies that PR-owned local objective checks run from the exact worktree, fail closed, and do not skip requested visual review after scoped preparation.
+# Verifies PR-owned local checks run from the exact worktree, fail closed, and request visual review only when a subjective scope remains.
 # Dependencies: bash, mktemp, grep, tools/run_pr_owned_check.sh, tools/pr_check.sh, tools/pr_check_local.sh, and tests/test_pr_check_entry.sh.
 set -euo pipefail
 
@@ -49,15 +49,25 @@ success_line="$(grep -n -- '--state success' "$ROOT/tools/pr_check.sh" | head -n
 }
 
 no_prep_line="$(grep -n 'PR_CHECK=NO_EXPENSIVE_LOCAL_PREPARATION' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
+skip_visual_line="$(grep -n 'PR_CHECK=SKIP_VISUAL_REVIEW' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
 visual_line="$(grep -n 'PR_CHECK=VISUAL_REVIEW pr=' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
-[[ -n "$no_prep_line" && -n "$visual_line" && "$no_prep_line" -lt "$visual_line" ]] || {
-  printf 'generic Safe Check must continue from no-expensive-preparation to visual review\n' >&2
+[[ -n "$no_prep_line" && -n "$skip_visual_line" && -n "$visual_line" ]] || {
+  printf 'Safe Check must expose both objective-only and visual-review paths\n' >&2
   exit 1
 }
-if sed -n "${no_prep_line},${visual_line}p" "$ROOT/tools/pr_check_local.sh" | grep -Eq '^[[:space:]]*exit 0[[:space:]]*$'; then
-  printf 'generic Safe Check must not exit before requested visual review\n' >&2
+[[ "$no_prep_line" -lt "$skip_visual_line" && "$skip_visual_line" -lt "$visual_line" ]] || {
+  printf 'objective-only completion must be decided before visual-review launch\n' >&2
+  exit 1
+}
+if ! sed -n "${skip_visual_line},$((skip_visual_line + 3))p" "$ROOT/tools/pr_check_local.sh" | grep -Eq '^[[:space:]]*exit 0[[:space:]]*$'; then
+  printf 'objective-only Safe Check must exit without launching Godot\n' >&2
   exit 1
 fi
+
+grep -q 'BUILDING_TILE_SCOPE.*required' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'visual presentation scopes must still be able to request review\n' >&2
+  exit 1
+}
 
 bash "$ROOT/tests/test_pr_check_entry.sh"
 printf 'pr-owned check hook tests passed\n'
