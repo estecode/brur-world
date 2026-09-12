@@ -12,12 +12,14 @@ const ROAD: StringName = &"road"
 const OFF_ROAD: StringName = &"off_road"
 const QUERY_LOD: int = 2
 const BIN_SIZE_M: float = 128.0
+const INDEX_SAMPLE_STEP_M: float = BIN_SIZE_M * 0.5
 
 var _world_dir: String = ""
 var _world_coordinates
 var _tile_cache: Dictionary = {}
 var _perf_queries: int = 0
 var _perf_segments_checked: int = 0
+var _perf_index_entries: int = 0
 
 func setup(world_dir: String, world_coordinates) -> void:
 	_world_dir = world_dir
@@ -25,6 +27,7 @@ func setup(world_dir: String, world_coordinates) -> void:
 	_tile_cache.clear()
 	_perf_queries = 0
 	_perf_segments_checked = 0
+	_perf_index_entries = 0
 
 func surface_at(world_position: Vector3) -> StringName:
 	if _world_coordinates == null or _world_dir.is_empty():
@@ -42,9 +45,11 @@ func consume_perf_metrics() -> Dictionary:
 	var result := {
 		"queries": _perf_queries,
 		"segments_checked": _perf_segments_checked,
+		"index_entries": _perf_index_entries,
 	}
 	_perf_queries = 0
 	_perf_segments_checked = 0
+	_perf_index_entries = 0
 	return result
 
 func _tile_contains_road(tile: Vector2i, absolute_position: Vector2) -> bool:
@@ -98,16 +103,23 @@ func _index_segment(bins: Dictionary, origin: Vector2, segment: Dictionary) -> v
 	var a: Vector2 = segment["a"] as Vector2
 	var b: Vector2 = segment["b"] as Vector2
 	var half_width_m: float = float(segment["half_width_m"])
-	var min_point := Vector2(minf(a.x, b.x) - half_width_m, minf(a.y, b.y) - half_width_m)
-	var max_point := Vector2(maxf(a.x, b.x) + half_width_m, maxf(a.y, b.y) + half_width_m)
-	var min_cell := _bin_for_point(min_point, origin)
-	var max_cell := _bin_for_point(max_point, origin)
-	for cell_y in range(min_cell.y, max_cell.y + 1):
-		for cell_x in range(min_cell.x, max_cell.x + 1):
-			var cell := Vector2i(cell_x, cell_y)
-			var bucket: Array = bins.get(cell, []) as Array
-			bucket.append(segment)
-			bins[cell] = bucket
+	var length_m := a.distance_to(b)
+	var sample_count := maxi(1, ceili(length_m / INDEX_SAMPLE_STEP_M))
+	var neighbor_radius := maxi(1, ceili(half_width_m / BIN_SIZE_M))
+	var touched_cells: Dictionary = {}
+	for sample_index in range(sample_count + 1):
+		var t := float(sample_index) / float(sample_count)
+		var center_cell := _bin_for_point(a.lerp(b, t), origin)
+		for cell_y in range(center_cell.y - neighbor_radius, center_cell.y + neighbor_radius + 1):
+			for cell_x in range(center_cell.x - neighbor_radius, center_cell.x + neighbor_radius + 1):
+				var cell := Vector2i(cell_x, cell_y)
+				if touched_cells.has(cell):
+					continue
+				touched_cells[cell] = true
+				var bucket: Array = bins.get(cell, []) as Array
+				bucket.append(segment)
+				bins[cell] = bucket
+				_perf_index_entries += 1
 
 func _bin_for_point(point: Vector2, origin: Vector2) -> Vector2i:
 	var local := point - origin
