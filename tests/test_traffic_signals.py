@@ -7,16 +7,19 @@ Dependencies:
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
+import build_traffic_signals as traffic_signal_builder
 from build_traffic_signals import build_traffic_signals
 from traffic_signals import FORMAT, SignalDraft, build_runtime_dataset, load_runtime_dataset
 from world_common import project
@@ -95,6 +98,7 @@ class TrafficSignalTests(unittest.TestCase):
             self.assertEqual(stats["unknown_direction_count"], 1)
             self.assertEqual(stats["explicit_stop_line_count"], 1)
             self.assertEqual(stats["grouped_candidate_count"], 1)
+            self.assertFalse(stats["reused"])
 
             first = dataset["signals"][0]
             expected_x, expected_y = project(18.0, 59.0)
@@ -102,9 +106,66 @@ class TrafficSignalTests(unittest.TestCase):
             self.assertAlmostEqual(first["y"], expected_y)
             self.assertEqual(first["highway_way_ids"], [101, 102])
 
-            manifest = (output / "manifest.json").read_text(encoding="utf-8")
-            self.assertIn('"format": "BTS1"', manifest)
-            self.assertIn('"file": "traffic_signals.json"', manifest)
+            manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            entry = manifest["traffic_signals"]
+            self.assertEqual(entry["format"], "BTS1")
+            self.assertEqual(entry["file"], "traffic_signals.json")
+            self.assertEqual(entry["source"]["algorithm"], "sha256")
+            self.assertEqual(len(entry["source"]["digest"]), 64)
+            self.assertEqual(entry["source"]["size_bytes"], fixture.stat().st_size)
+
+    def test_unchanged_source_reuses_valid_output_without_source_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = root / "signals.osm"
+            output = root / "world_data"
+            fixture.write_text(FIXTURE, encoding="utf-8")
+            build_traffic_signals(fixture, output)
+
+            with patch.object(traffic_signal_builder, "_source", side_effect=AssertionError("source scan must not run")):
+                stats = build_traffic_signals(fixture, output)
+
+            self.assertTrue(stats["reused"])
+            self.assertEqual(stats["source_signal_count"], 3)
+
+    def test_changed_source_hash_forces_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = root / "signals.osm"
+            output = root / "world_data"
+            fixture.write_text(FIXTURE, encoding="utf-8")
+            build_traffic_signals(fixture, output)
+            fixture.write_text(FIXTURE + "\n", encoding="utf-8")
+
+            original_source = traffic_signal_builder._source
+            with patch.object(traffic_signal_builder, "_source", wraps=original_source) as source_scan:
+                stats = build_traffic_signals(fixture, output)
+
+            self.assertEqual(source_scan.call_count, 1)
+            self.assertFalse(stats["reused"])
+
+    def test_missing_or_invalid_output_forces_rebuild(self) -> None:
+        for invalid_contents in (None, "not-json"):
+            with self.subTest(invalid_contents=invalid_contents):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    root = Path(temp_dir)
+                    fixture = root / "signals.osm"
+                    output = root / "world_data"
+                    fixture.write_text(FIXTURE, encoding="utf-8")
+                    build_traffic_signals(fixture, output)
+                    destination = output / "traffic_signals.json"
+                    if invalid_contents is None:
+                        destination.unlink()
+                    else:
+                        destination.write_text(invalid_contents, encoding="utf-8")
+
+                    original_source = traffic_signal_builder._source
+                    with patch.object(traffic_signal_builder, "_source", wraps=original_source) as source_scan:
+                        stats = build_traffic_signals(fixture, output)
+
+                    self.assertEqual(source_scan.call_count, 1)
+                    self.assertFalse(stats["reused"])
+                    self.assertEqual(load_runtime_dataset(destination)["format"], FORMAT)
 
     def test_unsupported_direction_degrades_to_unknown(self) -> None:
         dataset = build_runtime_dataset(
