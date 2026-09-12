@@ -22,6 +22,7 @@ const MAP_FARMLAND: int = 1
 const MAP_FOREST: int = 2
 const MAP_URBAN: int = 3
 const MAP_WATER: int = 4
+const BACKGROUND_OCEAN_PRIORITY: int = -6
 
 @export var background_source_path: String = WORLD_DIR + "/background.brmap"
 
@@ -155,9 +156,9 @@ func _layer_spacing() -> float:
 	return clampf(camera_rig.get_distance() / 6000.0, 4.0, 240.0)
 
 func _background_height(kind: int) -> float:
-	# Ocean base is y=0. Country land is the base overlay. Inland water must sit
-	# above land, but below farmland/forest/urban so broad water polygons cannot
-	# erase higher-detail land-use while the camera moves.
+	# Heights preserve the existing world-space relationship with roads and city
+	# lights. Background visual precedence is handled by render priority instead
+	# of relying on depth-buffer precision between these nearly coplanar layers.
 	match kind:
 		MAP_LAND:
 			return current_layer_spacing * 1.0
@@ -170,6 +171,30 @@ func _background_height(kind: int) -> float:
 		MAP_URBAN:
 			return current_layer_spacing * 5.0
 	return current_layer_spacing
+
+func _background_render_priority(kind: int) -> int:
+	match kind:
+		MAP_LAND:
+			return -5
+		MAP_WATER:
+			return -4
+		MAP_FARMLAND:
+			return -3
+		MAP_FOREST:
+			return -2
+		MAP_URBAN:
+			return -1
+	return -5
+
+func _background_material(kind: int, ocean_base: bool = false) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.render_priority = BACKGROUND_OCEAN_PRIORITY if ocean_base else _background_render_priority(kind)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = _map_color(kind)
+	mat.roughness = 1.0 if ocean_base else 0.95
+	return mat
 
 func _road_height() -> float:
 	return current_layer_spacing * 6.0
@@ -409,11 +434,7 @@ func _load_background() -> void:
 			continue
 		var instance: MeshInstance3D = MeshInstance3D.new()
 		instance.mesh = mesh
-		var mat: StandardMaterial3D = StandardMaterial3D.new()
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		mat.albedo_color = _map_color(kind)
-		mat.roughness = 0.95
-		instance.material_override = mat
+		instance.material_override = _background_material(kind)
 		world.add_child(instance)
 		background_instances[kind] = instance
 		if kind == MAP_URBAN and city_lights != null:
@@ -421,7 +442,7 @@ func _load_background() -> void:
 	if city_lights != null:
 		_load_city_light_poi_density()
 		city_lights.finish_urban_data()
-	print("Background triangles rendered: ", accepted, " | ocean base enabled")
+	print("Background triangles rendered: ", accepted, " | deterministic compositing enabled")
 
 func _load_city_light_poi_density() -> void:
 	var path := WORLD_DIR + "/city_light_density.jsonl"
@@ -492,9 +513,5 @@ func _create_ground() -> void:
 	plane.size = Vector2(width + margin * 2.0, depth + margin * 2.0)
 	ground.mesh = plane
 	ground.position = center_world
-	var mat: StandardMaterial3D = StandardMaterial3D.new()
-	mat.albedo_color = _map_color(MAP_WATER)
-	mat.roughness = 1.0
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	ground.material_override = mat
+	ground.material_override = _background_material(MAP_WATER, true)
 	world.add_child(ground)
