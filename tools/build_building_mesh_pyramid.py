@@ -32,6 +32,7 @@ DEFAULT_HEIGHT_M = 9.0
 LEVEL_HEIGHT_M = 3.0
 MIN_HEIGHT_M = 2.5
 MAX_HEIGHT_M = 120.0
+PROGRESS_EVERY_RECORDS = 25_000
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,7 @@ class LodLevel:
 LOD_LEVELS = (
     LodLevel(0, 16_000.0, 3_500.0, True),
     LodLevel(1, 8_000.0, 1_200.0, True),
-    LodLevel(2, 4_000.0, 300.0, False),
+    LodLevel(2, 4_000.0, 300.0, True),
     LodLevel(3, 2_000.0, 0.0, False),
 )
 
@@ -207,8 +208,6 @@ def triangulate_ring(points: list[tuple[float, float]]) -> list[tuple[int, int, 
     if len(indices) == 3:
         triangles.append((indices[0], indices[1], indices[2]))
     if not triangles and len(points) >= 3:
-        # Invalid/self-intersecting source rings are rare. Preserve deterministic
-        # availability with the same conservative fan fallback for all builds.
         triangles.extend((0, index, index + 1) for index in range(1, len(points) - 1))
     return triangles
 
@@ -399,6 +398,8 @@ def building_mesh_pyramid_cache_valid(world_dir: Path) -> bool:
                 return False
             if float(actual.get("min_area_m2", -1.0)) != expected.min_area_m2:
                 return False
+            if bool(actual.get("simplified", False)) != expected.simplified:
+                return False
             if int(actual.get("chunks", 0)) <= 0:
                 return False
             level_dir = output_dir / f"lod{expected.lod}"
@@ -409,15 +410,43 @@ def building_mesh_pyramid_cache_valid(world_dir: Path) -> bool:
         return False
 
 
-def _record_polygons(record: dict, simplified: bool) -> Iterable[list[tuple[float, float]]]:
+def _clean_outer_rings(record: dict) -> list[list[tuple[float, float]]]:
+    result: list[list[tuple[float, float]]] = []
     for polygon in record.get("geometry", []):
         if not isinstance(polygon, dict):
             continue
         outer = _clean_ring(polygon.get("outer", []))
-        if simplified:
-            outer = _simplified_ring(outer)
         if len(outer) >= 3:
-            yield outer
+            result.append(outer)
+    return result
+
+
+def _outer_area_m2(rings: Iterable[list[tuple[float, float]]]) -> float:
+    return sum(abs(_signed_area(ring)) for ring in rings)
+
+
+def _simplify_rings(rings: Iterable[list[tuple[float, float]]]) -> list[list[tuple[float, float]]]:
+    result: list[list[tuple[float, float]]] = []
+    for ring in rings:
+        simplified = _simplified_ring(ring)
+        if len(simplified) >= 3:
+            result.append(simplified)
+    return result
+
+
+def _payload_bytes_written(writer: ChunkWriter) -> int:
+    return sum(writer.bytes_written.values())
+
+
+def _print_progress(source_records: int, started: float, writer: ChunkWriter) -> None:
+    elapsed = max(0.001, time.monotonic() - started)
+    rate = source_records / elapsed
+    payload_mib = _payload_bytes_written(writer) / (1024.0 * 1024.0)
+    print(
+        f"[building-mesh-lod] {source_records:,} buildings | {rate:,.0f}/s | "
+        f"{elapsed:.1f}s | {payload_mib:,.1f} MiB",
+        flush=True,
+    )
 
 
 def build_building_mesh_pyramid(world_dir: Path) -> dict:
@@ -447,21 +476,31 @@ def build_building_mesh_pyramid(world_dir: Path) -> dict:
                 if "x" not in record or "y" not in record:
                     raise SystemExit(f"building record {line_number} is missing x/y")
                 source_records += 1
-                area = footprint_area_m2(record)
+                full_rings = _clean_outer_rings(record)
+                area = _outer_area_m2(full_rings)
+                simplified_rings: list[list[tuple[float, float]]] | None = None
                 height = height_from_tags(record.get("tags", {}))
                 colors = appearance_rgba(record)
                 for level in LOD_LEVELS:
                     if area < level.min_area_m2:
                         continue
+                    rings = full_rings
+                    if level.simplified:
+                        if simplified_rings is None:
+                            simplified_rings = _simplify_rings(full_rings)
+                        rings = simplified_rings
                     chunk = _chunk_key(record, level)
                     origin = _chunk_origin(chunk, level)
                     record_blob = bytearray()
                     vertex_count = 0
-                    for ring in _record_polygons(record, level.simplified):
+                    for ring in rings:
                         blob, count = polygon_vertex_blob(ring, height, origin, colors)
                         record_blob += blob
                         vertex_count += count
                     writer.write(level, chunk, bytes(record_blob), vertex_count)
+                if source_records % PROGRESS_EVERY_RECORDS == 0:
+                    _print_progress(source_records, started, writer)
+        _print_progress(source_records, started, writer)
         writer.publish()
         success = True
     finally:
@@ -518,13 +557,11 @@ def build_building_mesh_pyramid(world_dir: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("world_dir", type=Path, nargs="?", default=Path("world_data"))
+    parser.add_argument("world_dir", type=Path)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     if args.check:
-        valid = building_mesh_pyramid_cache_valid(args.world_dir)
-        print(f"[building-mesh-lod] cache={'valid' if valid else 'invalid'}", flush=True)
-        raise SystemExit(0 if valid else 1)
+        raise SystemExit(0 if building_mesh_pyramid_cache_valid(args.world_dir) else 1)
     build_building_mesh_pyramid(args.world_dir)
 
 
