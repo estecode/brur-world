@@ -78,3 +78,33 @@ run_godot_test() {
 printf 'PR_CHECK=CHECK_WORLD_SHOWCASE_HEADLESS pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_test res://tests/godot/test_world_streaming_foundation.gd
 run_godot_test res://tests/godot/test_world_showcase.gd
+
+# Diagnostic #136: objective checks above use untouched production code. Only the
+# disposable detached PR-check worktree is patched before the human hardware A/B.
+"$PYTHON" - "$WORKTREE/scripts/main.gd" "$WORKTREE/scenes/main.tscn" <<'PY'
+from pathlib import Path
+import sys
+
+main_path = Path(sys.argv[1])
+scene_path = Path(sys.argv[2])
+main = main_path.read_text(encoding="utf-8")
+needle = "\t_create_ground()\n\t_load_background()\n\t_update_depth_layout(true)"
+replacement = (
+    "\t_create_ground()\n"
+    "\t# Diagnostic #136: skip full-Sweden BRM2 background for hardware A/B.\n"
+    "\t_update_depth_layout(true)"
+)
+if main.count(needle) != 1:
+    print("PR_CHECK=FAIL combined diagnostic could not find exact background startup sequence")
+    raise SystemExit(1)
+main_path.write_text(main.replace(needle, replacement), encoding="utf-8")
+
+scene = scene_path.read_text(encoding="utf-8")
+cloud_node = '[node name="CloudField" type="MultiMeshInstance3D" parent="."]\nscript = ExtResource("13_clouds")'
+cloud_replacement = cloud_node + '\nvisible = false\nprocess_mode = 4'
+if scene.count(cloud_node) != 1:
+    print("PR_CHECK=FAIL combined diagnostic could not find exact CloudField node")
+    raise SystemExit(1)
+scene_path.write_text(scene.replace(cloud_node, cloud_replacement), encoding="utf-8")
+print("PR_CHECK=DIAGNOSTIC background=off clouds=off roads=production")
+PY
