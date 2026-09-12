@@ -30,8 +30,11 @@ ROAD_CLASS = {
     "living_street": 6,
     "service": 6,
 }
-LOD_MAX_CLASS = (1, 3, 6)
-LOD_MIN_SPACING = (400.0, 100.0, 0.0)
+# Far LODs keep progressively more of the same road hierarchy instead of
+# switching to a visually different motorway-only map. Geometry is simplified
+# offline so distant views stay cheap while near LOD remains full fidelity.
+LOD_MAX_CLASS = (4, 5, 6)
+LOD_MIN_SPACING = (1200.0, 300.0, 0.0)
 SEGMENT = struct.Struct("<Bffff")
 HEADER = struct.Struct("<4sI")
 
@@ -131,6 +134,10 @@ def build_roads(pbf: Path, output: Path) -> dict:
             "origin_x": origin_x,
             "origin_y": origin_y,
             "bounds": [handler.min_x, handler.min_y, handler.max_x, handler.max_y],
+            "road_lod_policy": {
+                "max_class": list(LOD_MAX_CLASS),
+                "min_spacing_m": list(LOD_MIN_SPACING),
+            },
             "lods": [
                 {"lod": i, "tiles": len(handler.payloads[i]), "segments": handler.segments[i]}
                 for i in range(3)
