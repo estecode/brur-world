@@ -4,17 +4,20 @@ extends CanvasLayer
 ## Presents small map/debug controls and forwards intent through explicit production APIs.
 ##
 ## Dependencies:
-## - Scene composition supplies PoiLayer, GpsRouteLayer and CameraRig paths.
-## - Owns no POI data, vehicle state, GPS route state, coordinate conversion, or camera simulation.
+## - Scene composition supplies PoiLayer, BuildingStreamLayer, GpsRouteLayer and CameraRig paths.
+## - Owns no POI/building data, vehicle state, GPS route state, coordinate conversion, or camera simulation.
 
 @export var poi_layer_path: NodePath
+@export var building_layer_path: NodePath
 @export var gps_route_layer_path: NodePath
 @export var camera_rig_path: NodePath
 
 var _poi_layer: Node
+var _building_layer: Node
 var _gps_route_layer: Node
 var _camera_rig: Node
 var _poi_toggle: CheckButton
+var _building_toggle: CheckButton
 var _teleport_toggle: CheckButton
 var _follow_car_toggle: CheckButton
 var _drive_mode_toggle: CheckButton
@@ -22,10 +25,12 @@ var _drive_mode_toggle: CheckButton
 func _ready() -> void:
 	layer = 70
 	_poi_layer = get_node_or_null(poi_layer_path)
+	_building_layer = get_node_or_null(building_layer_path)
 	_gps_route_layer = get_node_or_null(gps_route_layer_path)
 	_camera_rig = get_node_or_null(camera_rig_path)
 	_build_ui()
 	_on_poi_toggled(false)
+	_on_buildings_toggled(false)
 	if _gps_route_layer != null and _gps_route_layer.has_signal("teleport_state_changed"):
 		_gps_route_layer.connect("teleport_state_changed", set_teleport_armed)
 	if _camera_rig != null and _camera_rig.has_signal("map_follow_changed"):
@@ -51,6 +56,11 @@ func set_poi_visible(visible: bool) -> void:
 	_ensure_ui()
 	_poi_toggle.set_pressed_no_signal(visible)
 
+func set_buildings_visible(visible: bool) -> void:
+	_ensure_ui()
+	_building_toggle.set_pressed_no_signal(visible)
+	_on_buildings_toggled(visible)
+
 func _build_ui() -> void:
 	if _poi_toggle != null:
 		return
@@ -58,7 +68,7 @@ func _build_ui() -> void:
 	panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	panel.offset_left = 14.0
 	panel.offset_top = -58.0
-	panel.offset_right = 570.0
+	panel.offset_right = 680.0
 	panel.offset_bottom = -14.0
 	add_child(panel)
 
@@ -72,6 +82,13 @@ func _build_ui() -> void:
 	_poi_toggle.tooltip_text = "Hide/show POI markers and hover only; POI search stays available"
 	_poi_toggle.toggled.connect(_on_poi_toggled)
 	row.add_child(_poi_toggle)
+
+	_building_toggle = CheckButton.new()
+	_building_toggle.text = "HUS"
+	_building_toggle.button_pressed = false
+	_building_toggle.tooltip_text = "Stream and render nearby buildings; off by default for performance"
+	_building_toggle.toggled.connect(_on_buildings_toggled)
+	row.add_child(_building_toggle)
 
 	_teleport_toggle = CheckButton.new()
 	_teleport_toggle.text = "Teleport"
@@ -100,6 +117,10 @@ func _ensure_ui() -> void:
 func _on_poi_toggled(visible: bool) -> void:
 	if _poi_layer != null and _poi_layer.has_method("set_presentation_enabled"):
 		_poi_layer.call("set_presentation_enabled", visible)
+
+func _on_buildings_toggled(visible: bool) -> void:
+	if _building_layer != null and _building_layer.has_method("set_streaming_enabled"):
+		_building_layer.call("set_streaming_enabled", visible)
 
 func _on_teleport_toggled(armed: bool) -> void:
 	set_teleport_armed(armed)

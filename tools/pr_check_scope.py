@@ -27,7 +27,6 @@ ROUTE_GEOMETRY_DATASET_OWNERS = frozenset(
 ROAD_LOD_DATASET_OWNERS = frozenset(
     {
         "tools/build_roads.py",
-        "tools/build_sweden.py",
         "tools/world_common.py",
         "scripts/road_lod_policy.gd",
     }
@@ -48,10 +47,16 @@ WORLD_SHOWCASE_OWNERS = frozenset(
     {
         "tools/prepare_world_showcase.py",
         "tests/test_world_showcase_prepare.py",
-        "tests/godot/test_world_showcase.gd",
-        "harness/world_showcase/world_showcase.gd",
-        "harness/world_showcase/world_showcase.tscn",
-        "harness/world_showcase/world_showcase_windows.tscn",
+    }
+)
+
+BUILDING_TILE_OWNERS = frozenset(
+    {
+        "tools/build_building_tiles.py",
+        "tools/build_sweden.py",
+        "scripts/building_stream_layer.gd",
+        "scripts/building_runtime_composition.gd",
+        "scenes/main.tscn",
     }
 )
 
@@ -91,8 +96,13 @@ def city_light_real_data_required(changed_paths: Iterable[str]) -> bool:
 
 
 def world_showcase_real_data_required(changed_paths: Iterable[str]) -> bool:
-    """Return whether the disposable continuous-world showcase must be prepared locally."""
+    """Return whether the expensive showcase cache itself must be regenerated locally."""
     return any(path in WORLD_SHOWCASE_OWNERS for path in _paths(changed_paths))
+
+
+def building_tiles_required(changed_paths: Iterable[str]) -> bool:
+    """Return whether production building-tile real-data preparation is relevant."""
+    return any(path in BUILDING_TILE_OWNERS for path in _paths(changed_paths))
 
 
 SCOPES = {
@@ -101,6 +111,7 @@ SCOPES = {
     "native-gps": native_gps_build_required,
     "city-lights": city_light_real_data_required,
     "world-showcase": world_showcase_real_data_required,
+    "building-tiles": building_tiles_required,
 }
 
 

@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from pr_check_scope import (  # noqa: E402
+    building_tiles_required,
     city_light_real_data_required,
     native_gps_build_required,
     road_lod_rebuild_required,
@@ -30,13 +31,14 @@ BUILDING_UI_PR_FILES = (
     "scripts/map_controls_ui.gd",
     "tests/godot/test_map_controls.gd",
     "tools/build_building_tiles.py",
+    "tools/build_sweden.py",
 )
 
 
 def main() -> None:
     assert not route_geometry_check_required(BUILDING_UI_PR_FILES)
     assert not road_lod_rebuild_required(BUILDING_UI_PR_FILES), (
-        "building/UI changes must not rebuild Sweden road LODs"
+        "building/UI pipeline changes must not rebuild Sweden road LODs"
     )
     assert not native_gps_build_required(BUILDING_UI_PR_FILES), (
         "building/UI changes must not rebuild native GPS"
@@ -46,6 +48,9 @@ def main() -> None:
     )
     assert not world_showcase_real_data_required(BUILDING_UI_PR_FILES), (
         "production building/UI changes must not prepare the old world showcase"
+    )
+    assert building_tiles_required(BUILDING_UI_PR_FILES), (
+        "production building changes must prepare or reuse building-tile runtime data"
     )
 
     for path in (
@@ -59,11 +64,13 @@ def main() -> None:
 
     for path in (
         "tools/build_roads.py",
-        "tools/build_sweden.py",
         "tools/world_common.py",
         "scripts/road_lod_policy.gd",
     ):
         assert road_lod_rebuild_required((path,)), f"road owner must trigger rebuild: {path}"
+    assert not road_lod_rebuild_required(("tools/build_sweden.py",)), (
+        "top-level build orchestration changes use targeted stage tests instead of rebuilding all road data"
+    )
 
     assert native_gps_build_required(("native/gps_core.cpp",))
     assert native_gps_build_required(("tools/build_native_gps.sh",))
@@ -76,16 +83,27 @@ def main() -> None:
     assert not city_light_real_data_required(("scripts/main.gd",))
 
     assert world_showcase_real_data_required(("tools/prepare_world_showcase.py",))
-    assert world_showcase_real_data_required(("harness/world_showcase/world_showcase.gd",))
-    assert not world_showcase_real_data_required(("scripts/building_stream_layer.gd",)), (
-        "production building changes are covered by production tests, not showcase preparation"
+    assert not world_showcase_real_data_required(("harness/world_showcase/world_showcase.gd",)), (
+        "showcase scene/runtime wiring is covered headlessly and does not require regenerating its cache"
     )
+    assert not world_showcase_real_data_required(("harness/world_showcase/world_showcase.tscn",))
+    assert not world_showcase_real_data_required(("scripts/building_stream_layer.gd",))
+
+    assert building_tiles_required(("tools/build_building_tiles.py",))
+    assert building_tiles_required(("tools/build_sweden.py",))
+    assert building_tiles_required(("scripts/building_runtime_composition.gd",))
+    assert building_tiles_required(("scenes/main.tscn",))
+    assert not building_tiles_required(("scripts/map_controls_ui.gd",)), (
+        "pure HUS UI changes do not need building data preparation"
+    )
+    assert not building_tiles_required(("scripts/city_light_renderer.gd",))
 
     assert not route_geometry_check_required(())
     assert not road_lod_rebuild_required(())
     assert not native_gps_build_required(())
     assert not city_light_real_data_required(())
     assert not world_showcase_real_data_required(())
+    assert not building_tiles_required(())
 
     print("PR check scope tests: OK")
 

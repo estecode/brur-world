@@ -35,6 +35,12 @@ jobs:
       - name: Run traffic signal compiler tests
         run: python -m unittest tests.test_traffic_signals
 
+      - name: Run building tile derivation tests
+        run: |
+          python -m unittest tests.test_building_tiles
+          python -m unittest tests.test_building_runtime_composition
+          python -m unittest tests.test_build_sweden_building_tiles
+
       - name: Run world showcase cache preparation tests
         run: python -m unittest tests.test_world_showcase_prepare
 

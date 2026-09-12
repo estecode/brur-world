@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs only expensive local real-data checks whose owned subsystem changed, then opens the exact PR runtime for any requested human review.
+# Runs only relevant local real-data preparation, then opens the exact PR runtime for requested human review.
 # Dependencies: changed-file scope from pr_check.sh, existing local world_data, and source/build tools only for scopes that require them.
 set -euo pipefail
 
@@ -23,6 +23,7 @@ scope_decision() {
 ROAD_LOD_SCOPE="$(scope_decision road-lod)"
 CITY_LIGHT_SCOPE="$(scope_decision city-lights)"
 WORLD_SHOWCASE_SCOPE="$(scope_decision world-showcase)"
+BUILDING_TILE_SCOPE="$(scope_decision building-tiles)"
 
 if [[ "$ROAD_LOD_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_ROAD_LODS pr=%s reason=unrelated-changes\n' "${BRUR_PR_CHECK_PR:?}"
@@ -33,8 +34,11 @@ fi
 if [[ "$WORLD_SHOWCASE_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_WORLD_SHOWCASE_PREP pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
 fi
+if [[ "$BUILDING_TILE_SCOPE" == "skip" ]]; then
+  printf 'PR_CHECK=SKIP_BUILDING_TILES pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
+fi
 
-if [[ "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" ]]; then
+if [[ "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=NO_EXPENSIVE_LOCAL_PREPARATION pr=%s\n' "$BRUR_PR_CHECK_PR"
 fi
 
@@ -102,6 +106,27 @@ run_godot_test() {
   rm -f "$log"
 }
 
+if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
+  [[ -f "$WORLD_DATA/buildings.jsonl" ]] || {
+    printf 'PR_CHECK=FAIL missing authoritative buildings.jsonl for production building tiles\n' >&2
+    exit 66
+  }
+  if "$PYTHON" "$WORKTREE/tools/build_building_tiles.py" "$WORLD_DATA" --check >/dev/null 2>&1; then
+    printf 'PR_CHECK=REUSE_BUILDING_TILES pr=%s reason=source-and-builder-match\n' "$BRUR_PR_CHECK_PR"
+  else
+    printf 'PR_CHECK=BUILD_BUILDING_TILES pr=%s reason=missing-or-stale-cache source=existing-buildings-jsonl\n' "$BRUR_PR_CHECK_PR"
+    "$PYTHON" "$WORKTREE/tools/build_building_tiles.py" "$WORLD_DATA"
+    "$PYTHON" "$WORKTREE/tools/build_building_tiles.py" "$WORLD_DATA" --check >/dev/null || {
+      printf 'PR_CHECK=FAIL production building tile cache is invalid after rebuild\n' >&2
+      exit 1
+    }
+  fi
+  printf 'PR_CHECK=CHECK_BUILDING_STREAM_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
+  run_godot_test res://tests/godot/test_world_streaming_foundation.gd
+  printf 'PR_CHECK=CHECK_MAP_CONTROLS_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
+  run_godot_test res://tests/godot/test_map_controls.gd
+fi
+
 if [[ "$ROAD_LOD_SCOPE" == "required" ]]; then
   prepare_road_runtime_data
   printf 'PR_CHECK=CHECK_WORLD_STREAMING_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
@@ -134,5 +159,9 @@ PY
 fi
 
 printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
-printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION inspect only the changed real-data presentation; close Godot when finished\n'
+if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
+  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION confirm HUS starts OFF; turn HUS ON near street/city altitude and verify nearby buildings appear with acceptable playability; turn HUS OFF and verify they disappear; close Godot when finished\n'
+else
+  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION inspect only the changed real-data presentation; close Godot when finished\n'
+fi
 "$GODOT" --path "$WORKTREE"

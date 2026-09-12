@@ -1,7 +1,7 @@
 extends SceneTree
 
-## Headless contract tests for POI visibility, armed teleport, map/drive camera ownership and map-control scene wiring.
-## Dependencies: production PoiLayer, GpsRouteLayer, MapControlsUi, CameraRig, player controller and player vehicle adapters.
+## Headless contract tests for POI/building visibility, armed teleport, map/drive camera ownership and map-control scene wiring.
+## Dependencies: production PoiLayer, BuildingStreamLayer, GpsRouteLayer, MapControlsUi, CameraRig, player controller and player vehicle adapters.
 
 const PoiLayerScript = preload("res://scripts/poi_layer.gd")
 const GpsRouteLayerScript = preload("res://scripts/gps_route_layer.gd")
@@ -39,7 +39,9 @@ func _test_poi_visibility_preserves_data() -> void:
 func _test_teleport_is_explicit_and_preserves_vehicle_identity() -> void:
 	var player_scene := load("res://scenes/player_vehicle.tscn") as PackedScene
 	var player: Node3D = player_scene.instantiate() as Node3D
+	get_root().add_child(player)
 	var route_layer: Node = GpsRouteLayerScript.new()
+	get_root().add_child(route_layer)
 	route_layer.set("player", player)
 	player.call("set_world_position", Vector3(10.0, 2.0, 20.0))
 	player.call("set_motion_state", 12.0)
@@ -52,8 +54,8 @@ func _test_teleport_is_explicit_and_preserves_vehicle_identity() -> void:
 	_assert(player.get_instance_id() == identity, "teleport preserves the same player vehicle instance")
 	_assert(_approx(player.global_position.x, 55.0) and _approx(player.global_position.z, -44.0), "teleport moves to the requested world coordinate")
 	_assert(_approx(float(player.call("speed_mps")), 0.0), "teleport resets vehicle speed")
-	player.free()
-	route_layer.free()
+	player.queue_free()
+	route_layer.queue_free()
 
 func _test_map_controls_ui_builds_headlessly() -> void:
 	var controls: CanvasLayer = MapControlsUiScript.new()
@@ -68,6 +70,7 @@ func _test_map_controls_ui_builds_headlessly() -> void:
 		if child is Button:
 			labels.append((child as Button).text)
 	_assert(labels.has("Show POIs"), "map controls expose POI visibility")
+	_assert(labels.has("HUS"), "map controls expose building visibility")
 	_assert(labels.has("Teleport"), "map controls expose armed teleport")
 	_assert(labels.has("Follow car"), "map controls expose optional map follow")
 	_assert(labels.has("Drive mode"), "map controls expose explicit Drive mode")
@@ -173,8 +176,14 @@ func _test_main_scene_control_wiring() -> void:
 	var controls: Node = main.get_node_or_null("MapControlsUi")
 	_assert(controls != null, "main scene includes map controls")
 	_assert(controls.get("poi_layer_path") == NodePath("../PoiLayer"), "POI control uses explicit scene-composed dependency")
+	_assert(controls.get("building_layer_path") == NodePath("../BuildingLayer"), "HUS control uses explicit building-layer dependency")
 	_assert(controls.get("gps_route_layer_path") == NodePath("../GpsRouteLayer"), "teleport/follow control uses explicit GPS adapter dependency")
 	_assert(controls.get("camera_rig_path") == NodePath("../CameraRig"), "camera control uses explicit CameraRig dependency")
+	var building_layer: Node = main.get_node_or_null("BuildingLayer")
+	_assert(building_layer != null, "main scene composes the production building stream")
+	_assert(building_layer != null and not bool(building_layer.get("streaming_enabled")), "production buildings are default OFF")
+	var building_composition: Node = main.get_node_or_null("BuildingRuntimeComposition")
+	_assert(building_composition != null, "main scene owns explicit building runtime composition")
 	var camera_rig: Node = main.get_node_or_null("CameraRig")
 	_assert(camera_rig != null and camera_rig.has_method("set_drive_mode"), "CameraRig exposes explicit Map/Drive mode API")
 	_assert(camera_rig != null and camera_rig.has_method("set_map_follow_enabled"), "CameraRig exposes separate Map follow API")
