@@ -2,7 +2,7 @@
 
 Dependencies:
 - Uses build_routing_dataset.py with the production tiny OSM fixture pipeline.
-- Verifies publication metadata and failure preservation without Godot or Sweden data.
+- Verifies publication metadata, generation identity and failure preservation without Godot or Sweden data.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from build_routing_dataset import DATASET_FORMAT, build_routing_dataset
+from check_routing_dataset import validate_routing_dataset
 from route_geometry import RouteGeometryView
 from routing_graph_view import RoutingGraphView
 
@@ -34,10 +35,28 @@ class RoutingDatasetTests(unittest.TestCase):
             self.assertEqual(report["routing_dataset_format"], DATASET_FORMAT)
             disk_report = json.loads((output / "routing_stats.json").read_text(encoding="utf-8"))
             self.assertEqual(disk_report["routing_dataset_format"], DATASET_FORMAT)
+            self.assertEqual(
+                set(disk_report["routing_dataset_sha256"]),
+                {"routing.brg", "routing_snap.brs", "routing_geometry.brh"},
+            )
+            valid, reason = validate_routing_dataset(output)
+            self.assertTrue(valid, reason)
 
             geometry = RouteGeometryView.load(output / "routing_geometry.brh")
             with RoutingGraphView(output / "routing.brg") as graph:
                 self.assertEqual(geometry.edge_count, len(graph.edges))
+
+    def test_identity_validation_rejects_mixed_generation_payload(self) -> None:
+        fixture = ROOT / "tests" / "fixtures" / "routing_minimal.osm"
+        with tempfile.TemporaryDirectory(prefix="brur-routing-dataset-mixed-") as temp_dir:
+            output = Path(temp_dir)
+            build_routing_dataset(fixture, output)
+            geometry = output / "routing_geometry.brh"
+            geometry.write_bytes(geometry.read_bytes() + b"stale-generation")
+
+            valid, reason = validate_routing_dataset(output)
+            self.assertFalse(valid)
+            self.assertIn("SHA-256 mismatch for routing_geometry.brh", reason)
 
     def test_failed_snap_build_preserves_existing_published_dataset(self) -> None:
         fixture = ROOT / "tests" / "fixtures" / "routing_minimal.osm"
