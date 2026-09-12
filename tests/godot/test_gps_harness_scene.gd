@@ -67,21 +67,33 @@ func _test_route_ribbon_contract(renderer: Node) -> void:
 	var drive_width := float(renderer.call("ribbon_width_m"))
 	var drive_outline_width := float(renderer.call("outline_width_m"))
 	var drive_target_scale := float(renderer.call("target_scale"))
-	_assert(is_equal_approx(drive_width, 12.0), "Drive view keeps a proportionate 12 m GPS ribbon")
+	_assert(is_equal_approx(drive_width, 14.0), "Drive view keeps a slightly stronger but proportionate 14 m GPS ribbon")
 	_assert(drive_outline_width > drive_width, "Drive view keeps a visible contrast outline around the route")
 	_assert(drive_target_scale < 0.1, "Drive view keeps the destination marker compact")
 
 	renderer.call("update_height", 5700.0)
 	var map_width := float(renderer.call("ribbon_width_m"))
 	var map_outline_width := float(renderer.call("outline_width_m"))
-	_assert(map_width >= 40.0, "5-6 km map view makes the GPS route materially wider than rendered roads")
+	_assert(map_width >= 50.0, "5-6 km map view makes the GPS route clearly wider than rendered roads")
 	_assert(map_width > drive_width, "route ribbon grows between drive and map view")
 	_assert(map_outline_width > map_width, "5-6 km map view preserves the contrast outline")
 
 	renderer.call("update_height", 900000.0)
 	var far_width := float(renderer.call("ribbon_width_m"))
 	_assert(far_width > map_width, "route ribbon continues widening for far-map readability")
-	_assert(far_width <= 1200.0, "far-map route width remains bounded")
+	_assert(far_width <= 4200.0, "far-map route width remains bounded")
+
+	# The production camera tops out around 1.4 Mm altitude, which yields a
+	# roughly 1.5 Mm camera distance. Keep the route visible there without
+	# turning it into a country-scale band.
+	renderer.call("update_height", 1500000.0)
+	var max_zoom_width := float(renderer.call("ribbon_width_m"))
+	var max_zoom_outline_width := float(renderer.call("outline_width_m"))
+	_assert(max_zoom_width >= 3500.0, "maximum zoom-out keeps the route visibly scaled")
+	_assert(max_zoom_width <= 4200.0, "maximum zoom-out route core stays capped")
+	_assert(max_zoom_width / 1500000.0 < 0.003, "maximum zoom-out route remains a small fraction of camera distance")
+	_assert(max_zoom_outline_width > max_zoom_width, "maximum zoom-out preserves a visible outline")
+	_assert(max_zoom_outline_width / 1500000.0 < 0.004, "maximum zoom-out outline remains proportionate")
 	_assert(route_mesh_instance.mesh != null and route_mesh_instance.mesh.get_surface_count() == 1, "camera-aware width rebuild keeps valid core ribbon geometry")
 	_assert(outline_mesh_instance.mesh != null and outline_mesh_instance.mesh.get_surface_count() == 1, "camera-aware width rebuild keeps valid outline geometry")
 
