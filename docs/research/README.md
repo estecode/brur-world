@@ -62,6 +62,7 @@ incident
 police_dispatch_and_command_research.md
   ↓
 police_response_research.md
+  ├─ police_vehicle_pursuit_and_stop_research.md
   ↓
 police_investigation_methods_research.md
   ↓
@@ -76,6 +77,7 @@ police_event_chain_research.md
 
 - `police_dispatch_and_command_research.md` — public RLC, priority, dispatch, command and broad Rakel structure.
 - `police_response_research.md` — incident-specific alarm, arrival, scene actions, enforcement and investigative follow-up.
+- `police_vehicle_pursuit_and_stop_research.md` — public legal/risk structure for vehicle-stop attempts, pursuits, regulated stop measures and post-stop transitions; deliberately excludes evasion-relevant tactical detail.
 - `police_investigation_methods_research.md` — aggregate recurring investigation methods: crime-scene work, witnesses, cameras, forensic evidence, digital evidence, suspect development and investigation organization.
 - `police_post_incident_and_prevention_research.md` — reassurance presence, special-command forms, linked-conflict response, GVI, prevention and exit/support pathways.
 - `police_event_chain_research.md` — cross-file chain model connecting incident → police response → evidence → suspect/legal outcome → later consequences; this is the main index for proving event sequences without duplicating evidence.
