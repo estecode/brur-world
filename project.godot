@@ -1,6 +1,6 @@
 [application]
-config/name="Brur World POC — 30 km to Street #126"
-run/main_scene="res://harness/world_showcase/world_showcase.tscn"
+config/name="Brur World POC"
+run/main_scene="res://scenes/main.tscn"
 
 [display]
 window/size/viewport_width=1280
