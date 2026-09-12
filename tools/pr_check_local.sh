@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs only expensive local real-data checks whose owned subsystem changed in this PR.
+# Runs only expensive local real-data checks whose owned subsystem changed, then opens the exact PR runtime for any requested human review.
 # Dependencies: changed-file scope from pr_check.sh, existing local world_data, and source/build tools only for scopes that require them.
 set -euo pipefail
 
@@ -36,7 +36,6 @@ fi
 
 if [[ "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=NO_EXPENSIVE_LOCAL_PREPARATION pr=%s\n' "$BRUR_PR_CHECK_PR"
-  exit 0
 fi
 
 resolve_sweden_pbf() {
