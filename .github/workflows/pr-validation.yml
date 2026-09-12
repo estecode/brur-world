@@ -36,7 +36,9 @@ jobs:
         run: python -m unittest tests.test_traffic_signals
 
       - name: Run building tile derivation tests
-        run: python -m unittest tests.test_building_tiles
+        run: |
+          python -m unittest tests.test_building_tiles
+          python -m unittest tests.test_building_runtime_composition
 
       - name: Run world showcase cache preparation tests
         run: python -m unittest tests.test_world_showcase_prepare
