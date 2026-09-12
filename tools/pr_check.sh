@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Validates an exact PR revision against local production data before launching Godot only when a human check remains.
-# Dependencies: git, GitHub CLI auth, Python 3, tools/pr_check_scope.py, tools/pr_check_status.py, tools/run_pr_owned_check.sh, a local Godot executable, a C++20 compiler, ignored world_data, and Sweden PBF for stale/invalid routing rebuilds.
+# Validates an exact PR revision while rebuilding only local artifacts relevant to the changed scope.
+# Dependencies: git, GitHub CLI auth, Python 3, project PR-check helpers, Godot, ignored world_data, and source data only when a required artifact must be rebuilt.
 set -euo pipefail
 
 PR="${1:-}"
@@ -80,7 +80,6 @@ fi
 ensure_runtime_ports_free() {
   "$PYTHON_BIN" - <<'PY'
 import socket
-
 ports = (47741, 47742)
 occupied = []
 for port in ports:
@@ -91,12 +90,11 @@ for port in ports:
             occupied.append(port)
     finally:
         sock.close()
-
 if occupied:
-    joined = ", ".join(str(port) for port in occupied)
     print(
-        f"PR_CHECK=FAIL GPS runtime port(s) already in use: {joined}. "
-        "Close any existing Brur World/Godot instance or native GPS server, then run Safe Check again."
+        "PR_CHECK=FAIL GPS runtime port(s) already in use: "
+        + ", ".join(str(port) for port in occupied)
+        + ". Close any existing Brur World/Godot instance or native GPS server, then run Safe Check again."
     )
     raise SystemExit(1)
 PY
@@ -112,7 +110,6 @@ routing_dataset_ready() {
   "$PYTHON_BIN" - "$WORLD_DATA/routing_stats.json" <<'PY'
 import json
 import sys
-
 try:
     report = json.load(open(sys.argv[1], encoding="utf-8"))
 except (OSError, ValueError):
@@ -121,16 +118,19 @@ raise SystemExit(0 if report.get("routing_dataset_format") == "BRG1+BRS2+BRH1" e
 PY
 }
 
+native_gps_ready() {
+  [[ -x "$ROOT/bin/brur-gps-native" ]] || return 1
+  [[ -x "$ROOT/bin/brur-gps-route" ]] || return 1
+  [[ -x "$ROOT/bin/brur-gps-server" ]] || return 1
+  [[ -x "$ROOT/bin/brur-gps-search-server" ]] || return 1
+}
+
 resolve_sweden_pbf() {
   if [[ -n "${BRUR_WORLD_PBF:-}" ]]; then
-    [[ -f "$BRUR_WORLD_PBF" ]] || {
-      printf 'PR_CHECK=FAIL BRUR_WORLD_PBF does not exist\n' >&2
-      return 1
-    }
+    [[ -f "$BRUR_WORLD_PBF" ]] || { printf 'PR_CHECK=FAIL BRUR_WORLD_PBF does not exist\n' >&2; return 1; }
     printf '%s\n' "$BRUR_WORLD_PBF"
     return 0
   fi
-
   local data_dir candidate
   data_dir="$(cd "$ROOT/.." && pwd)/data"
   candidate="$(find "$data_dir" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n 1)"
@@ -142,14 +142,20 @@ resolve_sweden_pbf() {
 }
 
 rebuild_routing_dataset() {
-  [[ -f "$TMP/tools/build_routing_dataset.py" ]] || {
-    printf 'PR_CHECK=FAIL PR has no routing dataset builder\n' >&2
-    return 1
-  }
+  [[ -f "$TMP/tools/build_routing_dataset.py" ]] || { printf 'PR_CHECK=FAIL PR has no routing dataset builder\n' >&2; return 1; }
   local pbf
   pbf="$(resolve_sweden_pbf)"
   printf 'PR_CHECK=BUILD_ROUTING_DATASET pr=%s source=%s\n' "$PR" "$(basename "$pbf")"
   "$PYTHON_BIN" "$TMP/tools/build_routing_dataset.py" "$pbf" --output "$WORLD_DATA"
+}
+
+scope_decision() {
+  local scope="$1" decision
+  decision="$(printf '%s\n' "$CHANGED_FILES" | "$PYTHON_BIN" "$ROOT/tools/pr_check_scope.py" "$scope")"
+  case "$decision" in
+    required|skip) printf '%s\n' "$decision" ;;
+    *) printf 'PR_CHECK=FAIL invalid %s scope decision: %s\n' "$scope" "$decision" >&2; return 70 ;;
+  esac
 }
 
 CURRENT_STAGE="runtime-ports"
@@ -169,14 +175,9 @@ git -C "$ROOT" fetch --quiet origin main:refs/remotes/origin/main
 MAIN_HEAD="$(git -C "$ROOT" rev-parse refs/remotes/origin/main)"
 PR_BASE="$(git -C "$ROOT" merge-base "$MAIN_HEAD" "$PR_HEAD")"
 CHANGED_FILES="$(git -C "$ROOT" diff --name-only "$PR_BASE" "$PR_HEAD")"
-ROUTE_GEOMETRY_SCOPE="$(printf '%s\n' "$CHANGED_FILES" | "$PYTHON_BIN" "$ROOT/tools/pr_check_scope.py" route-geometry)"
-case "$ROUTE_GEOMETRY_SCOPE" in
-  required|skip) ;;
-  *)
-    printf 'PR_CHECK=FAIL invalid route-geometry scope decision: %s\n' "$ROUTE_GEOMETRY_SCOPE" >&2
-    exit 70
-    ;;
-esac
+ROUTE_GEOMETRY_SCOPE="$(scope_decision route-geometry)"
+NATIVE_GPS_SCOPE="$(scope_decision native-gps)"
+export BRUR_PR_CHECK_CHANGED_FILES="$CHANGED_FILES"
 
 CURRENT_STAGE="prepare-worktree"
 git -C "$ROOT" worktree add --quiet --detach "$TMP" "$PR_HEAD"
@@ -192,8 +193,17 @@ ln -s "$WORLD_DATA" "$TMP/world_data"
 
 CURRENT_STAGE="native-gps"
 if [[ -f "$TMP/tools/build_native_gps.sh" ]]; then
-  printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s\n' "$PR"
-  bash "$TMP/tools/build_native_gps.sh"
+  if [[ "$NATIVE_GPS_SCOPE" == "required" ]]; then
+    printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s reason=relevant-changes\n' "$PR"
+    bash "$TMP/tools/build_native_gps.sh"
+  elif native_gps_ready; then
+    rm -rf "$TMP/bin"
+    ln -s "$ROOT/bin" "$TMP/bin"
+    printf 'PR_CHECK=SKIP_NATIVE_GPS_BUILD pr=%s reason=reuse-existing-binaries\n' "$PR"
+  else
+    printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s reason=missing-existing-binaries\n' "$PR"
+    bash "$TMP/tools/build_native_gps.sh"
+  fi
 fi
 
 CURRENT_STAGE="route-geometry"
