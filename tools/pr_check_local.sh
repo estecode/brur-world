@@ -57,7 +57,7 @@ PY
 run_godot_test() {
   local script="$1"
   local log status
-  log="$(mktemp "${TMPDIR:-/tmp}/brur-world-showcase-test.XXXXXX.log")"
+  log="$(mktemp "${TMPDIR:-/tmp}/brur-world-test.XXXXXX.log")"
   set +e
   "$GODOT" --headless --path "$WORKTREE" --script "$script" 2>&1 | tee "$log"
   status=${PIPESTATUS[0]}
@@ -67,7 +67,42 @@ run_godot_test() {
     rm -f "$log"
     return 1
   fi
-  if grep -Eq 'SCRIPT ERROR:|Failed to load script|world (streaming foundation|showcase) test failed:' "$log"; then
+  if grep -Eq 'SCRIPT ERROR:|Failed to load script|world (streaming foundation|showcase) test failed:|road-surface real-data test failed:' "$log"; then
+    printf 'PR_CHECK=FAIL Godot reported script/test errors for %s\n' "$script" >&2
+    rm -f "$log"
+    return 1
+  fi
+  rm -f "$log"
+}
+
+run_godot_window_test() {
+  local script="$1"
+  local log status
+  log="$(mktemp "${TMPDIR:-/tmp}/brur-world-window-test.XXXXXX.log")"
+  set +e
+  "$PYTHON" - "$GODOT" "$WORKTREE" "$script" "$log" <<'PY'
+import subprocess
+import sys
+
+command = [sys.argv[1], "--path", sys.argv[2], "--script", sys.argv[3]]
+log_path = sys.argv[4]
+try:
+    with open(log_path, "w", encoding="utf-8") as log:
+        proc = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, text=True, timeout=45)
+    raise SystemExit(proc.returncode)
+except subprocess.TimeoutExpired:
+    print(f"PR_CHECK=FAIL Godot timed out after 45s for {sys.argv[3]}", file=sys.stderr)
+    raise SystemExit(124)
+PY
+  status=$?
+  cat "$log"
+  set -e
+  if [[ $status -ne 0 ]]; then
+    printf 'PR_CHECK=FAIL Godot exited %d for %s\n' "$status" "$script" >&2
+    rm -f "$log"
+    return 1
+  fi
+  if grep -Eq 'SCRIPT ERROR:|Failed to load script|production FPS real-data test failed:' "$log"; then
     printf 'PR_CHECK=FAIL Godot reported script/test errors for %s\n' "$script" >&2
     rm -f "$log"
     return 1
@@ -78,3 +113,7 @@ run_godot_test() {
 printf 'PR_CHECK=CHECK_WORLD_SHOWCASE_HEADLESS pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_test res://tests/godot/test_world_streaming_foundation.gd
 run_godot_test res://tests/godot/test_world_showcase.gd
+printf 'PR_CHECK=CHECK_ROAD_SURFACE_REAL_DATA pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
+run_godot_test res://tests/godot/test_road_surface_query_real_data.gd
+printf 'PR_CHECK=CHECK_PRODUCTION_FPS_REAL_DATA pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
+run_godot_window_test res://tests/godot/test_production_fps_real_data.gd

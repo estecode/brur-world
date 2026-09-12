@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validates an exact PR revision against local production data before launching Godot for any remaining human check.
+# Validates an exact PR revision against local production data before launching Godot only when a human check remains.
 # Dependencies: git, GitHub CLI auth, Python 3, tools/pr_check_scope.py, tools/pr_check_status.py, tools/run_pr_owned_check.sh, a local Godot executable, a C++20 compiler, ignored world_data, and Sweden PBF for stale/invalid routing rebuilds.
 set -euo pipefail
 
@@ -219,9 +219,4 @@ CURRENT_STAGE="objective-checks-complete"
   --pr "$PR" --sha "$PR_HEAD" --state success --stage "$CURRENT_STAGE"
 AUTOMATED_SUCCESS=1
 printf 'PR_CHECK=STATUS success pr=%s revision=%s\n' "$PR" "${PR_HEAD:0:12}"
-
-printf 'PR_CHECK=RUN pr=%s revision=%s\n' "$PR" "$(git -C "$TMP" rev-parse --short HEAD)"
-printf 'Automated local checks are persisted on GitHub. Any remaining Godot judgment is a separate human result.\n'
-printf 'Close Godot when the check is complete; the temporary checkout will then be removed automatically.\n'
-CURRENT_STAGE="human-godot-session"
-"$GODOT" --path "$TMP"
+printf 'PR_CHECK=DONE pr=%s revision=%s objective_checks=success\n' "$PR" "${PR_HEAD:0:12}"
