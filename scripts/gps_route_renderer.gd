@@ -18,7 +18,7 @@ var _route_material: StandardMaterial3D
 var _target_marker: MeshInstance3D
 var _route_points := PackedVector3Array()
 var _rendered_point_count := 0
-var _ribbon_width_m := 12.0
+var _ribbon_width_m := 14.0
 
 func _ready() -> void: _ensure_visuals()
 func setup(to_world: Callable) -> void:
@@ -116,15 +116,16 @@ func update_height(camera_distance: float) -> void:
 		_set_route_height(1.0)
 		_target_marker.position.y = 4.0
 		_target_marker.scale = Vector3.ONE * 0.04
-		_set_ribbon_width(12.0)
+		_set_ribbon_width(14.0)
 		return
 	var spacing := clampf(camera_distance / 6000.0, 4.0, 240.0)
 	_set_route_height(spacing * 7.0)
 	_target_marker.position.y = _route_mesh_instance.position.y + maxf(90.0, spacing)
 	_target_marker.scale = Vector3.ONE * clampf(camera_distance / 30000.0, 1.0, 20.0)
-	# Keep the route materially wider than the widest rendered road once we are
-	# in map view, then scale it with zoom so it stays GPS-readable from above.
-	_set_ribbon_width(clampf(24.0 + camera_distance / 300.0, 28.0, 1200.0))
+	# Keep the route slightly generous through normal map zooms, then continue
+	# scaling into the full-country view while capping it to a small fraction of
+	# the visible world span instead of letting it become a giant band.
+	_set_ribbon_width(clampf(30.0 + camera_distance / 220.0, 34.0, 4200.0))
 
 func _set_route_height(height_m: float) -> void:
 	_route_outline_instance.position.y = height_m
@@ -138,7 +139,7 @@ func _set_ribbon_width(wanted_width: float) -> void:
 func route_height() -> float: _ensure_visuals(); return _route_mesh_instance.position.y
 func rendered_point_count() -> int: return _rendered_point_count
 func ribbon_width_m() -> float: return _ribbon_width_m
-func outline_width_m() -> float: return _ribbon_width_m + clampf(_ribbon_width_m * 0.3, 8.0, 120.0)
+func outline_width_m() -> float: return _ribbon_width_m + clampf(_ribbon_width_m * 0.35, 10.0, 900.0)
 func target_scale() -> float: _ensure_visuals(); return _target_marker.scale.x
 
 func _route_overlay_material(color: Color, priority: int) -> StandardMaterial3D:
