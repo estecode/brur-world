@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Verifies that PR-owned local objective checks run from the exact worktree and fail closed.
-# Dependencies: bash, mktemp, grep, tools/run_pr_owned_check.sh, tools/pr_check.sh, and tests/test_pr_check_entry.sh.
+# Verifies that PR-owned local objective checks run from the exact worktree, fail closed, and do not skip requested visual review after scoped preparation.
+# Dependencies: bash, mktemp, grep, tools/run_pr_owned_check.sh, tools/pr_check.sh, tools/pr_check_local.sh, and tests/test_pr_check_entry.sh.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,6 +47,17 @@ success_line="$(grep -n -- '--state success' "$ROOT/tools/pr_check.sh" | head -n
   printf 'PR-owned hook must run before persistent success is recorded\n' >&2
   exit 1
 }
+
+no_prep_line="$(grep -n 'PR_CHECK=NO_EXPENSIVE_LOCAL_PREPARATION' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
+visual_line="$(grep -n 'PR_CHECK=VISUAL_REVIEW pr=' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
+[[ -n "$no_prep_line" && -n "$visual_line" && "$no_prep_line" -lt "$visual_line" ]] || {
+  printf 'generic Safe Check must continue from no-expensive-preparation to visual review\n' >&2
+  exit 1
+}
+if sed -n "${no_prep_line},${visual_line}p" "$ROOT/tools/pr_check_local.sh" | grep -Eq '^[[:space:]]*exit 0[[:space:]]*$'; then
+  printf 'generic Safe Check must not exit before requested visual review\n' >&2
+  exit 1
+fi
 
 bash "$ROOT/tests/test_pr_check_entry.sh"
 printf 'pr-owned check hook tests passed\n'
