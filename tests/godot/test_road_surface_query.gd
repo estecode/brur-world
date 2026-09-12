@@ -49,13 +49,15 @@ func _test_dense_tile_candidate_reduction() -> void:
 	_assert(int(metrics["segments_checked"]) < 50, "dense tile query checks only local spatial candidates")
 
 func _test_long_diagonal_index_is_linear() -> void:
-	_write_tile(Vector2i(2, 0), [
+	# Keep this fixture outside the 3x3 neighborhood of the dense-tile fixture so
+	# index-entry accounting measures only the long segment under test.
+	_write_tile(Vector2i(4, 0), [
 		{"class": 0, "a": Vector2(100.0, 100.0), "b": Vector2(30000.0, 30000.0)},
 	])
 	var coordinates = WorldCoordinatesScript.new(Vector2.ZERO, 32000.0)
 	var query = RoadSurfaceQueryScript.new()
 	query.setup(_root_dir, coordinates)
-	var probe_absolute := Vector2(64100.0, 100.0)
+	var probe_absolute := Vector2(128100.0, 100.0)
 	query.surface_at(coordinates.absolute_to_world(probe_absolute))
 	var metrics: Dictionary = query.consume_perf_metrics()
 	_assert(int(metrics["index_entries"]) < 10000, "long diagonal indexing grows with segment length instead of its full AABB area")
