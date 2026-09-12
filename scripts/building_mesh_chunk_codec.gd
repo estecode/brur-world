@@ -1,7 +1,7 @@
 extends RefCounted
 class_name BuildingMeshChunkCodec
 
-## Decodes and combines prebuilt binary building render chunks off the presentation path.
+## Decodes prebuilt binary building render chunks off the presentation path.
 ##
 ## Dependencies:
 ## - Consumes only the BUILDING_MESH_LOD BMC1 binary format from the offline builder.
@@ -61,9 +61,9 @@ static func decode_file(path: String) -> Dictionary:
 		"vertices": vertex_count,
 	}
 
-static func combine_chunks(specs: Array, cached_chunks: Dictionary) -> Dictionary:
+static func stage_chunks(specs: Array, cached_chunks: Dictionary) -> Dictionary:
 	var decoded_chunks: Dictionary = {}
-	var chunks: Array[Dictionary] = []
+	var render_chunks: Array = []
 	var total_vertices := 0
 	var total_bytes := 0
 	var cache_hits := 0
@@ -88,31 +88,17 @@ static func combine_chunks(specs: Array, cached_chunks: Dictionary) -> Dictionar
 			decoded_chunks[key] = chunk
 		total_vertices += int(chunk.get("vertices", 0))
 		total_bytes += int(chunk.get("bytes", 0))
-		chunks.append({"chunk": chunk, "origin_world": spec.get("origin_world", Vector3.ZERO)})
-
-	var positions := PackedVector3Array()
-	var normals := PackedVector3Array()
-	var colors := PackedColorArray()
-	positions.resize(total_vertices)
-	normals.resize(total_vertices)
-	colors.resize(total_vertices)
-	var cursor := 0
-	for entry in chunks:
-		var chunk: Dictionary = entry["chunk"]
-		var origin_world: Vector3 = entry["origin_world"]
-		var chunk_positions: PackedVector3Array = chunk["positions"]
-		var chunk_normals: PackedVector3Array = chunk["normals"]
-		var chunk_colors: PackedColorArray = chunk["colors"]
-		for index in range(chunk_positions.size()):
-			positions[cursor] = chunk_positions[index] + origin_world
-			normals[cursor] = chunk_normals[index]
-			colors[cursor] = chunk_colors[index]
-			cursor += 1
+		render_chunks.append({
+			"key": key,
+			"positions": chunk.get("positions", PackedVector3Array()),
+			"normals": chunk.get("normals", PackedVector3Array()),
+			"colors": chunk.get("colors", PackedColorArray()),
+			"origin_world": spec.get("origin_world", Vector3.ZERO),
+			"vertices": int(chunk.get("vertices", 0)),
+		})
 	return {
 		"ok": true,
-		"positions": positions,
-		"normals": normals,
-		"colors": colors,
+		"render_chunks": render_chunks,
 		"decoded_chunks": decoded_chunks,
 		"vertices": total_vertices,
 		"bytes": total_bytes,
@@ -120,10 +106,40 @@ static func combine_chunks(specs: Array, cached_chunks: Dictionary) -> Dictionar
 		"cache_misses": cache_misses,
 	}
 
-static func arrays_for_mesh(stage: Dictionary) -> Array:
+static func combine_chunks(specs: Array, cached_chunks: Dictionary) -> Dictionary:
+	# Kept as a deterministic/reference helper for tests and tooling. Production
+	# presentation uses stage_chunks() so it never creates one giant viewport array.
+	var staged := stage_chunks(specs, cached_chunks)
+	if staged.get("ok", false) != true:
+		return staged
+	var total_vertices := int(staged.get("vertices", 0))
+	var positions := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var colors := PackedColorArray()
+	positions.resize(total_vertices)
+	normals.resize(total_vertices)
+	colors.resize(total_vertices)
+	var cursor := 0
+	for entry_value in staged.get("render_chunks", []):
+		var entry: Dictionary = entry_value
+		var origin_world: Vector3 = entry.get("origin_world", Vector3.ZERO)
+		var chunk_positions: PackedVector3Array = entry.get("positions", PackedVector3Array())
+		var chunk_normals: PackedVector3Array = entry.get("normals", PackedVector3Array())
+		var chunk_colors: PackedColorArray = entry.get("colors", PackedColorArray())
+		for index in range(chunk_positions.size()):
+			positions[cursor] = chunk_positions[index] + origin_world
+			normals[cursor] = chunk_normals[index]
+			colors[cursor] = chunk_colors[index]
+			cursor += 1
+	staged["positions"] = positions
+	staged["normals"] = normals
+	staged["colors"] = colors
+	return staged
+
+static func arrays_for_mesh(data: Dictionary) -> Array:
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = stage.get("positions", PackedVector3Array())
-	arrays[Mesh.ARRAY_NORMAL] = stage.get("normals", PackedVector3Array())
-	arrays[Mesh.ARRAY_COLOR] = stage.get("colors", PackedColorArray())
+	arrays[Mesh.ARRAY_VERTEX] = data.get("positions", PackedVector3Array())
+	arrays[Mesh.ARRAY_NORMAL] = data.get("normals", PackedVector3Array())
+	arrays[Mesh.ARRAY_COLOR] = data.get("colors", PackedColorArray())
 	return arrays
