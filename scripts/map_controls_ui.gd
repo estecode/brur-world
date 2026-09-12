@@ -25,6 +25,7 @@ func _ready() -> void:
 	_gps_route_layer = get_node_or_null(gps_route_layer_path)
 	_camera_rig = get_node_or_null(camera_rig_path)
 	_build_ui()
+	_on_poi_toggled(false)
 	if _gps_route_layer != null and _gps_route_layer.has_signal("teleport_state_changed"):
 		_gps_route_layer.connect("teleport_state_changed", set_teleport_armed)
 	if _camera_rig != null and _camera_rig.has_signal("map_follow_changed"):
@@ -67,7 +68,7 @@ func _build_ui() -> void:
 
 	_poi_toggle = CheckButton.new()
 	_poi_toggle.text = "Show POIs"
-	_poi_toggle.button_pressed = true
+	_poi_toggle.button_pressed = false
 	_poi_toggle.tooltip_text = "Hide/show POI markers and hover only; POI search stays available"
 	_poi_toggle.toggled.connect(_on_poi_toggled)
 	row.add_child(_poi_toggle)
