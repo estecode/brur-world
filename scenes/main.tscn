@@ -31,6 +31,8 @@ near = 10.0
 far = 2000000.0
 
 [node name="CloudField" type="MultiMeshInstance3D" parent="."]
+process_mode = 4
+visible = false
 script = ExtResource("13_clouds")
 
 [node name="PoiLayer" type="Node3D" parent="."]
