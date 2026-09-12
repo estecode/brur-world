@@ -1,14 +1,16 @@
 extends Node3D
 class_name BuildingStreamLayer
 
-## Streams batched building tiles with bounded work, hysteresis, directional prefetch, and metrics.
+## Streams camera-visible batched building tiles with altitude LOD, bounded work, hysteresis, and metrics.
 ##
 ## Dependencies:
+## - building_lod_policy.gd selects building detail from altitude and footprint size.
 ## - building_mesh_builder.gd builds tile-local meshes from existing OSM-derived building records.
 ## - world_coordinates.gd is supplied explicitly by composition and remains the coordinate owner.
 ## - world_stream_request.gd carries camera demand without owning layer policy.
 ## - Composition supplies a camera rig and an explicit directory containing tile JSONL building records.
 
+const BuildingLodPolicyScript = preload("res://scripts/building_lod_policy.gd")
 const BuildingMeshBuilderScript = preload("res://scripts/building_mesh_builder.gd")
 const WorldStreamRequestScript = preload("res://scripts/world_stream_request.gd")
 
@@ -18,9 +20,11 @@ const STATE_READY := "ready"
 const STATE_VISIBLE := "visible"
 
 @export var active_radius_tiles: int = 1
+@export var max_view_radius_tiles: int = 4
+@export var view_margin_tiles: int = 1
 @export var builds_per_frame: int = 1
 @export var build_budget_ms: float = 4.0
-@export var max_pending_tiles: int = 24
+@export var max_pending_tiles: int = 96
 @export var prefetch_tiles_ahead: int = 1
 @export var appear_altitude_m: float = 14000.0
 @export var hide_altitude_m: float = 15000.0
@@ -38,6 +42,8 @@ var _wanted: Dictionary = {}
 var _tile_states: Dictionary = {}
 var _tile_record_counts: Dictionary = {}
 var _last_center_tile := Vector2i(999999, 999999)
+var _last_view_radius_tiles := -1
+var _last_lod := -1
 var _last_visible := false
 var _last_focus_world := Vector3.ZERO
 var _has_last_focus := false
@@ -77,6 +83,8 @@ func set_streaming_enabled(enabled: bool) -> void:
 	if not enabled:
 		_last_visible = false
 		_last_center_tile = Vector2i(999999, 999999)
+		_last_view_radius_tiles = -1
+		_last_lod = -1
 		_clear_all()
 		return
 	if _coordinates == null or _camera_rig == null:
@@ -113,15 +121,23 @@ func _refresh(request, force: bool) -> void:
 	var became_visible: bool = not _last_visible
 	_last_visible = true
 	var center_tile: Vector2i = _coordinates.world_to_tile(request.focus_world)
+	var view_radius_tiles := _view_radius_tiles(center_tile)
+	var lod: int = BuildingLodPolicyScript.choose_lod(request.altitude_m)
 	var prefetch_offset: Vector2i = _prefetch_offset(request)
-	if not force and not became_visible and center_tile == _last_center_tile and prefetch_offset == Vector2i.ZERO:
+	var lod_changed := _last_lod != -1 and lod != _last_lod
+	if lod_changed:
+		_clear_all()
+	if not force and not became_visible and not lod_changed and center_tile == _last_center_tile and view_radius_tiles == _last_view_radius_tiles and prefetch_offset == Vector2i.ZERO:
 		return
 	_last_center_tile = center_tile
+	_last_view_radius_tiles = view_radius_tiles
+	_last_lod = lod
 	_wanted.clear()
 	var ordered: Array[Vector2i] = []
-	_append_tile_square(ordered, center_tile, active_radius_tiles)
+	_append_tile_square(ordered, center_tile, view_radius_tiles)
 	if prefetch_offset != Vector2i.ZERO:
-		_append_tile_square(ordered, center_tile + prefetch_offset, active_radius_tiles)
+		_append_tile_square(ordered, center_tile + prefetch_offset, view_radius_tiles)
+	_sort_tiles_nearest_first(ordered, center_tile)
 
 	for tile in ordered:
 		var path := _tile_path(tile)
@@ -146,6 +162,29 @@ func _refresh(request, force: bool) -> void:
 		else:
 			_tile_states.erase(pending_tile)
 	_pending = retained
+
+func _view_radius_tiles(center_tile: Vector2i) -> int:
+	var minimum_radius := maxi(0, active_radius_tiles)
+	var maximum_radius := maxi(minimum_radius, max_view_radius_tiles)
+	if _camera_rig == null or not _camera_rig.has_method("get_ground_view_corners"):
+		return minimum_radius
+	var corners: Variant = _camera_rig.call("get_ground_view_corners")
+	if not (corners is PackedVector3Array) and not (corners is Array):
+		return minimum_radius
+	var radius := minimum_radius
+	var has_corner := false
+	for corner_value in corners:
+		if not (corner_value is Vector3):
+			continue
+		var corner: Vector3 = corner_value
+		if not corner.is_finite():
+			continue
+		has_corner = true
+		var tile: Vector2i = _coordinates.world_to_tile(corner)
+		radius = maxi(radius, absi(tile.x - center_tile.x), absi(tile.y - center_tile.y))
+	if has_corner:
+		radius += maxi(0, view_margin_tiles)
+	return mini(radius, maximum_radius)
 
 func _visibility_with_hysteresis(altitude_m: float) -> bool:
 	if _last_visible:
@@ -173,6 +212,15 @@ func _append_tile_square(target: Array[Vector2i], center: Vector2i, radius: int)
 			if not target.has(tile):
 				target.append(tile)
 
+func _sort_tiles_nearest_first(tiles: Array[Vector2i], center: Vector2i) -> void:
+	tiles.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		var da := absi(a.x - center.x) + absi(a.y - center.y)
+		var db := absi(b.x - center.x) + absi(b.y - center.y)
+		if da == db:
+			return a.y < b.y if a.y != b.y else a.x < b.x
+		return da < db
+	)
+
 func _process_pending() -> void:
 	var built := 0
 	var frame_started := Time.get_ticks_usec()
@@ -184,7 +232,7 @@ func _process_pending() -> void:
 			continue
 		_tile_states[tile] = STATE_PREPARING
 		var started := Time.get_ticks_usec()
-		var build_result := _build_tile(tile)
+		var build_result := _build_tile(tile, _last_lod)
 		var elapsed := float(Time.get_ticks_usec() - started) / 1000.0
 		_perf_build_ms += elapsed
 		_perf_build_max_ms = maxf(_perf_build_max_ms, elapsed)
@@ -204,21 +252,24 @@ func _process_pending() -> void:
 func _elapsed_ms(started_usec: int) -> float:
 	return float(Time.get_ticks_usec() - started_usec) / 1000.0
 
-func _build_tile(tile: Vector2i) -> Dictionary:
+func _build_tile(tile: Vector2i, lod: int) -> Dictionary:
 	var records := _read_tile_records(_tile_path(tile))
 	if records.is_empty():
 		return {"instance": null, "records": 0}
+	var visible_records: Array = BuildingLodPolicyScript.filter_records(records, lod)
+	if visible_records.is_empty():
+		return {"instance": null, "records": 0}
 	var tile_origin_absolute: Vector2 = _coordinates.tile_origin_absolute(tile)
-	var mesh: ArrayMesh = BuildingMeshBuilderScript.build_tile_mesh(records, tile_origin_absolute)
+	var mesh: ArrayMesh = BuildingMeshBuilderScript.build_tile_mesh(visible_records, tile_origin_absolute)
 	if mesh == null:
-		return {"instance": null, "records": records.size()}
+		return {"instance": null, "records": visible_records.size()}
 	var instance := MeshInstance3D.new()
-	instance.name = "Buildings_%s" % _coordinates.tile_identity(tile).replace(":", "_")
+	instance.name = "Buildings_%s_L%d" % [_coordinates.tile_identity(tile).replace(":", "_"), lod]
 	instance.mesh = mesh
 	instance.material_override = _material
 	instance.position = _coordinates.tile_origin_world(tile, base_height_m)
 	instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	return {"instance": instance, "records": records.size()}
+	return {"instance": instance, "records": visible_records.size()}
 
 func _read_tile_records(path: String) -> Array:
 	var result: Array = []
@@ -293,6 +344,8 @@ func debug_snapshot() -> Dictionary:
 		"wanted_tiles": _wanted.size(),
 		"active_tile_ids": ids,
 		"active_records": records,
+		"building_lod": _last_lod,
+		"view_radius_tiles": _last_view_radius_tiles,
 		"last_center_tile": _coordinates.tile_identity(_last_center_tile) if _coordinates != null else "",
 	}
 
