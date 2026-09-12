@@ -4,12 +4,13 @@ class_name BuildingMeshChunkCodec
 ## Decodes prebuilt binary building render chunks off the presentation path.
 ##
 ## Dependencies:
-## - Consumes only the BUILDING_MESH_LOD BMC1 binary format from the offline builder.
+## - Consumes only the BUILDING_MESH_LOD BMC2 binary format from the offline builder.
 ## - Owns no camera, SceneTree, material, or world-streaming policy.
 
-const MAGIC := "BMC1"
-const FORMAT_VERSION := 1
+const MAGIC := "BMC2"
+const FORMAT_VERSION := 2
 const HEADER_BYTES := 12
+const RECORD_BYTES := 12
 const VERTEX_BYTES := 28
 const MAX_MESH_BATCH_VERTICES := 12000
 
@@ -24,9 +25,6 @@ static func decode_file(path: String) -> Dictionary:
 	if version != FORMAT_VERSION:
 		return {"ok": false, "error": "bad-version", "bytes": bytes.size()}
 	var vertex_count := int(bytes.decode_u32(8))
-	var expected := HEADER_BYTES + vertex_count * VERTEX_BYTES
-	if expected != bytes.size():
-		return {"ok": false, "error": "size-mismatch", "bytes": bytes.size(), "vertices": vertex_count}
 
 	var positions := PackedVector3Array()
 	var normals := PackedVector3Array()
@@ -35,24 +33,38 @@ static func decode_file(path: String) -> Dictionary:
 	normals.resize(vertex_count)
 	colors.resize(vertex_count)
 	var offset := HEADER_BYTES
-	for index in range(vertex_count):
-		positions[index] = Vector3(
-			bytes.decode_float(offset),
-			bytes.decode_float(offset + 4),
-			bytes.decode_float(offset + 8)
-		)
-		normals[index] = Vector3(
-			bytes.decode_float(offset + 12),
-			bytes.decode_float(offset + 16),
-			bytes.decode_float(offset + 20)
-		)
-		colors[index] = Color8(
-			int(bytes[offset + 24]),
-			int(bytes[offset + 25]),
-			int(bytes[offset + 26]),
-			int(bytes[offset + 27])
-		)
-		offset += VERTEX_BYTES
+	var cursor := 0
+	while offset < bytes.size():
+		if offset + RECORD_BYTES > bytes.size():
+			return {"ok": false, "error": "short-record-header", "bytes": bytes.size(), "vertices": vertex_count}
+		var record_x := bytes.decode_float(offset)
+		var record_z := bytes.decode_float(offset + 4)
+		var record_vertices := int(bytes.decode_u32(offset + 8))
+		offset += RECORD_BYTES
+		var record_size := record_vertices * VERTEX_BYTES
+		if record_vertices < 0 or offset + record_size > bytes.size() or cursor + record_vertices > vertex_count:
+			return {"ok": false, "error": "record-size-mismatch", "bytes": bytes.size(), "vertices": vertex_count}
+		for _index in range(record_vertices):
+			positions[cursor] = Vector3(
+				bytes.decode_float(offset) + record_x,
+				bytes.decode_float(offset + 4),
+				bytes.decode_float(offset + 8) + record_z
+			)
+			normals[cursor] = Vector3(
+				bytes.decode_float(offset + 12),
+				bytes.decode_float(offset + 16),
+				bytes.decode_float(offset + 20)
+			)
+			colors[cursor] = Color8(
+				int(bytes[offset + 24]),
+				int(bytes[offset + 25]),
+				int(bytes[offset + 26]),
+				int(bytes[offset + 27])
+			)
+			offset += VERTEX_BYTES
+			cursor += 1
+	if offset != bytes.size() or cursor != vertex_count:
+		return {"ok": false, "error": "vertex-count-mismatch", "bytes": bytes.size(), "vertices": vertex_count}
 	return {
 		"ok": true,
 		"positions": positions,
