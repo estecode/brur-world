@@ -79,24 +79,16 @@ printf 'PR_CHECK=CHECK_WORLD_SHOWCASE_HEADLESS pr=%s\n' "${BRUR_PR_CHECK_PR:?}"
 run_godot_test res://tests/godot/test_world_streaming_foundation.gd
 run_godot_test res://tests/godot/test_world_showcase.gd
 
-# Diagnostic #136: objective checks above use untouched production code. Only the
-# disposable human-run worktree is changed so road tiles never enter the scene.
+# Diagnostic #136: after objective checks pass, remove road refresh only in the
+# disposable exact-PR worktree used by the human FPS A/B.
 "$PYTHON" - "$WORKTREE/scripts/main.gd" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
-needle = "func _refresh_tiles(force: bool) -> void:\n\tvar started_usec: int = Time.get_ticks_usec()"
-replacement = (
-    "func _refresh_tiles(force: bool) -> void:\n"
-    "\t# Diagnostic #136: road streaming/rendering disabled for FPS A/B.\n"
-    "\treturn\n"
-    "\tvar started_usec: int = Time.get_ticks_usec()"
-)
-if text.count(needle) != 1:
-    print("PR_CHECK=FAIL roads-off diagnostic could not find _refresh_tiles entry")
-    raise SystemExit(1)
-path.write_text(text.replace(needle, replacement), encoding="utf-8")
+text = text.replace("\t_refresh_tiles(true)\n", "\t# Diagnostic #136: road tiles disabled for FPS A/B.\n", 1)
+text = text.replace("\t_refresh_tiles(false)\n", "\t# Diagnostic #136: road tiles disabled for FPS A/B.\n", 1)
+path.write_text(text, encoding="utf-8")
 print("PR_CHECK=DIAGNOSTIC roads=off clouds=production background=production")
 PY
