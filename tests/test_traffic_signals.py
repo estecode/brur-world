@@ -7,10 +7,12 @@ Dependencies:
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -98,6 +100,8 @@ class TrafficSignalTests(unittest.TestCase):
             self.assertEqual(stats["unknown_direction_count"], 1)
             self.assertEqual(stats["explicit_stop_line_count"], 1)
             self.assertEqual(stats["grouped_candidate_count"], 1)
+            self.assertEqual(stats["source_node_count"], 4)
+            self.assertEqual(stats["source_way_count"], 2)
             self.assertFalse(stats["reused"])
 
             first = dataset["signals"][0]
@@ -113,8 +117,9 @@ class TrafficSignalTests(unittest.TestCase):
             self.assertEqual(entry["source"]["algorithm"], "sha256")
             self.assertEqual(len(entry["source"]["digest"]), 64)
             self.assertEqual(entry["source"]["size_bytes"], fixture.stat().st_size)
+            self.assertEqual(entry["source_scan"], {"nodes": 4, "ways": 2})
 
-    def test_unchanged_source_reuses_valid_output_without_source_scan(self) -> None:
+    def test_unchanged_source_reuses_valid_output_without_source_scan_and_reports_totals(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             fixture = root / "signals.osm"
@@ -122,13 +127,35 @@ class TrafficSignalTests(unittest.TestCase):
             fixture.write_text(FIXTURE, encoding="utf-8")
             build_traffic_signals(fixture, output)
 
+            stdout = io.StringIO()
             with patch.object(traffic_signal_builder, "_source", side_effect=AssertionError("source scan must not run")):
-                stats = build_traffic_signals(fixture, output)
+                with redirect_stdout(stdout):
+                    stats = build_traffic_signals(fixture, output)
 
             self.assertTrue(stats["reused"])
             self.assertEqual(stats["source_signal_count"], 3)
+            self.assertEqual(stats["source_node_count"], 4)
+            self.assertEqual(stats["source_way_count"], 2)
+            self.assertIn("nodes=4 ways=2", stdout.getvalue())
 
-    def test_changed_source_hash_forces_rebuild(self) -> None:
+    def test_matching_source_totals_are_reused_for_rebuild_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = root / "signals.osm"
+            output = root / "world_data"
+            fixture.write_text(FIXTURE, encoding="utf-8")
+            build_traffic_signals(fixture, output)
+            (output / "traffic_signals.json").unlink()
+
+            original_source = traffic_signal_builder._source
+            with patch.object(traffic_signal_builder, "_source", wraps=original_source) as source_scan:
+                stats = build_traffic_signals(fixture, output)
+
+            self.assertFalse(stats["reused"])
+            source_scan.assert_called_once_with(fixture, {"nodes": 4, "ways": 2})
+            self.assertEqual(traffic_signal_builder._progress_count(300, 4_938_383), "300 / 4,938,383")
+
+    def test_changed_source_hash_forces_rebuild_without_stale_totals(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             fixture = root / "signals.osm"
@@ -141,7 +168,7 @@ class TrafficSignalTests(unittest.TestCase):
             with patch.object(traffic_signal_builder, "_source", wraps=original_source) as source_scan:
                 stats = build_traffic_signals(fixture, output)
 
-            self.assertEqual(source_scan.call_count, 1)
+            source_scan.assert_called_once_with(fixture, {})
             self.assertFalse(stats["reused"])
 
     def test_missing_or_invalid_output_forces_rebuild(self) -> None:
