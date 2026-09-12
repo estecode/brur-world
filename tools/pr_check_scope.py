@@ -27,7 +27,6 @@ ROUTE_GEOMETRY_DATASET_OWNERS = frozenset(
 ROAD_LOD_DATASET_OWNERS = frozenset(
     {
         "tools/build_roads.py",
-        "tools/build_sweden.py",
         "tools/world_common.py",
         "scripts/road_lod_policy.gd",
     }
@@ -58,8 +57,6 @@ BUILDING_TILE_OWNERS = frozenset(
         "scripts/building_stream_layer.gd",
         "scripts/building_runtime_composition.gd",
         "scenes/main.tscn",
-        "tests/godot/test_world_streaming_foundation.gd",
-        "tests/godot/test_map_controls.gd",
     }
 )
 
@@ -99,7 +96,7 @@ def city_light_real_data_required(changed_paths: Iterable[str]) -> bool:
 
 
 def world_showcase_real_data_required(changed_paths: Iterable[str]) -> bool:
-    """Return whether the disposable showcase cache itself must be regenerated locally."""
+    """Return whether the expensive showcase cache itself must be regenerated locally."""
     return any(path in WORLD_SHOWCASE_OWNERS for path in _paths(changed_paths))
 
 
