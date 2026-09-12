@@ -64,7 +64,6 @@ static func decode_file(path: String) -> Dictionary:
 
 static func stage_chunks(specs: Array, cached_chunks: Dictionary) -> Dictionary:
 	var decoded_chunks: Dictionary = {}
-	var render_chunks: Array = []
 	var render_batches: Array = []
 	var total_vertices := 0
 	var total_bytes := 0
@@ -98,12 +97,10 @@ static func stage_chunks(specs: Array, cached_chunks: Dictionary) -> Dictionary:
 			"origin_world": spec.get("origin_world", Vector3.ZERO),
 			"vertices": int(chunk.get("vertices", 0)),
 		}
-		render_chunks.append(render_chunk)
 		render_batches.append_array(split_mesh_batches(render_chunk))
 	return {
 		"ok": true,
-		"render_chunks": render_chunks,
-		"render_batches": render_batches,
+		"render_chunks": render_batches,
 		"decoded_chunks": decoded_chunks,
 		"vertices": total_vertices,
 		"bytes": total_bytes,
