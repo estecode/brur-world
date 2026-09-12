@@ -10,6 +10,7 @@ Dependencies:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -21,6 +22,7 @@ from typing import TextIO
 
 DEFAULT_TILE_SIZE = 2_000.0
 DEFAULT_MAX_OPEN = 32
+BUILDING_TILE_FORMAT_VERSION = 1
 
 
 class BuildingTileWriter:
@@ -76,6 +78,10 @@ class BuildingTileWriter:
             shutil.rmtree(self.write_directory)
 
 
+def _builder_sha256() -> str:
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
 def build_building_tiles(world_dir: Path, tile_size: float = DEFAULT_TILE_SIZE) -> dict:
     manifest_path = world_dir / "manifest.json"
     buildings_path = world_dir / "buildings.jsonl"
@@ -85,6 +91,7 @@ def build_building_tiles(world_dir: Path, tile_size: float = DEFAULT_TILE_SIZE) 
         raise SystemExit(f"missing authoritative building export: {buildings_path}")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    source_stat = buildings_path.stat()
     output_dir = world_dir / "building_tiles"
     writer = BuildingTileWriter(output_dir, tile_size)
     started = time.monotonic()
@@ -110,6 +117,10 @@ def build_building_tiles(world_dir: Path, tile_size: float = DEFAULT_TILE_SIZE) 
     features = dict(manifest.get("features", {}))
     features["building_tiles_dir"] = "building_tiles"
     features["building_tile_size"] = tile_size
+    features["building_tile_format_version"] = BUILDING_TILE_FORMAT_VERSION
+    features["building_tiles_source_size"] = source_stat.st_size
+    features["building_tiles_source_mtime_ns"] = source_stat.st_mtime_ns
+    features["building_tiles_builder_sha256"] = _builder_sha256()
     features["runtime_buildings_total"] = writer.records
     manifest["features"] = features
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -118,6 +129,7 @@ def build_building_tiles(world_dir: Path, tile_size: float = DEFAULT_TILE_SIZE) 
         "source": "buildings.jsonl",
         "source_rebuilt": False,
         "tile_size": tile_size,
+        "format_version": BUILDING_TILE_FORMAT_VERSION,
         "records": writer.records,
         "tile_count": len(list(output_dir.glob("*.jsonl"))),
         "elapsed_s": time.monotonic() - started,
