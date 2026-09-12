@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs only relevant local real-data preparation, then opens the exact PR runtime for requested human review.
+# Runs only relevant local real-data preparation, then opens the exact PR runtime only when human visual review remains meaningful.
 # Dependencies: changed-file scope from pr_check.sh, existing local world_data, and source/build tools only for scopes that require them.
 set -euo pipefail
 
@@ -20,11 +20,15 @@ scope_decision() {
   esac
 }
 
+ROUTE_GEOMETRY_SCOPE="$(scope_decision route-geometry)"
 ROAD_LOD_SCOPE="$(scope_decision road-lod)"
 CITY_LIGHT_SCOPE="$(scope_decision city-lights)"
 WORLD_SHOWCASE_SCOPE="$(scope_decision world-showcase)"
 BUILDING_TILE_SCOPE="$(scope_decision building-tiles)"
 
+if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" ]]; then
+  printf 'PR_CHECK=SKIP_E6_BJARRED_ROUTE pr=%s reason=unrelated-changes\n' "${BRUR_PR_CHECK_PR:?}"
+fi
 if [[ "$ROAD_LOD_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_ROAD_LODS pr=%s reason=unrelated-changes\n' "${BRUR_PR_CHECK_PR:?}"
 fi
@@ -38,7 +42,7 @@ if [[ "$BUILDING_TILE_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_BUILDING_TILES pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
 fi
 
-if [[ "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" ]]; then
+if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=NO_EXPENSIVE_LOCAL_PREPARATION pr=%s\n' "$BRUR_PR_CHECK_PR"
 fi
 
@@ -52,10 +56,22 @@ resolve_sweden_pbf() {
   repo_parent="$(cd "$(dirname "$WORLD_DATA")/.." && pwd)"
   candidate="$(find "$repo_parent/syndicate/data" "$repo_parent/data" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n 1)"
   if [[ -z "$candidate" ]]; then
-    printf 'PR_CHECK=FAIL required road LOD rebuild needs Sweden PBF; set BRUR_WORLD_PBF\n' >&2
+    printf 'PR_CHECK=FAIL required real-data rebuild needs Sweden PBF; set BRUR_WORLD_PBF\n' >&2
     return 1
   fi
   printf '%s\n' "$candidate"
+}
+
+ensure_routing_dataset_identity() {
+  if "$PYTHON" "$WORKTREE/tools/check_routing_dataset.py" "$WORLD_DATA"; then
+    printf 'PR_CHECK=REUSE_ROUTING_DATASET pr=%s reason=identity-match\n' "$BRUR_PR_CHECK_PR"
+    return 0
+  fi
+  local pbf
+  pbf="$(resolve_sweden_pbf)"
+  printf 'PR_CHECK=BUILD_ROUTING_DATASET pr=%s reason=identity-mismatch source=%s\n' "$BRUR_PR_CHECK_PR" "$(basename "$pbf")"
+  "$PYTHON" "$WORKTREE/tools/build_routing_dataset.py" "$pbf" --output "$WORLD_DATA"
+  "$PYTHON" "$WORKTREE/tools/check_routing_dataset.py" "$WORLD_DATA"
 }
 
 prepare_road_runtime_data() {
@@ -105,6 +121,17 @@ run_godot_test() {
   fi
   rm -f "$log"
 }
+
+if [[ "$ROUTE_GEOMETRY_SCOPE" == "required" ]]; then
+  ensure_routing_dataset_identity
+  SERVER="$WORKTREE/bin/brur-gps-server"
+  [[ -x "$SERVER" ]] || {
+    printf 'PR_CHECK=FAIL missing production GPS server for E6/Bjärred regression\n' >&2
+    exit 66
+  }
+  printf 'PR_CHECK=CHECK_E6_BJARRED_ROUTE pr=%s\n' "$BRUR_PR_CHECK_PR"
+  "$PYTHON" "$WORKTREE/tools/check_e6_bjarred_route.py" "$WORLD_DATA" "$SERVER"
+fi
 
 if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
   [[ -f "$WORLD_DATA/buildings.jsonl" ]] || {
@@ -156,6 +183,11 @@ print(f"PR_CHECK=WORLD_SHOWCASE_REAL_DATA_OK selected={report['selected_records'
 PY
   printf 'PR_CHECK=CHECK_WORLD_SHOWCASE_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
   run_godot_test res://tests/godot/test_world_showcase.gd
+fi
+
+if [[ "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" ]]; then
+  printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "$BRUR_PR_CHECK_PR"
+  exit 0
 fi
 
 printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
