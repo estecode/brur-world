@@ -27,6 +27,7 @@ const STATE_VISIBLE := "visible"
 @export var full_height_altitude_m: float = 2500.0
 @export var base_height_m: float = 0.0
 @export var cast_shadows: bool = false
+@export var streaming_enabled: bool = true
 
 var _coordinates = null
 var _camera_rig: Node = null
@@ -62,10 +63,34 @@ func setup(world_coordinates, camera_rig: Node, tile_data_dir: String) -> void:
 	var focus: Vector3 = _camera_rig.call("get_focus_world")
 	_last_focus_world = focus
 	_has_last_focus = true
+	set_process(streaming_enabled)
+	if streaming_enabled:
+		_refresh(WorldStreamRequestScript.new(focus, float(_camera_rig.call("get_altitude"))), true)
+	else:
+		_clear_all()
+
+func set_streaming_enabled(enabled: bool) -> void:
+	if streaming_enabled == enabled:
+		return
+	streaming_enabled = enabled
+	set_process(enabled)
+	if not enabled:
+		_last_visible = false
+		_last_center_tile = Vector2i(999999, 999999)
+		_clear_all()
+		return
+	if _coordinates == null or _camera_rig == null:
+		return
+	var focus: Vector3 = _camera_rig.call("get_focus_world")
+	_last_focus_world = focus
+	_has_last_focus = true
 	_refresh(WorldStreamRequestScript.new(focus, float(_camera_rig.call("get_altitude"))), true)
 
+func is_streaming_enabled() -> bool:
+	return streaming_enabled
+
 func _process(_delta: float) -> void:
-	if _coordinates == null or _camera_rig == null:
+	if not streaming_enabled or _coordinates == null or _camera_rig == null:
 		return
 	var focus: Vector3 = _camera_rig.call("get_focus_world")
 	var motion := Vector3.ZERO
@@ -262,6 +287,7 @@ func debug_snapshot() -> Dictionary:
 	for count in _tile_record_counts.values():
 		records += int(count)
 	return {
+		"streaming_enabled": streaming_enabled,
 		"active_tiles": _active.size(),
 		"pending_tiles": _pending.size(),
 		"wanted_tiles": _wanted.size(),
