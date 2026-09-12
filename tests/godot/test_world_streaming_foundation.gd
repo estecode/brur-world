@@ -113,7 +113,7 @@ func _test_chunk_codec() -> void:
 	var path := "%s/test.bmc" % directory
 	_write_bmc(path, 3)
 	var decoded: Dictionary = BuildingMeshChunkCodecScript.decode_file(path)
-	_assert(bool(decoded.get("ok", false)), "prebuilt BMC1 chunk decodes")
+	_assert(decoded.get("ok", false) == true, "prebuilt BMC1 chunk decodes")
 	_assert(int(decoded.get("vertices", 0)) == 3, "prebuilt chunk preserves vertex count")
 	var arrays := BuildingMeshChunkCodecScript.arrays_for_mesh(decoded)
 	var decoded_positions: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
@@ -174,7 +174,7 @@ func _test_atomic_viewport_staging_and_cache() -> void:
 
 	layer.set_streaming_enabled(false)
 	_assert(layer.active_mesh_count() == 0, "HUS OFF clears the complete building presentation immediately")
-	_assert(not bool(layer.debug_snapshot()["stage_in_flight"]) or not layer.is_viewport_ready(), "HUS OFF never reports a ready streamed viewport")
+	_assert(layer.debug_snapshot()["stage_in_flight"] != true or not layer.is_viewport_ready(), "HUS OFF never reports a ready streamed viewport")
 	layer.queue_free()
 	camera.queue_free()
 	await process_frame
