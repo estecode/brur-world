@@ -78,7 +78,7 @@ static func combine_chunks(specs: Array, cached_chunks: Dictionary) -> Dictionar
 		else:
 			chunk = decode_file(String(spec.get("path", "")))
 			cache_misses += 1
-			if not bool(chunk.get("ok", false)):
+			if chunk.get("ok", false) != true:
 				return {
 					"ok": false,
 					"error": "%s:%s" % [key, String(chunk.get("error", "decode"))],
