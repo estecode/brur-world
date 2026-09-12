@@ -97,6 +97,10 @@ jobs:
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_map_controls.gd
 
+      - name: Run POI startup default regression test
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_poi_default_disabled.gd
+
       - name: Run objective GPS regression suite
         env:
           CXX: g++
