@@ -75,11 +75,16 @@ jobs:
       - name: Validate PR-owned local check hook
         run: |
           bash -n tools/run_pr_owned_check.sh
+          bash -n tools/pr_check_local.sh
           bash tests/test_pr_owned_check.sh
 
       - name: Run world streaming foundation tests
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_streaming_foundation.gd
+
+      - name: Parse automated renderer benchmark harness
+        run: |
+          timeout 10s "$GODOT_BIN" --headless --path . res://harness/perf_diagnostic/renderer_benchmark.tscn
 
       - name: Run continuous world showcase tests
         run: |
