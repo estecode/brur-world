@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Build all Sweden world data: roads, routing, background, POIs, search, buildings, traffic signals and city-light density.
+"""Build all Sweden world data from one reusable OSM source-ingest boundary.
 
 Dependencies:
+- Uses osm_source_cache.py to fan one authoritative OSM scan into route-specific caches.
 - Uses the owned offline builders for each runtime dataset.
 - Routing is published through build_routing_dataset.py so BRG1/BRS2/BRH1 stay source-aligned.
 """
@@ -20,6 +21,7 @@ from build_routing_dataset import build_routing_dataset
 from build_search_binary import build_search_binary
 from build_search_index import build_search_index
 from build_traffic_signals import build_traffic_signals
+from osm_source_cache import ALL_ROUTES, CACHE_DIR_NAME, build_source_caches
 from world_common import ensure_pbf
 
 
@@ -31,28 +33,32 @@ def main() -> None:
 
     ensure_pbf(args.pbf)
 
+    print("=== PREPARE OSM SOURCE ROUTE CACHES ===")
+    sources = build_source_caches(args.pbf, args.output / CACHE_DIR_NAME, ALL_ROUTES)
+
+    print()
     print("=== BUILD ROADS ===")
-    build_roads(args.pbf, args.output)
+    build_roads(sources["highways"], args.output)
 
     print()
     print("=== BUILD ROUTING DATASET ===")
-    build_routing_dataset(args.pbf, args.output)
+    build_routing_dataset(sources["highways"], args.output)
 
     print()
     print("=== BUILD TRAFFIC SIGNALS ===")
-    build_traffic_signals(args.pbf, args.output)
+    build_traffic_signals(sources["traffic_signals"], args.output)
 
     print()
     print("=== BUILD BACKGROUND ===")
-    build_background(args.pbf, args.output)
+    build_background(sources["areas"], args.output)
 
     print()
     print("=== BUILD POIS (FAST) ===")
-    build_pois(args.pbf, args.output)
+    build_pois(sources["pois"], args.output)
 
     print()
     print("=== BUILD BUILDINGS / RELATION POIS (HEAVY) ===")
-    build_buildings(args.pbf, args.output)
+    build_buildings(sources["areas"], args.output)
 
     print()
     print("=== BUILD BUILDING TILES ===")
@@ -64,7 +70,7 @@ def main() -> None:
 
     print()
     print("=== BUILD GPS SEARCH INDEX ===")
-    search_jsonl = build_search_index(args.pbf, args.output)
+    search_jsonl = build_search_index(sources["addresses"], args.output)
 
     print()
     print("=== BUILD NATIVE GPS SEARCH INDEX ===")
