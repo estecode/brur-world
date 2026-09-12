@@ -93,8 +93,13 @@ func _test_bounded_streaming_and_hysteresis() -> void:
 	layer.builds_per_frame = 1
 	layer.build_budget_ms = 1000.0
 	layer.prefetch_tiles_ahead = 0
+	layer.streaming_enabled = false
 	get_root().add_child(layer)
 	layer.setup(coordinates, camera, cache_dir)
+	_assert(not layer.is_streaming_enabled(), "building streaming can start explicitly disabled")
+	_assert(layer.pending_tile_count() == 0 and layer.active_tile_count() == 0, "disabled building streaming performs no tile work")
+	layer.set_streaming_enabled(true)
+	_assert(layer.is_streaming_enabled(), "building streaming can be enabled explicitly")
 	_assert(layer.pending_tile_count() == 2, "pending queue is capped by configured maximum")
 	var initial_metrics: Dictionary = layer.consume_perf_metrics()
 	_assert(int(initial_metrics["building_dropped_requests"]) >= 1, "overflow requests degrade by dropping optional queued work")
@@ -104,9 +109,14 @@ func _test_bounded_streaming_and_hysteresis() -> void:
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 2, "second frame advances bounded work")
 	_assert(layer.pending_tile_count() == 0, "bounded queue drains across frames")
+	layer.set_streaming_enabled(false)
+	_assert(layer.active_tile_count() == 0 and layer.pending_tile_count() == 0, "disabling building streaming clears loaded and pending work")
+	layer.set_streaming_enabled(true)
+	layer._process(0.0)
+	_assert(layer.active_tile_count() == 1, "re-enabling building streaming restarts bounded work")
 	camera.altitude = 14500.0
 	layer._process(0.0)
-	_assert(layer.active_tile_count() == 2, "loaded tiles remain through hysteresis band")
+	_assert(layer.active_tile_count() >= 1, "loaded tiles remain through hysteresis band")
 	camera.altitude = 15100.0
 	layer._process(0.0)
 	_assert(layer.active_tile_count() == 0, "tiles unload above hide threshold")
