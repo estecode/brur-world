@@ -255,7 +255,7 @@ def build_traffic_signals(source: Path, output: Path) -> dict:
     save_runtime_dataset(destination, dataset)
 
     stats = dict(dataset["stats"])
-    elapsed = time.per_counter() - started
+    elapsed = time.perf_counter() - started
     stats["output_bytes"] = destination.stat().st_size
     stats["build_seconds"] = round(elapsed, 3)
     stats["reused"] = False
