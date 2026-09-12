@@ -1,24 +1,42 @@
 #!/usr/bin/env bash
 # Verifies playtest target allowlisting and preparation/launch orchestration with an isolated fake project.
-# Dependencies: bash and standard POSIX utilities; no Godot or production world data is required.
+# Dependencies: bash, Python 3 and standard POSIX utilities; no Godot or production world data is required.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE="$ROOT/tools/playtest.sh"
+CHECKER="$ROOT/tools/check_routing_dataset.py"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/brur-playtest-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 FAKE_ROOT="$TMP/repo"
 mkdir -p "$FAKE_ROOT/tools" "$FAKE_ROOT/native" "$FAKE_ROOT/bin" "$FAKE_ROOT/world_data" "$FAKE_ROOT/scenes" "$FAKE_ROOT/harness/gps" "$FAKE_ROOT/harness/driving" "$FAKE_ROOT/.venv/bin"
 cp "$SOURCE" "$FAKE_ROOT/tools/playtest.sh"
-chmod +x "$FAKE_ROOT/tools/playtest.sh"
+cp "$CHECKER" "$FAKE_ROOT/tools/check_routing_dataset.py"
+chmod +x "$FAKE_ROOT/tools/playtest.sh" "$FAKE_ROOT/tools/check_routing_dataset.py"
 printf 'source\n' > "$FAKE_ROOT/native/dummy.cpp"
 printf 'scene\n' > "$FAKE_ROOT/scenes/main.tscn"
 printf 'scene\n' > "$FAKE_ROOT/harness/gps/gps_harness.tscn"
 printf 'scene\n' > "$FAKE_ROOT/harness/driving/driving_harness.tscn"
 printf 'requirements\n' > "$FAKE_ROOT/requirements.txt"
-for name in manifest.json routing.brg routing_snap.brs routing_geometry.brh routing_stats.json search_index.bsi; do
+for name in manifest.json routing.brg routing_snap.brs routing_geometry.brh search_index.bsi; do
   printf 'data\n' > "$FAKE_ROOT/world_data/$name"
 done
+python3 - "$FAKE_ROOT/world_data" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+names = ("routing.brg", "routing_snap.brs", "routing_geometry.brh")
+report = {
+    "routing_dataset_format": "BRG1+BRS2+BRH1",
+    "routing_dataset_sha256": {
+        name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+        for name in names
+    },
+}
+(root / "routing_stats.json").write_text(json.dumps(report), encoding="utf-8")
+PY
 for name in build_sweden.py build_roads.py build_routing.py build_routing_dataset.py build_background.py build_features.py build_search_index.py build_search_binary.py compressed_routing.py gps_snap_index.py route_geometry.py routing_graph.py routing_graph_view.py world_common.py; do
   printf 'builder\n' > "$FAKE_ROOT/tools/$name"
 done
@@ -52,6 +70,16 @@ grep -q -- "--path $FAKE_ROOT $FAKE_ROOT/scenes/main.tscn" "$GODOT_LOG"
 BRUR_GODOT="$TMP/godot" bash "$FAKE_ROOT/tools/playtest.sh" gps >"$TMP/gps.out"
 grep -q 'PLAYTEST=READY routing-dataset' "$TMP/gps.out"
 grep -q -- "--path $FAKE_ROOT $FAKE_ROOT/harness/gps/gps_harness.tscn" "$GODOT_LOG"
+
+printf 'tampered\n' >> "$FAKE_ROOT/world_data/routing_geometry.brh"
+: > "$GODOT_LOG"
+if BRUR_GODOT="$TMP/godot" bash "$FAKE_ROOT/tools/playtest.sh" gps >"$TMP/mixed.out" 2>"$TMP/mixed.err"; then
+  echo 'expected mixed routing generation without PBF to fail' >&2
+  exit 1
+fi
+grep -q 'set BRUR_WORLD_PBF' "$TMP/mixed.err"
+[[ ! -s "$GODOT_LOG" ]]
+printf 'data\n' > "$FAKE_ROOT/world_data/routing_geometry.brh"
 
 : > "$GODOT_LOG"
 BRUR_GODOT="$TMP/godot" bash "$FAKE_ROOT/tools/playtest.sh" driving >"$TMP/driving.out"
