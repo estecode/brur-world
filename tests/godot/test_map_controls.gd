@@ -1,10 +1,12 @@
 extends SceneTree
 
 ## Headless contract tests for POI/building visibility, armed teleport, map/drive camera ownership and map-control scene wiring.
-## Dependencies: production PoiLayer, BuildingStreamLayer, GpsRouteLayer, MapControlsUi, CameraRig, player controller and player vehicle adapters.
+## Dependencies: production Main, PoiLayer, BuildingStreamLayer, GpsRouteLayer, GpsRouteRenderer, MapControlsUi, CameraRig, player controller and player vehicle adapters.
 
+const MainScript = preload("res://scripts/main.gd")
 const PoiLayerScript = preload("res://scripts/poi_layer.gd")
 const GpsRouteLayerScript = preload("res://scripts/gps_route_layer.gd")
+const GpsRouteRendererScript = preload("res://scripts/gps_route_renderer.gd")
 const MapControlsUiScript = preload("res://scripts/map_controls_ui.gd")
 const CameraControllerScript = preload("res://scripts/camera_controller.gd")
 const PlayerVehicleControllerScript = preload("res://scripts/player_vehicle_controller.gd")
@@ -18,6 +20,7 @@ func _run() -> void:
 	_test_map_controls_ui_builds_headlessly()
 	_test_camera_mode_and_follow_contract()
 	_test_drive_camera_follows_heading_without_mutating_vehicle()
+	_test_drive_surface_height_contract()
 	_test_drive_zoom_contract()
 	_test_mode_transition_contract()
 	_test_player_steering_direction_contract()
@@ -133,6 +136,38 @@ func _test_drive_camera_follows_heading_without_mutating_vehicle() -> void:
 	_assert(_approx(float(player.call("speed_mps")), before_speed), "switching to Drive does not change vehicle speed")
 	_assert(int(player.call("control_owner")) == before_owner, "switching to Drive does not change control ownership")
 	player.free()
+	rig.free()
+
+func _test_drive_surface_height_contract() -> void:
+	var rig := _new_rig()
+	rig.set("mode_transition_seconds", 0.0)
+	rig.call("set_drive_mode", true)
+
+	var main := MainScript.new() as Node3D
+	main.set("camera_rig", rig)
+	main.set("current_layer_spacing", float(main.call("_layer_spacing")))
+	var road_height := float(main.call("get_road_surface_height"))
+	_assert(road_height > 0.0 and road_height <= 0.10, "Drive mode compresses artificial map layers to the physical road surface")
+
+	var player_scene := load("res://scenes/player_vehicle.tscn") as PackedScene
+	var player := player_scene.instantiate() as Node3D
+	var route_layer := GpsRouteLayerScript.new() as Node3D
+	var renderer := GpsRouteRendererScript.new() as Node3D
+	route_layer.set("_main", main)
+	route_layer.set("_camera_rig", rig)
+	route_layer.set("route_renderer", renderer)
+	route_layer.set("player", player)
+	route_layer.call("_update_visual_height")
+
+	_assert(_approx(player.position.y, road_height), "Player root sits on the road surface instead of the GPS presentation layer")
+	var route_height := float(renderer.call("route_height"))
+	_assert(route_height > road_height, "GPS route is rendered above the road surface")
+	_assert(route_height - road_height <= 0.20, "GPS route remains visually attached to the road in Drive mode")
+
+	player.free()
+	renderer.free()
+	route_layer.free()
+	main.free()
 	rig.free()
 
 func _test_drive_zoom_contract() -> void:

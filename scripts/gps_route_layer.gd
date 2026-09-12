@@ -7,7 +7,7 @@ extends Node3D
 ## - GpsRouteModel owns destination/waypoint/preference state.
 ## - GpsRouteRenderer/GpsRouteUi own GPS presentation; the player vehicle owns motion state/dynamics.
 ## - VehicleRouteFollower consumes routed world points/speeds and emits reroute intent; this layer owns route requests.
-## - Main exposes WorldCoordinates; RoadSurfaceQuery reads authoritative BRT1 world data for the player vehicle.
+## - Main exposes WorldCoordinates and the current rendered road-surface height; RoadSurfaceQuery reads authoritative BRT1 world data for the player vehicle.
 ## - CameraRig receives the player as an explicit follow target.
 
 signal teleport_state_changed(armed: bool)
@@ -226,12 +226,19 @@ func _update_driving_input_mode() -> void:
 	if _player_controller == null or _camera_rig == null: return
 	var driving_view := bool(_camera_rig.call("is_driving_view")) if _camera_rig.has_method("is_driving_view") else true; _player_controller.set("enabled", driving_view)
 	if route_ui != null: route_ui.call("set_drive_mode", driving_view)
+func _road_surface_height() -> float:
+	if _main != null and _main.has_method("get_road_surface_height"):
+		return float(_main.call("get_road_surface_height"))
+	return 0.0
 func _update_visual_height() -> void:
 	if _camera_rig == null or route_renderer == null: return
-	var camera_distance := float(_camera_rig.call("get_distance")); route_renderer.call("update_height", camera_distance)
-	if player != null: player.position.y = float(route_renderer.call("route_height")); player.scale = Vector3.ONE
+	var camera_distance := float(_camera_rig.call("get_distance"))
+	var road_surface_height := _road_surface_height()
+	route_renderer.call("update_height", camera_distance, road_surface_height)
+	if player != null: player.position.y = road_surface_height; player.scale = Vector3.ONE
 	if _player_marker != null and player != null:
-		_player_marker.global_position = player.global_position + Vector3.UP * maxf(12.0, float(route_renderer.call("route_height")) + 20.0)
+		var route_clearance := maxf(0.0, float(route_renderer.call("route_height")) - road_surface_height)
+		_player_marker.global_position = player.global_position + Vector3.UP * maxf(12.0, route_clearance + 20.0)
 		_player_marker.rotation.y = float(player.call("heading_rad")) if player.has_method("heading_rad") else player.rotation.y
 		_player_marker.scale = Vector3.ONE * clampf(camera_distance / 8000.0, 1.0, 40.0)
 		_player_marker.visible = not bool(_camera_rig.call("is_driving_view"))

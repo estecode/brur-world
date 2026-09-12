@@ -69,12 +69,26 @@ func _test_renderer_fixture() -> void:
 	}
 	_assert(bool(renderer.call("apply_response", response)), "renderer accepts fixture route without live server")
 	_assert(int(renderer.call("rendered_point_count")) == 3, "renderer consumes all valid fixture points")
+
+	var drive_road_height := 0.06
+	renderer.call("update_height", 6.8, drive_road_height)
+	var drive_route_height := float(renderer.call("route_height"))
+	_assert(drive_route_height > drive_road_height, "close-drive route stays above the road surface")
+	_assert(drive_route_height - drive_road_height <= 0.20, "close-drive route clearance stays visually attached to the road")
+
+	var map_road_height := 24.0
+	renderer.call("update_height", 6000.0, map_road_height)
+	_assert(_approx(float(renderer.call("route_height")), map_road_height + 4.0), "map route preserves one layer of clearance above the road")
+
 	_assert(not bool(renderer.call("apply_response", {"success": false, "failure_reason": "unreachable"})), "failed route clears renderer")
 	_assert(int(renderer.call("rendered_point_count")) == 0, "failed route leaves no route geometry")
 	renderer.free()
 
 func _to_world(x: float, y: float) -> Vector3:
 	return Vector3(x, 0.0, -y)
+
+func _approx(a: float, b: float) -> bool:
+	return absf(a - b) < 0.00001
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:

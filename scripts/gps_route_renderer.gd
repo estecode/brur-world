@@ -5,10 +5,12 @@ extends Node3D
 ##
 ## Dependencies:
 ## - Consumes structured route response data and a caller-supplied absolute->world converter.
+## - Receives the current road-surface presentation height from GPS composition.
 ## - Has no route model, TCP, process, input or UI dependency.
 
 const ROUTE_OUTLINE_PRIORITY := 100
 const ROUTE_CORE_PRIORITY := 101
+const DRIVE_ROUTE_CLEARANCE_M := 0.08
 
 var _to_world: Callable
 var _route_outline_instance: MeshInstance3D
@@ -109,17 +111,17 @@ func clear() -> void:
 	_route_points = PackedVector3Array()
 	_rendered_point_count = 0
 
-func update_height(camera_distance: float) -> void:
+func update_height(camera_distance: float, road_surface_height: float = 0.0) -> void:
 	_ensure_visuals()
 	var close_drive_view := camera_distance < 100.0
 	if close_drive_view:
-		_set_route_height(1.0)
-		_target_marker.position.y = 4.0
+		_set_route_height(road_surface_height + DRIVE_ROUTE_CLEARANCE_M)
+		_target_marker.position.y = _route_mesh_instance.position.y + 3.0
 		_target_marker.scale = Vector3.ONE * 0.04
 		_set_ribbon_width(14.0)
 		return
 	var spacing := clampf(camera_distance / 6000.0, 4.0, 240.0)
-	_set_route_height(spacing * 7.0)
+	_set_route_height(road_surface_height + spacing)
 	_target_marker.position.y = _route_mesh_instance.position.y + maxf(90.0, spacing)
 	_target_marker.scale = Vector3.ONE * clampf(camera_distance / 30000.0, 1.0, 20.0)
 	# Keep the route slightly generous through normal map zooms, then continue
