@@ -12,6 +12,19 @@ Before any code change, architecture work, refactor, or code review:
 
 If a requested change conflicts with `ARCHITECTURE.md`, identify the conflict and use the smallest compliant alternative.
 
+## Repository orientation and Repomix fallback
+
+GitHub/current-checkout original files remain the source of truth. A Repomix snapshot such as `repomix-output.xml`, when available in the current working context, is an optional fast orientation cache only.
+
+- After the mandatory `AGENTS.md` and `ARCHITECTURE.md` read, prefer an available Repomix snapshot for fast repository orientation: locating likely files, subsystem owners, entrypoints and dependency paths before opening targeted source files.
+- Never treat Repomix content as proof that the snapshot matches the current target revision. Before changing or reviewing code, read the relevant original files from the current GitHub revision or checkout.
+- If the snapshot is missing, stale, incomplete, ambiguous, too large to search effectively, or its indexing/search path fails, fall back immediately to GitHub/original-file search and continue the task. Repomix must never become a blocker or require project-leader intervention.
+- Do not ask the project leader to regenerate or upload a Repomix snapshot merely to continue ordinary work when the repository can be inspected directly.
+- Do not build a separate synchronization service, RAG/vector database, repository index, or other infrastructure merely to keep Repomix current. Regeneration is a convenience; freshness is verified against source-of-truth files when needed.
+- Prefer focused Repomix inputs that exclude generated data, binaries, build output, logs, large runtime datasets, and unrelated research material when those files do not help code orientation.
+
+In short: use Repomix to get to the right original files faster; use the original files to decide and change anything.
+
 ## Issue workflow
 
 For tracked implementation such as `fixa #48`:
