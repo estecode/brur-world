@@ -352,9 +352,9 @@ class ChunkWriter:
         if stale is not None and stale.exists():
             shutil.rmtree(stale)
 
-    def cleanup(self) -> None:
+    def cleanup(self, remove_files: bool = True) -> None:
         self.close()
-        if self.write_directory.exists():
+        if remove_files and self.write_directory.exists():
             shutil.rmtree(self.write_directory)
 
 
@@ -464,6 +464,7 @@ def build_building_mesh_pyramid(world_dir: Path) -> dict:
     started = time.monotonic()
     source_records = 0
     success = False
+    interrupted = False
     try:
         with source_path.open("r", encoding="utf-8") as source:
             for line_number, line in enumerate(source, 1):
@@ -503,8 +504,17 @@ def build_building_mesh_pyramid(world_dir: Path) -> dict:
         _print_progress(source_records, started, writer)
         writer.publish()
         success = True
+    except KeyboardInterrupt:
+        interrupted = True
+        writer.cleanup(remove_files=False)
+        print(
+            f"[building-mesh-lod] interrupted after {source_records:,} buildings; "
+            f"partial scratch retained at {writer.write_directory}",
+            flush=True,
+        )
+        raise
     finally:
-        if not success:
+        if not success and not interrupted:
             writer.cleanup()
 
     level_reports = []
