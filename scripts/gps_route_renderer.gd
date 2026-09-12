@@ -13,7 +13,7 @@ var _route_material: StandardMaterial3D
 var _target_marker: MeshInstance3D
 var _route_points := PackedVector3Array()
 var _rendered_point_count := 0
-var _ribbon_width_m := 8.0
+var _ribbon_width_m := 12.0
 
 func _ready() -> void: _ensure_visuals()
 func setup(to_world: Callable) -> void:
@@ -108,7 +108,9 @@ func update_height(camera_distance: float) -> void:
 	_route_mesh_instance.position.y = spacing * 7.0
 	_target_marker.position.y = _route_mesh_instance.position.y + maxf(90.0, spacing)
 	_target_marker.scale = Vector3.ONE * clampf(camera_distance / 30000.0, 1.0, 20.0)
-	_set_ribbon_width(clampf(camera_distance / 900.0, 8.0, 900.0))
+	# Keep the route materially wider than the widest rendered road once we are
+	# in map view, then scale it with zoom so it stays GPS-readable from above.
+	_set_ribbon_width(clampf(24.0 + camera_distance / 300.0, 28.0, 1200.0))
 
 func _set_ribbon_width(wanted_width: float) -> void:
 	if is_equal_approx(wanted_width, _ribbon_width_m): return
@@ -126,7 +128,7 @@ func _ensure_visuals() -> void:
 	_route_mesh_instance.name = "GpsRoute"
 	_route_material = StandardMaterial3D.new()
 	_route_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_route_material.albedo_color = Color(0.05, 0.75, 1.0)
+	_route_material.albedo_color = Color(0.015, 0.015, 0.018)
 	_route_material.no_depth_test = true
 	_route_mesh_instance.material_override = _route_material
 	add_child(_route_mesh_instance)
