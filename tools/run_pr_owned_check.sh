@@ -78,6 +78,18 @@ resolve_manual_review_contract() {
   esac
 }
 
+record_objective_success_if_missing() {
+  [[ ! -f "$SUCCESS_MARKER" ]] || return 0
+  "$PYTHON_BIN" "$STATUS_HELPER" record \
+    --pr "$PR" \
+    --sha "$WORKTREE_HEAD" \
+    --state success \
+    --stage objective-checks-complete
+  : > "$SUCCESS_MARKER"
+  printf 'PR_CHECK=STATUS success pr=%s revision=%s stage=objective-checks-complete\n' \
+    "$PR" "${WORKTREE_HEAD:0:12}"
+}
+
 cat > "$GODOT_WRAPPER" <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -138,6 +150,9 @@ run_owned_hook() {
   if [[ ! -f "$HOOK" ]]; then
     printf 'PR_CHECK=SKIP_PR_OWNED_OBJECTIVE_CHECKS pr=%s reason=no-hook\n' "$PR"
     launch_required_review_if_missing
+    if [[ "$BRUR_PR_CHECK_MANUAL_REVIEW" == "none" ]]; then
+      record_objective_success_if_missing
+    fi
     return $?
   fi
 
@@ -163,6 +178,9 @@ run_owned_hook() {
   set -e
   if [[ "$hook_status" -ne 0 ]]; then
     return "$hook_status"
+  fi
+  if [[ "$BRUR_PR_CHECK_MANUAL_REVIEW" == "none" ]]; then
+    record_objective_success_if_missing
   fi
   launch_required_review_if_missing
 }
