@@ -111,6 +111,20 @@ When the next step is agent-owned, do not hand control back merely by describing
 
 If execution genuinely cannot continue without a new user message, say so explicitly and state the exact message or action required. Never rely on a hidden convention such as the project leader knowing to type `fortsätt`. This rule does not imply background execution: if work cannot continue after the current response without an automation or a new message, do not claim or imply that it will.
 
+#### Response termination gate
+
+Before ending a response for unresolved tracked work, explicitly determine whether the next action is agent-owned. If it is agent-owned, the response must not end while the required tools are available and no genuine human-only blocker exists. Execute the next action instead.
+
+A response for unresolved tracked work may end only when at least one of these conditions is true:
+
+1. The tracked task is complete for the current scope.
+2. A concrete human action is genuinely required because the remaining step is a product/architecture decision, meaningful subjective or hardware-specific verification, unsafe/destructive approval, credential/permission action, or another step the agent cannot reasonably perform; that action has been persisted in `BRUR — Needs You` where applicable.
+3. Execution is technically impossible with the currently available tools or environment, and the exact blocker plus the smallest required user action is stated explicitly.
+
+The following are **not** valid stopping conditions when the agent can continue safely: failed CI, failed `brur-world/local-pr-check`, a red test, a suspected implementation/model/check bug, stale branch state, ordinary merge/rebase work, recoverable conflicts, missing investigation, or a `DO NOT MERGE` result whose blocker is agent-fixable. These states mean continue: investigate, fix, revalidate, and repeat until green or a genuine human-only blocker is reached.
+
+In short: **red + agent-fixable = keep working**. Do not report an agent-owned intermediate failure as a handoff. Do not end with "I will investigate/fix/check next"; perform that work in the same active turn.
+
 ### Parallel sessions and isolated work
 
 Multiple agents or ChatGPT tabs may work on different issues concurrently.
