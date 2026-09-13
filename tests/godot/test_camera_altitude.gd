@@ -104,16 +104,31 @@ func _test_camera_adapter() -> void:
 
 	var main := MainScript.new() as Node3D
 	main.set("camera_rig", rig)
-	main.set("current_layer_spacing", float(main.call("_layer_spacing")))
+	var ground := MeshInstance3D.new()
+	ground.material_override = main.call("_background_material", 4, true)
+	main.add_child(ground)
+	main.set("ground_instance", ground)
+	main.call("_update_depth_layout", true)
 	var road_height := float(main.call("get_road_surface_height"))
 	var urban_height := float(main.call("_background_height", 3))
 	var land_height := float(main.call("_background_height", 0))
+	var ocean_height := ground.position.y
 	_assert(road_height - urban_height >= 0.10, "Drive keeps the nearest decorative background materially below the road")
 	_assert(urban_height - land_height >= 0.15, "Drive background kinds no longer compete inside a centimetre-scale depth stack")
-	main.free()
+	_assert(land_height - ocean_height >= 0.04, "Drive ocean base sits below the complete decorative background stack")
+	_assert(road_height - ocean_height >= 0.30, "Drive ocean base cannot fight the road/player/building surface")
+	var drive_ground_material := ground.material_override as StandardMaterial3D
+	_assert(drive_ground_material.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED, "Drive background is opaque instead of using transparent compositing")
+	_assert(drive_ground_material.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY, "Drive background writes depth so it cannot bleed over foreground geometry")
 
 	rig.call("set_drive_mode", false)
+	main.call("_update_depth_layout", true)
 	_assert(is_equal_approx(float(rig.call("get_altitude")), retained_map_altitude), "leaving Drive restores the retained Map altitude")
+	_assert(is_equal_approx(ground.position.y, 0.0), "Map mode restores the ocean base to its map presentation height")
+	var map_ground_material := ground.material_override as StandardMaterial3D
+	_assert(map_ground_material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA, "Map mode retains priority-based background compositing")
+	_assert(map_ground_material.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED, "Map mode retains the established non-depth background compositor")
+	main.free()
 
 	target.free()
 	rig.queue_free()
