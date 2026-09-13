@@ -7,7 +7,7 @@ PR="${1:-}"
 [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { printf 'PR_CHECK=FAIL invalid PR number\n' >&2; exit 64; }
 
 ROOT="$(git rev-parse --show-toplevel)"
-LOG_DIR="$ROOT/.safecommand/logs"
+LOG_DIR="$ROOT/safecommand-logs"
 LOG_PATH="$LOG_DIR/pr-check-${PR}.log"
 mkdir -p "$LOG_DIR"
 : > "$LOG_PATH"
