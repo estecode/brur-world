@@ -29,6 +29,15 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _human_bytes(value: int) -> str:
+    amount = float(max(value, 0))
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if amount < 1024.0 or unit == "TB":
+            return f"{amount:.1f} {unit}"
+        amount /= 1024.0
+    return f"{amount:.1f} TB"
+
+
 def find_binary_pair(binary_dir: Path) -> tuple[Path, Path]:
     exes = sorted(binary_dir.glob("*.exe"))
     if len(exes) != 1:
@@ -178,7 +187,7 @@ def package_client(
             raise SystemExit("client ZIP recompressed the cached runtime resource pack")
 
     print(
-        f"[windows-package] ready zip={output_zip} size={runtime_pack.stat().st_size + exe.stat().st_size + pck.stat().st_size} "
+        f"[windows-package] ready zip={output_zip} size={_human_bytes(output_zip.stat().st_size)} "
         f"commit={commit[:12]} runtime_files={len(hashes)} delivery={RUNTIME_DELIVERY} fingerprint={fingerprint[:12]}"
     )
     return bundle_info
