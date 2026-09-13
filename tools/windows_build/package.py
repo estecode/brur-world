@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Packages an exported Windows runtime plus prepared runtime data into one validated BRUR ZIP.
+"""Packages a validated Windows export whose production world data is embedded in its PCK.
 
 Dependencies:
 - Reads an EXE/PCK pair produced by the selected revision's Windows target.
-- Reads already-prepared runtime data and the authoritative source manifest; it never rebuilds world truth.
+- Reads prepared runtime-data fingerprints and the authoritative source manifest; it never rebuilds world truth.
+- The target has already verified the PCK exposes the prepared data at res://world_data.
 - Uses only Python standard library modules.
 """
 
@@ -17,7 +18,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+RUNTIME_DELIVERY = "embedded_pck:res://world_data"
 
 
 def sha256(path: Path) -> str:
@@ -76,19 +78,18 @@ def package_client(
 
     with tempfile.TemporaryDirectory(prefix="brur-windows-package-") as directory:
         staging = Path(directory) / "BRUR"
-        staged_runtime = staging / "runtime_data"
         logs = staging / "logs"
         staging.mkdir(parents=True)
         logs.mkdir()
 
         shutil.copy2(exe, staging / exe.name)
         shutil.copy2(pck, staging / pck.name)
-        shutil.copytree(runtime_data, staged_runtime)
 
         final_build_info = dict(build_info)
         final_build_info["client_ready"] = True
         final_build_info["world_data_source_manifest_sha256"] = sha256(source_manifest)
         final_build_info["runtime_files"] = hashes
+        final_build_info["runtime_delivery"] = RUNTIME_DELIVERY
         final_build_info["packaging_format_version"] = FORMAT_VERSION
         (staging / "build_info.json").write_text(
             json.dumps(final_build_info, indent=2, sort_keys=True), encoding="utf-8"
@@ -104,16 +105,12 @@ def package_client(
             "issue": final_build_info.get("issue"),
             "world_data_source_manifest_sha256": final_build_info["world_data_source_manifest_sha256"],
             "runtime_files": hashes,
+            "runtime_delivery": RUNTIME_DELIVERY,
             "packaging_format_version": FORMAT_VERSION,
         }
         (staging / "client_bundle_info.json").write_text(
             json.dumps(bundle_info, indent=2, sort_keys=True), encoding="utf-8"
         )
-
-        for rel, expected in hashes.items():
-            actual = sha256(staged_runtime / rel)
-            if actual != expected:
-                raise SystemExit(f"runtime fingerprint mismatch after staging: {rel}")
 
         with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
             archive.writestr("BRUR/logs/", "")
@@ -133,13 +130,12 @@ def package_client(
             missing = required - names
             if missing:
                 raise SystemExit(f"client ZIP validation failed; missing: {sorted(missing)}")
-            for rel in hashes:
-                if f"BRUR/runtime_data/{rel}" not in names:
-                    raise SystemExit(f"client ZIP validation failed; missing runtime file: {rel}")
+            if any(name.startswith("BRUR/runtime_data/") for name in names):
+                raise SystemExit("client ZIP duplicated embedded runtime data beside the PCK")
 
     print(
         f"[windows-package] ready zip={output_zip} commit={commit[:12]} "
-        f"runtime_files={len(hashes)}"
+        f"runtime_files={len(hashes)} delivery={RUNTIME_DELIVERY}"
     )
     return bundle_info
 

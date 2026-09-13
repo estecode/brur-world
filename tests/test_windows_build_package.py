@@ -2,7 +2,7 @@
 
 Dependencies:
 - Imports tools/windows_build/package.py directly.
-- Checks the selected-revision target prepares runtime data without overriding the production startup scene.
+- Checks the selected-revision target stages production data under res://world_data without overriding the startup scene.
 - Uses temporary synthetic binaries/runtime data; it does not require Godot or real world data.
 """
 
@@ -58,7 +58,7 @@ class WindowsPackageTests(unittest.TestCase):
         )
         return binary, runtime, build_info, source_manifest
 
-    def test_package_contains_identity_runtime_and_logs_directory(self) -> None:
+    def test_package_records_embedded_runtime_identity_without_duplicate_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             binary, runtime, build_info, source_manifest = self._fixture(root)
@@ -67,15 +67,17 @@ class WindowsPackageTests(unittest.TestCase):
 
             self.assertEqual(report["pr"], 321)
             self.assertEqual(report["commit"], "d" * 40)
+            self.assertEqual(report["runtime_delivery"], "embedded_pck:res://world_data")
             with zipfile.ZipFile(output) as archive:
                 names = set(archive.namelist())
                 self.assertIn("BRUR/logs/", names)
-                self.assertIn("BRUR/runtime_data/manifest.json", names)
-                self.assertIn("BRUR/runtime_data/tiles/city.bin", names)
+                self.assertFalse(any(name.startswith("BRUR/runtime_data/") for name in names))
                 packaged_build = json.loads(archive.read("BRUR/build_info.json"))
                 packaged_bundle = json.loads(archive.read("BRUR/client_bundle_info.json"))
 
             self.assertTrue(packaged_build["client_ready"])
+            self.assertEqual(packaged_build["packaging_format_version"], 2)
+            self.assertEqual(packaged_build["runtime_delivery"], "embedded_pck:res://world_data")
             self.assertEqual(
                 packaged_build["runtime_files"]["tiles/city.bin"],
                 windows_package.sha256(runtime / "tiles" / "city.bin"),
@@ -105,12 +107,15 @@ class WindowsPackageTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 windows_package.package_client(binary, runtime, build_info, source_manifest, root / "client.zip")
 
-    def test_target_passes_required_output_flag_to_runtime_preparer(self) -> None:
+    def test_target_stages_production_data_into_exported_res_path(self) -> None:
         target = TARGET_PATH.read_text(encoding="utf-8")
-        self.assertIn(
-            '"$BRUR_WINDOWS_WORLD_DATA" --output "$BRUR_WINDOWS_RUNTIME_DATA_OUT"',
-            target,
-        )
+        self.assertIn("prepare_runtime_data.py", target)
+        self.assertIn('STAGED_WORLD_DATA="$BRUR_WINDOWS_SOURCE_ROOT/world_data"', target)
+        self.assertIn('cp -R "$BRUR_WINDOWS_RUNTIME_DATA_OUT" "$STAGED_WORLD_DATA"', target)
+        self.assertIn('include_filter="world_data/*,world_data/**/*"', target)
+        self.assertIn('--main-pack "$PCK_PATH"', target)
+        self.assertIn("test_windows_packaged_world_data.gd", target)
+        self.assertNotIn("prepare_world_showcase.py", target)
 
     def test_target_preserves_selected_revision_production_entrypoint(self) -> None:
         target = TARGET_PATH.read_text(encoding="utf-8")
