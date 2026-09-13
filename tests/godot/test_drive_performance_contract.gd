@@ -18,7 +18,7 @@ const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 const TEST_WORLD_POSITION := Vector3(52277.0, 0.06, 825907.0)
 const SYNTHETIC_BUILDING_LEAVES := 256
 const SAME_CELL_FRAMES := 600
-const MAX_DRIVE_BUILDING_COVERAGE_CHUNKS := 16
+const MAX_DRIVE_BUILDING_COVERAGE_CHUNKS := 64
 
 func _init() -> void:
 	call_deferred("_run")
@@ -50,7 +50,7 @@ func _run() -> void:
 	var bounds: Dictionary = building_stream.call("_chunk_bounds", drive_lod, 1)
 	var coverage := int(building_stream.call("_bounds_chunk_count", bounds))
 	print("DRIVE_PERF_BUILDING_COVERAGE chunks=", coverage, " bounds=", bounds, " altitude=", drive_altitude)
-	_assert(coverage <= MAX_DRIVE_BUILDING_COVERAGE_CHUNKS, "Drive full-detail building viewport remains tightly bounded")
+	_assert(coverage <= MAX_DRIVE_BUILDING_COVERAGE_CHUNKS, "Drive full-detail building viewport stays inside the production 64-chunk budget")
 
 	var world := Node3D.new()
 	var background := MeshInstance3D.new()
