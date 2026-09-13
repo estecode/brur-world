@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Verifies PR-owned local checks run from the exact worktree, fail closed, and request visual review only when a subjective scope remains.
-# Dependencies: bash, mktemp, grep, tools/run_pr_owned_check.sh, tools/pr_check.sh, tools/pr_check_local.sh, and tests/test_pr_check_entry.sh.
+# Verifies exact-PR hooks fail closed and machine success is persisted before optional human Godot review.
+# Dependencies: bash, git, mktemp, grep, tools/run_pr_owned_check.sh, tools/pr_check.sh, and tests/test_pr_check_entry.sh.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -10,8 +10,15 @@ trap 'rm -rf "$TMP"' EXIT
 WORKTREE="$TMP/worktree"
 WORLD_DATA="$TMP/world_data"
 mkdir -p "$WORKTREE/tools" "$WORLD_DATA"
+git -C "$WORKTREE" init -q
+git -C "$WORKTREE" config user.name test
+git -C "$WORKTREE" config user.email test@example.invalid
+printf 'fixture\n' > "$WORKTREE/fixture.txt"
+git -C "$WORKTREE" add fixture.txt
+git -C "$WORKTREE" commit -qm fixture
+WORKTREE_HEAD="$(git -C "$WORKTREE" rev-parse HEAD)"
 
-output="$(bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/godot)"
+output="$(bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/true)"
 grep -q 'PR_CHECK=SKIP_PR_OWNED_OBJECTIVE_CHECKS pr=123 reason=no-hook' <<<"$output"
 
 cat > "$WORKTREE/tools/pr_check_local.sh" <<'HOOK'
@@ -23,65 +30,89 @@ printf 'HOOK_PYTHON=%s\n' "$PYTHON_BIN"
 printf 'HOOK_GODOT=%s\n' "$GODOT_BIN"
 HOOK
 
-output="$(bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/godot)"
+output="$(bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/true)"
 grep -q 'PR_CHECK=RUN_PR_OWNED_OBJECTIVE_CHECKS pr=123 hook=tools/pr_check_local.sh' <<<"$output"
 grep -q 'HOOK_PR=123' <<<"$output"
 grep -Fq "HOOK_WORKTREE=$WORKTREE" <<<"$output"
 grep -Fq "HOOK_WORLD_DATA=$WORLD_DATA" <<<"$output"
 grep -q 'HOOK_PYTHON=/usr/bin/python3' <<<"$output"
-grep -q 'HOOK_GODOT=/usr/bin/godot' <<<"$output"
 
 cat > "$WORKTREE/tools/pr_check_local.sh" <<'HOOK'
 exit 23
 HOOK
-
 set +e
-bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/godot >/dev/null 2>&1
+bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/true >/dev/null 2>&1
 status=$?
 set -e
-[[ "$status" -eq 23 ]] || { printf 'expected hook failure 23, got %s\n' "$status" >&2; exit 1; }
+[[ "$status" -eq 23 ]] || { printf 'expected objective hook failure 23, got %s\n' "$status" >&2; exit 1; }
+
+ORDER_LOG="$TMP/order.log"
+export ORDER_LOG
+FAKE_PYTHON="$TMP/python"
+cat > "$FAKE_PYTHON" <<'PY'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == */pr_check_status.py ]]; then
+  shift
+  printf 'STATUS %s\n' "$*" >> "$ORDER_LOG"
+  exit 0
+fi
+exec /usr/bin/python3 "$@"
+PY
+chmod +x "$FAKE_PYTHON"
+
+FAKE_GODOT="$TMP/godot"
+cat > "$FAKE_GODOT" <<'GODOT'
+#!/usr/bin/env bash
+set -euo pipefail
+for arg in "$@"; do
+  if [[ "$arg" == "--headless" ]]; then
+    printf 'GODOT_HEADLESS %s\n' "$*" >> "$ORDER_LOG"
+    exit 0
+  fi
+done
+printf 'GODOT_VISUAL %s\n' "$*" >> "$ORDER_LOG"
+exit 42
+GODOT
+chmod +x "$FAKE_GODOT"
+
+cat > "$WORKTREE/tools/pr_check_local.sh" <<'HOOK'
+set -euo pipefail
+"$GODOT_BIN" --headless --path "$BRUR_PR_CHECK_WORKTREE" --script res://tests/fake.gd
+printf 'HOOK_OBJECTIVE_DONE\n' >> "$ORDER_LOG"
+"$GODOT_BIN" --path "$BRUR_PR_CHECK_WORKTREE" res://harness/fake.tscn
+printf 'HOOK_VISUAL_RETURNED\n' >> "$ORDER_LOG"
+HOOK
+
+output="$(bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT" 2>&1)"
+grep -q 'PR_CHECK=STATUS success pr=123' <<<"$output"
+grep -q 'PR_CHECK=VISUAL_REVIEW_WARNING Godot exited status=42 after objective success' <<<"$output"
+status_count="$(grep -c '^STATUS .*--state success .*--stage objective-checks-complete' "$ORDER_LOG")"
+[[ "$status_count" -eq 1 ]] || { printf 'expected exactly one pre-visual success status, got %s\n' "$status_count" >&2; cat "$ORDER_LOG" >&2; exit 1; }
+status_line="$(grep -n '^STATUS ' "$ORDER_LOG" | cut -d: -f1)"
+visual_line="$(grep -n '^GODOT_VISUAL ' "$ORDER_LOG" | cut -d: -f1)"
+[[ "$status_line" -lt "$visual_line" ]] || { printf 'machine success must be persisted before visual Godot starts\n' >&2; cat "$ORDER_LOG" >&2; exit 1; }
+grep -q '^GODOT_HEADLESS ' "$ORDER_LOG"
+grep -q '^HOOK_VISUAL_RETURNED$' "$ORDER_LOG"
+grep -q -- "--sha $WORKTREE_HEAD" "$ORDER_LOG"
 
 hook_line="$(grep -n 'run_pr_owned_check.sh' "$ROOT/tools/pr_check.sh" | tail -n 1 | cut -d: -f1)"
 success_line="$(grep -n -- '--state success' "$ROOT/tools/pr_check.sh" | head -n 1 | cut -d: -f1)"
 [[ -n "$hook_line" && -n "$success_line" && "$hook_line" -lt "$success_line" ]] || {
-  printf 'PR-owned hook must run before persistent success is recorded\n' >&2
+  printf 'outer launcher must retain fail-closed hook-before-final-success ordering\n' >&2
   exit 1
 }
 
+grep -q 'DRIVING_VISUAL_SCOPE="required"' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'driving changes must still request exact-revision human review\n' >&2
+  exit 1
+}
+grep -q 'harness/driving/driving_harness.tscn' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'driving human review must still launch the production-backed driving harness\n' >&2
+  exit 1
+}
+
+bash -n "$ROOT/tools/run_pr_owned_check.sh"
 bash -n "$ROOT/tools/pr_check_local.sh"
-no_prep_line="$(grep -n 'PR_CHECK=NO_EXPENSIVE_LOCAL_PREPARATION' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
-skip_visual_line="$(grep -n 'PR_CHECK=SKIP_VISUAL_REVIEW' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
-visual_line="$(grep -n 'PR_CHECK=VISUAL_REVIEW pr=' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
-[[ -n "$no_prep_line" && -n "$skip_visual_line" && -n "$visual_line" ]] || {
-  printf 'Safe Check must expose both objective-only and visual-review paths\n' >&2
-  exit 1
-}
-[[ "$no_prep_line" -lt "$skip_visual_line" && "$skip_visual_line" -lt "$visual_line" ]] || {
-  printf 'objective-only completion must be decided before visual-review launch\n' >&2
-  exit 1
-}
-if ! sed -n "${skip_visual_line},$((skip_visual_line + 3))p" "$ROOT/tools/pr_check_local.sh" | grep -Eq '^[[:space:]]*exit 0[[:space:]]*$'; then
-  printf 'objective-only Safe Check must exit without launching Godot\n' >&2
-  exit 1
-fi
-
-grep -q 'BUILDING_TILE_SCOPE.*required' "$ROOT/tools/pr_check_local.sh" || {
-  printf 'visual presentation scopes must still be able to request review\n' >&2
-  exit 1
-}
-
-grep -q 'TRAFFIC_INTERSECTION_DATA=.*\.poc_runtime/traffic_intersections' "$ROOT/tools/pr_check_local.sh" || {
-  printf 'traffic intersection fallback data must remain isolated inside the PR worktree\n' >&2
-  exit 1
-}
-grep -q 'BUILD_TRAFFIC_SIGNALS.*reason=missing-runtime-data' "$ROOT/tools/pr_check_local.sh" || {
-  printf 'missing traffic signal runtime data must trigger an explicit rebuild path\n' >&2
-  exit 1
-}
-grep -q 'build_traffic_signals.py.*--output.*TRAFFIC_INTERSECTION_DATA' "$ROOT/tools/pr_check_local.sh" || {
-  printf 'traffic signal fallback must use the production #92 builder into isolated data\n' >&2
-  exit 1
-}
-
 bash "$ROOT/tests/test_pr_check_entry.sh"
 printf 'pr-owned check hook tests passed\n'
