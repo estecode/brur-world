@@ -4,7 +4,7 @@ extends SceneTree
 ##
 ## Dependencies:
 ## - camera_controller.gd owns the presentation-only Drive render-origin conversion.
-## - drive_render_origin_composition.gd rebases presentation roots only.
+## - drive_render_origin_composition.gd rebases GPU-facing presentation leaves instead of cancelling huge parent/child coordinates.
 ## - player_vehicle.tscn uses Vehicle's VisualRoot adapter without moving logical vehicle state.
 ## - gps_route_drive_render_adapter.gd rebases route presentation and converts Drive picking back to logical world coordinates.
 
@@ -57,10 +57,23 @@ func _run() -> void:
 	_assert(visual_root.global_basis.is_equal_approx(vehicle.global_basis), "vehicle visual preserves logical heading in render-local frame")
 
 	var world := Node3D.new()
+	var road_leaf := MeshInstance3D.new()
+	road_leaf.position = TEST_WORLD_POSITION
+	world.add_child(road_leaf)
+	var background_leaf := MeshInstance3D.new()
+	background_leaf.position = Vector3(0.0, -0.25, 0.0)
+	world.add_child(background_leaf)
+
 	var poi := Node3D.new()
 	var cloud := Node3D.new()
 	var buildings := Node3D.new()
 	buildings.position.y = 0.06
+	var building_group := Node3D.new()
+	var building_leaf := MeshInstance3D.new()
+	building_leaf.position = TEST_WORLD_POSITION
+	building_group.add_child(building_leaf)
+	buildings.add_child(building_group)
+
 	var gps_layer := GpsRouteDriveRenderAdapterScript.new()
 	gps_layer.player = vehicle
 	gps_layer.set("_camera_rig", rig)
@@ -89,15 +102,34 @@ func _run() -> void:
 	composition.set("_gps_route_layer", gps_layer)
 	composition.call("_sync_render_origin")
 	var expected_offset := Vector2(-render_origin.x, -render_origin.z)
-	for presentation in [world, poi, cloud, buildings]:
-		_assert(Vector2(presentation.position.x, presentation.position.z).distance_to(expected_offset) < 0.01, "presentation root uses inverse Drive render origin")
+	_assert(Vector2(world.position.x, world.position.z).length() < 0.01, "World root remains neutral in Drive instead of cancelling huge child coordinates")
+	_assert(Vector2(buildings.position.x, buildings.position.z).length() < 0.01, "Building root remains neutral in Drive instead of cancelling huge chunk coordinates")
+	_assert(Vector2(poi.position.x, poi.position.z).distance_to(expected_offset) < 0.01, "POI presentation root uses inverse Drive render origin")
+	_assert(Vector2(cloud.position.x, cloud.position.z).distance_to(expected_offset) < 0.01, "cloud presentation root uses inverse Drive render origin")
+	_assert(Vector2(road_leaf.position.x, road_leaf.position.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "road GPU-facing leaf is render-local rather than a huge child under an inverse huge parent")
+	_assert(Vector2(background_leaf.position.x, background_leaf.position.z).distance_to(expected_offset) < 0.01, "background presentation leaf receives the Drive origin directly")
+	_assert(Vector2(building_group.position.x, building_group.position.z).length() < 0.01, "building grouping node stays neutral")
+	_assert(Vector2(building_leaf.position.x, building_leaf.position.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "building GPU-facing chunk is render-local rather than a huge child under an inverse huge parent")
+	_assert(absf(road_leaf.position.x) <= MAX_LOCAL_AXIS_M and absf(road_leaf.position.z) <= MAX_LOCAL_AXIS_M, "road leaf stays inside the render-origin cell")
+	_assert(absf(building_leaf.position.x) <= MAX_LOCAL_AXIS_M and absf(building_leaf.position.z) <= MAX_LOCAL_AXIS_M, "building leaf stays inside the render-origin cell")
 	_assert(is_equal_approx(buildings.position.y, 0.06), "presentation rebasing preserves #206 building surface height")
+
+	# Re-running the composition must be idempotent; otherwise a per-frame origin
+	# sync would drift presentation nodes and recreate the visible instability.
+	composition.call("_sync_render_origin")
+	_assert(Vector2(road_leaf.position.x, road_leaf.position.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "repeated Drive sync does not double-subtract road origin")
+	_assert(Vector2(building_leaf.position.x, building_leaf.position.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "repeated Drive sync does not double-subtract building origin")
 
 	rig.call("set_drive_mode", false)
 	composition.call("_sync_render_origin")
 	_assert((rig.call("get_render_origin_world") as Vector3).is_zero_approx(), "Map mode restores zero render origin")
-	for presentation in [world, poi, cloud, buildings]:
-		_assert(Vector2(presentation.position.x, presentation.position.z).length() < 0.01, "Map presentation restores canonical world frame")
+	_assert(Vector2(world.position.x, world.position.z).length() < 0.01, "World root stays canonical in Map")
+	_assert(Vector2(buildings.position.x, buildings.position.z).length() < 0.01, "Building root stays canonical in Map")
+	_assert(Vector2(road_leaf.position.x, road_leaf.position.z).distance_to(Vector2(TEST_WORLD_POSITION.x, TEST_WORLD_POSITION.z)) < 0.01, "Map restores authoritative road child coordinates")
+	_assert(Vector2(background_leaf.position.x, background_leaf.position.z).length() < 0.01, "Map restores canonical background child coordinates")
+	_assert(Vector2(building_leaf.position.x, building_leaf.position.z).distance_to(Vector2(TEST_WORLD_POSITION.x, TEST_WORLD_POSITION.z)) < 0.01, "Map restores authoritative building chunk coordinates")
+	_assert(Vector2(poi.position.x, poi.position.z).length() < 0.01, "Map POI presentation restores canonical frame")
+	_assert(Vector2(cloud.position.x, cloud.position.z).length() < 0.01, "Map cloud presentation restores canonical frame")
 	_assert(route_renderer.position.is_zero_approx(), "Map GPS route renderer restores canonical world frame")
 	vehicle.call("set_render_origin_world", Vector3.ZERO)
 	_assert(visual_root.global_position.distance_to(vehicle.global_position) < 0.01, "vehicle visual restores logical Map position")
