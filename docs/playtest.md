@@ -59,6 +59,14 @@ Driving harness:
 http://127.0.0.1:17384/safecommand/project?repo=estecode/brur-world&command=playtest&target=driving
 ```
 
-The driving harness is a compact connected rectangular road grid: streets/avenues plus an outer ring road. W/S/A/D + Space control the production player car manually. `Follow route` hands control to the production route follower on a fixed ring-road route; any manual driving input disengages route follow without replacing/resetting the car. `Follow car` independently controls camera centering, and `Reset car` returns the same vehicle to the fixture start.
+The driving harness is a compact connected rectangular road grid: streets/avenues plus an outer ring road. W/S/A/D + Space control the production player car manually. `Follow route` hands control to the production route follower on a fixed ring-road route; any manual driving input disengages route follow without replacing/resetting the car. `Follow car` independently controls camera centering, and `Reset car` returns the same vehicle to the fixture start. The harness also exposes the active route-driving policy so Normal, Aggressive and Maniac can be compared on the same route and vehicle.
 
 `playtest` always runs the current mapped checkout. It is intentionally separate from `pr-check`, which verifies an exact isolated pull-request revision.
+
+Because the mapped checkout may legitimately lag behind GitHub `main`, **do not use `playtest` as the handoff for a tracked issue/PR whose result depends on a specific new revision**. Use the PR Safe Check instead:
+
+```text
+http://127.0.0.1:17384/safecommand/project?repo=estecode/brur-world&command=pr-check&pr=<PR number>
+```
+
+`pr-check` resolves the exact current PR head, creates an isolated detached worktree, runs the PR-owned objective checks, and may open the relevant interactive harness from that exact worktree when a meaningful human check remains. This keeps tracked TEST handoffs independent of the project leader's ordinary checkout freshness. Generic `playtest` remains appropriate for explicit current-checkout/main exploration where no exact tracked revision is being verified.
