@@ -175,6 +175,21 @@ class WindowsPackageTests(unittest.TestCase):
         self.assertIn("test_windows_packaged_world_data.gd", target)
         self.assertIn('"$RUNTIME_PACK_PATH"', target)
 
+    def test_target_verifies_pck_outside_source_world_data(self) -> None:
+        target = TARGET_PATH.read_text(encoding="utf-8")
+        self.assertIn('cd "$BRUR_WINDOWS_EXPORT_DIR"', target)
+        self.assertIn("WINDOWS_TARGET=VERIFY isolated_from_source_world_data", target)
+        self.assertNotIn('--path "$BRUR_WINDOWS_SOURCE_ROOT" \\\n  --script res://tests/godot/test_windows_packaged_world_data.gd', target)
+
+    def test_target_fails_when_godot_reports_script_compile_errors(self) -> None:
+        target = TARGET_PATH.read_text(encoding="utf-8")
+        self.assertIn('2>&1 | tee "$EXPORT_LOG"', target)
+        self.assertIn("GODOT_EXPORT_STATUS=${PIPESTATUS[0]}", target)
+        self.assertIn("SCRIPT ERROR:", target)
+        self.assertIn("Parse Error:", target)
+        self.assertIn("Compile Error:", target)
+        self.assertIn("Godot export reported script compile errors", target)
+
     def test_target_supports_stable_main_launcher_contract(self) -> None:
         target = TARGET_PATH.read_text(encoding="utf-8")
         self.assertIn('LEGACY_RUNTIME_OUT="${BRUR_WINDOWS_RUNTIME_DATA_OUT:-}"', target)
