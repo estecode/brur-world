@@ -1,15 +1,19 @@
 class_name DriveHudPresentation
 extends CanvasLayer
 
-## Presents Drive-mode speed, Swedish speed-limit sign, and optional route ETA.
+## Presents road-vehicle speed, Swedish speed-limit sign, and optional route ETA in Map or Drive view.
 ##
 ## Dependencies:
 ## - Receives a small explicit view-state dictionary from DriveHudAdapter.
 ## - Owns layout/formatting only; it does not calculate vehicle, road, or route state.
+## - Uses the shared bottom overlay reservation so HUD and persistent controls never cover each other.
 
 const SpeedLimitSignScript = preload("res://scripts/speed_limit_sign.gd")
 const SPEED_FIELD_WIDTH: float = 96.0
 const ETA_FIELD_WIDTH: float = 112.0
+const PANEL_LEFT: float = 14.0
+const PANEL_TOP_FROM_BOTTOM: float = 168.0
+const PANEL_BOTTOM_FROM_BOTTOM: float = 72.0
 
 var _panel: PanelContainer
 var _row: HBoxContainer
@@ -23,10 +27,13 @@ var _eta_value: Label
 func _ready() -> void:
 	layer = 30
 	_build_ui()
-	set_drive_visible(false)
+	set_vehicle_visible(false)
+
+func set_vehicle_visible(enabled: bool) -> void:
+	visible = enabled
 
 func set_drive_visible(enabled: bool) -> void:
-	visible = enabled
+	set_vehicle_visible(enabled)
 
 func set_state(state: Dictionary) -> void:
 	if _panel == null:
@@ -65,16 +72,19 @@ func eta_box_control() -> Control:
 func speed_limit_sign_control() -> Control:
 	return _sign
 
+func panel_control() -> Control:
+	return _panel
+
 func _build_ui() -> void:
 	if _panel != null:
 		return
 	_panel = PanelContainer.new()
 	_panel.name = "Panel"
 	_panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_panel.offset_left = 24.0
-	_panel.offset_top = -120.0
-	_panel.offset_right = 282.0
-	_panel.offset_bottom = -24.0
+	_panel.offset_left = PANEL_LEFT
+	_panel.offset_top = -PANEL_TOP_FROM_BOTTOM
+	_panel.offset_right = 272.0
+	_panel.offset_bottom = -PANEL_BOTTOM_FROM_BOTTOM
 	_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var panel_style := StyleBoxFlat.new()
 	panel_style.bg_color = Color(0.035, 0.045, 0.055, 0.88)
