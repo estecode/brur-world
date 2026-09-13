@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Classify whether expensive PR-check preparation is relevant to changed files.
+"""Classify whether PR-check preparation or visual review is relevant to changed files.
 
 Dependencies:
 - Standard library only.
@@ -63,6 +63,19 @@ BUILDING_TILE_OWNERS = frozenset(
     }
 )
 
+VISUAL_REVIEW_OWNERS = frozenset(
+    {
+        "scripts/camera_controller.gd",
+        "scripts/main.gd",
+        "scripts/building_stream_layer.gd",
+        "scripts/building_runtime_composition.gd",
+        "scripts/gps_route_layer.gd",
+        "scripts/gps_route_renderer.gd",
+        "scripts/map_controls_ui.gd",
+        "scenes/main.tscn",
+    }
+)
+
 NATIVE_GPS_EXACT_OWNERS = frozenset(
     {
         "tools/build_native_gps.sh",
@@ -108,6 +121,11 @@ def building_tiles_required(changed_paths: Iterable[str]) -> bool:
     return any(path in BUILDING_TILE_OWNERS for path in _paths(changed_paths))
 
 
+def visual_review_required(changed_paths: Iterable[str]) -> bool:
+    """Return whether changed production presentation needs an interactive exact-PR review."""
+    return any(path in VISUAL_REVIEW_OWNERS for path in _paths(changed_paths))
+
+
 SCOPES = {
     "route-geometry": route_geometry_check_required,
     "road-lod": road_lod_rebuild_required,
@@ -115,6 +133,7 @@ SCOPES = {
     "city-lights": city_light_real_data_required,
     "world-showcase": world_showcase_real_data_required,
     "building-tiles": building_tiles_required,
+    "visual-review": visual_review_required,
 }
 
 
