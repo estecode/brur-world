@@ -44,6 +44,7 @@ ALL_ROUTES = tuple(ROUTE_VERSIONS)
 NODE_PROGRESS_INTERVAL = 5_000_000
 WAY_PROGRESS_INTERVAL = 250_000
 RELATION_PROGRESS_INTERVAL = 50_000
+FINALIZE_PROGRESS_INTERVAL = 100_000
 NODE_BUCKETS = 64
 MAX_OPEN_NODE_BUCKETS = 8
 NODE_RECORD = struct.Struct("<qdd")
@@ -259,6 +260,71 @@ class _ProgressDisplay:
             self.stream.write(f"\x1b[2K{line}\n")
         self.stream.flush()
         self._rendered_lines = len(lines)
+
+
+class _FinalizeProgressDisplay:
+    """Render compact live progress while the verified spool is finalized into route caches."""
+
+    def __init__(
+        self,
+        routes: Iterable[str],
+        stream: TextIO | None = None,
+        interval: int = FINALIZE_PROGRESS_INTERVAL,
+    ) -> None:
+        self.routes = tuple(sorted(routes))
+        self.route_counts = {route: 0 for route in self.routes}
+        self.processed_records = 0
+        self.phase = "selecting spool records"
+        self.stream = stream if stream is not None else sys.stdout
+        self.tty = bool(getattr(self.stream, "isatty", lambda: False)())
+        self.interval = max(1, int(interval))
+        self.started = time.perf_counter()
+        self._last_rendered_records = -self.interval
+        self._rendered_lines = 0
+
+    def select(self, route: str, count: int = 1) -> None:
+        if route in self.route_counts:
+            self.route_counts[route] += count
+
+    def record(self, count: int = 1) -> None:
+        self.processed_records += count
+        self.render()
+
+    def set_phase(self, phase: str) -> None:
+        self.phase = phase
+        self.render(force=True)
+
+    def render(self, force: bool = False) -> None:
+        if not force and self.processed_records - self._last_rendered_records < self.interval:
+            return
+        elapsed = max(0.001, time.perf_counter() - self.started)
+        rate = self.processed_records / elapsed
+        routes = ", ".join(f"{route}={self.route_counts[route]:,}" for route in self.routes)
+        if not self.tty:
+            print(
+                f"[osm-source] finalizing: {self.phase} | spool records: {self.processed_records:,} | "
+                f"{rate:,.0f}/s | routes: {routes}",
+                file=self.stream,
+                flush=True,
+            )
+            self._last_rendered_records = self.processed_records
+            return
+
+        lines = [
+            "[osm-source] route-cache finalization",
+            f"phase: {self.phase}",
+            f"spool records: {self.processed_records:,} | {rate:,.0f}/s",
+            "",
+            "routes (selected records):",
+        ]
+        lines.extend(f"  {route:<16} {self.route_counts[route]:>12,}" for route in self.routes)
+        if self._rendered_lines:
+            self.stream.write(f"\x1b[{self._rendered_lines}A")
+        for line in lines:
+            self.stream.write(f"\x1b[2K{line}\n")
+        self.stream.flush()
+        self._rendered_lines = len(lines)
+        self._last_rendered_records = self.processed_records
 
 
 class SourceCacheHandler(osmium.SimpleHandler):
@@ -502,10 +568,13 @@ def _copy_text(path: Path, output: TextIO) -> None:
         shutil.copyfileobj(source, output, length=1024 * 1024)
 
 
-def _load_standalone_nodes(path: Path, writer: _RouteWriter) -> None:
+def _load_standalone_nodes(path: Path, writer: _RouteWriter, progress: _FinalizeProgressDisplay | None = None) -> None:
     for raw in _pickle_iter(path):
         node_id, lon, lat, tags = raw
         writer.add_node(int(node_id), float(lon), float(lat), dict(tags))
+        if progress is not None:
+            progress.select(writer.route)
+            progress.record()
 
 
 def _select_way(route: str, record, signal_ids: set[int], area_relation_way_ids: set[int]) -> bool:
@@ -627,20 +696,27 @@ def _reset_route_work(work_dir: Path, stale: set[str]) -> None:
             shutil.rmtree(route_dir)
 
 
-def _finalize_spool(work_dir: Path, cache_dir: Path, stale: set[str]) -> dict[str, dict[str, int]]:
+def _finalize_spool(
+    work_dir: Path,
+    cache_dir: Path,
+    stale: set[str],
+    progress_stream: TextIO | None = None,
+) -> dict[str, dict[str, int]]:
     _reset_route_work(work_dir, stale)
     signal_ids, area_relation_way_ids = _spool_reference_sets(work_dir, stale)
     writers = {
         route: _RouteWriter(route, work_dir, cache_dir / f"{route}.osm")
         for route in stale
     }
+    progress = _FinalizeProgressDisplay(stale, stream=progress_stream)
+    progress.render(force=True)
     try:
         if "traffic_signals" in writers:
-            _load_standalone_nodes(work_dir / "traffic_signal_nodes.pkl", writers["traffic_signals"])
+            _load_standalone_nodes(work_dir / "traffic_signal_nodes.pkl", writers["traffic_signals"], progress)
         if "pois" in writers:
-            _load_standalone_nodes(work_dir / "poi_nodes.pkl", writers["pois"])
+            _load_standalone_nodes(work_dir / "poi_nodes.pkl", writers["pois"], progress)
         if "addresses" in writers:
-            _load_standalone_nodes(work_dir / "address_nodes.pkl", writers["addresses"])
+            _load_standalone_nodes(work_dir / "address_nodes.pkl", writers["addresses"], progress)
 
         ways_path = work_dir / "ways.pkl"
         if ways_path.is_file():
@@ -648,12 +724,21 @@ def _finalize_spool(work_dir: Path, cache_dir: Path, stale: set[str]) -> dict[st
                 for route, writer in writers.items():
                     if _select_way(route, record, signal_ids, area_relation_way_ids):
                         writer.add_way(record)
+                        progress.select(route)
+                progress.record()
 
         if "areas" in writers:
             for raw in _pickle_iter(work_dir / "area_relations.pkl"):
                 writers["areas"].add_relation(raw)
+                progress.select("areas")
+                progress.record()
 
-        return {route: writer.publish() for route, writer in writers.items()}
+        route_counts: dict[str, dict[str, int]] = {}
+        for route in sorted(writers):
+            progress.set_phase(f"publishing {route}")
+            route_counts[route] = writers[route].publish()
+        progress.set_phase("complete")
+        return route_counts
     finally:
         for writer in writers.values():
             writer.close_inputs()

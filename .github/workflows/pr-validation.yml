@@ -33,6 +33,7 @@ jobs:
         run: |
           python -m unittest tests.test_osm_source_cache
           python -m unittest tests.test_osm_source_cache_resume
+          python -m unittest tests.test_osm_finalize_progress
           python -m unittest tests.test_osm_route_source
 
       - name: Run road LOD build policy tests
