@@ -232,12 +232,21 @@ class _TopologyIndex:
         for rows in self.outgoing.values():
             rows.sort(key=lambda edge: (edge.way_id, graph.nodes[edge.target_index].osm_id, edge.segment_index))
 
+    def _is_branch_junction(self, node_index: int) -> bool:
+        """Return whether routing topology actually branches at this node.
+
+        OSM commonly splits one physical road into multiple way ids at tag changes.
+        Counting incident way ids therefore creates false junctions on straight roads;
+        three or more unique neighboring routing nodes is the stable topology test.
+        """
+        return len({neighbor for neighbor, _way_id in self.neighbors[node_index]}) >= 3
+
     def nearest_junction(self, signal_osm: int, way_ids: tuple[int, ...], max_hops: int = 16) -> int | None:
         start = self.node_by_osm.get(signal_osm)
         if start is None:
             return None
         allowed = set(way_ids)
-        if len(self.incident_ways[start]) >= 2:
+        if self._is_branch_junction(start):
             return start
         frontier = deque([(start, 0)])
         visited = {start}
@@ -253,7 +262,7 @@ class _TopologyIndex:
                     continue
                 visited.add(neighbor)
                 next_hops = hops + 1
-                if len(self.incident_ways[neighbor]) >= 2:
+                if self._is_branch_junction(neighbor):
                     candidates.append((next_hops, neighbor))
                 else:
                     frontier.append((neighbor, next_hops))
