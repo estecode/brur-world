@@ -48,7 +48,11 @@ func target_speed_mps(
 	var profile = _profile()
 	var index: int = clampi(target_index, 1, points.size() - 1)
 	var legal_limit: float = _speed_limit_at(index, speed_limits_mps)
-	var target: float = vehicle_max_speed_mps if _mode == Mode.MANIAC else legal_limit * float(profile.speed_limit_multiplier)
+	var target: float = legal_limit
+	if _mode == Mode.MANIAC:
+		target = vehicle_max_speed_mps if is_finite(vehicle_max_speed_mps) else legal_limit * 3.0
+	else:
+		target = legal_limit * float(profile.speed_limit_multiplier)
 	var distance_ahead: float = 0.0
 	var previous: Vector3 = points[index - 1]
 	for i in range(index, mini(points.size() - 1, index + 12)):
@@ -82,10 +86,29 @@ func intersection_target_speed_mps(
 ) -> float:
 	var profile = _profile()
 	var risk_adjusted: float = safe_intersection_speed_mps / maxf(float(profile.intersection_speed_factor), 0.01)
-	return minf(road_target_speed_mps, minf(risk_adjusted, vehicle_max_speed_mps))
+	var capped: float = minf(road_target_speed_mps, risk_adjusted)
+	if is_finite(vehicle_max_speed_mps):
+		capped = minf(capped, vehicle_max_speed_mps)
+	return maxf(0.0, capped)
 
 func accepted_gap_seconds(base_safe_gap_seconds: float) -> float:
 	return maxf(0.1, base_safe_gap_seconds * float(_profile().intersection_gap_factor))
+
+func intersection_approach_speed_mps(
+	road_target_speed_mps: float,
+	safe_intersection_speed_mps: float,
+	distance_to_conflict_m: float,
+	base_safe_gap_seconds: float,
+	observed_gap_seconds: float,
+	vehicle_max_speed_mps: float = INF
+) -> float:
+	var desired_at_conflict: float = intersection_target_speed_mps(road_target_speed_mps, safe_intersection_speed_mps, vehicle_max_speed_mps)
+	if observed_gap_seconds < accepted_gap_seconds(base_safe_gap_seconds):
+		desired_at_conflict = 0.0
+	return minf(
+		road_target_speed_mps,
+		_approach_speed(desired_at_conflict, distance_to_conflict_m, float(_profile().comfort_brake_mps2))
+	)
 
 func controls_for_speed(current_speed_mps: float, target_speed_mps_value: float) -> Vector2:
 	var profile = _profile()
