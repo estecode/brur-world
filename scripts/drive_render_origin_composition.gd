@@ -32,6 +32,12 @@ var _building_layer: Node3D = null
 var _gps_route_layer: Node = null
 var _last_static_origin := Vector3(INF, INF, INF)
 
+var _perf_static_syncs := 0
+var _perf_world_child_rebases := 0
+var _perf_building_leaf_rebases := 0
+var _perf_streamed_building_events := 0
+var _perf_background_localizations := 0
+
 func _ready() -> void:
 	_camera_rig = get_node_or_null(camera_rig_path)
 	_world = get_node_or_null(world_path) as Node3D
@@ -60,6 +66,7 @@ func _sync_render_origin(force_static: bool = true) -> void:
 	var origin: Vector3 = _camera_rig.call("get_render_origin_world")
 	var static_origin_changed := force_static or origin != _last_static_origin
 	if static_origin_changed:
+		_perf_static_syncs += 1
 		_set_horizontal_offset(_world, Vector3.ZERO)
 		_rebase_world_children(_world, origin)
 		_set_horizontal_offset(_building_layer, Vector3.ZERO)
@@ -75,10 +82,20 @@ func _sync_render_origin(force_static: bool = true) -> void:
 	if player != null and player.has_method("set_render_origin_world"):
 		player.call("set_render_origin_world", origin)
 
+func debug_perf_snapshot() -> Dictionary:
+	return {
+		"static_syncs": _perf_static_syncs,
+		"world_child_rebases": _perf_world_child_rebases,
+		"building_leaf_rebases": _perf_building_leaf_rebases,
+		"streamed_building_events": _perf_streamed_building_events,
+		"background_localizations": _perf_background_localizations,
+	}
+
 func _on_world_child_entered(node: Node) -> void:
 	var child := node as Node3D
 	if child == null or _camera_rig == null:
 		return
+	_perf_world_child_rebases += 1
 	var origin: Vector3 = _camera_rig.call("get_render_origin_world")
 	if _is_decorative_background(child):
 		_rebase_background_mesh(child as MeshInstance3D, origin)
@@ -94,6 +111,7 @@ func _connect_building_branch(node: Node) -> void:
 		_connect_building_branch(child)
 
 func _on_building_descendant_entered(node: Node) -> void:
+	_perf_streamed_building_events += 1
 	_connect_building_branch(node)
 	var child := node as Node3D
 	if child == null or _camera_rig == null:
@@ -168,6 +186,7 @@ func _rebase_background_mesh(instance: MeshInstance3D, origin: Vector3) -> void:
 
 	var localized := _localized_mesh(logical_mesh, logical_xz, next_origin)
 	if localized != null:
+		_perf_background_localizations += 1
 		instance.mesh = localized
 		instance.position.x = 0.0
 		instance.position.z = 0.0
@@ -206,6 +225,7 @@ func _rebase_building_meshes(root: Node3D, origin: Vector3) -> void:
 
 func _rebase_building_branch(node: Node3D, origin: Vector3) -> void:
 	if node is MeshInstance3D:
+		_perf_building_leaf_rebases += 1
 		_rebase_node(node, origin)
 		return
 	for child_value in node.get_children():
