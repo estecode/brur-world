@@ -187,9 +187,9 @@ func get_render_origin_world() -> Vector3:
 		return Vector3.ZERO
 	var target_world := _follow_target.global_position
 	return Vector3(
-		floorf(target_world.x / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M,
+		roundf(target_world.x / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M,
 		0.0,
-		floorf(target_world.z / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M
+		roundf(target_world.z / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M
 	)
 
 func world_to_render_position(world_position: Vector3) -> Vector3:
