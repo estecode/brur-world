@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import struct
 import sys
 import tempfile
 import unittest
@@ -23,6 +22,7 @@ from build_building_mesh_pyramid import (  # noqa: E402
     HEADER_STRUCT,
     LOD_LEVELS,
     MAGIC,
+    RECORD_STRUCT,
     VERTEX_STRUCT,
     build_building_mesh_pyramid,
     building_mesh_pyramid_cache_valid,
@@ -78,37 +78,65 @@ class BuildingMeshPyramidTests(unittest.TestCase):
             for path in sorted(root.glob("lod*/*.bmc"))
         }
 
-    def test_pyramid_is_deterministic_progressive_and_manifested(self) -> None:
+    def _records(self, payload: bytes) -> tuple[int, list[dict]]:
+        magic, version, total_vertices = HEADER_STRUCT.unpack_from(payload, 0)
+        self.assertEqual(magic, MAGIC)
+        self.assertEqual(version, FORMAT_VERSION)
+        offset = HEADER_STRUCT.size
+        records: list[dict] = []
+        counted_vertices = 0
+        while offset < len(payload):
+            self.assertLessEqual(offset + RECORD_STRUCT.size, len(payload))
+            record_x, record_z, vertices = RECORD_STRUCT.unpack_from(payload, offset)
+            offset += RECORD_STRUCT.size
+            blob_size = vertices * VERTEX_STRUCT.size
+            self.assertLessEqual(offset + blob_size, len(payload))
+            blob = payload[offset : offset + blob_size]
+            offset += blob_size
+            counted_vertices += vertices
+            records.append({"x": record_x, "z": record_z, "vertices": vertices, "blob": blob})
+        self.assertEqual(offset, len(payload))
+        self.assertEqual(counted_vertices, total_vertices)
+        return total_vertices, records
+
+    def test_pyramid_is_deterministic_progressive_exact_and_manifested(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             world = self._make_world(directory)
             report = build_building_mesh_pyramid(world)
 
             self.assertEqual(report["format_version"], FORMAT_VERSION)
+            self.assertEqual(report["geometry_builds"], 4)
             self.assertEqual([item["buildings"] for item in report["levels"]], [1, 2, 3, 4])
             self.assertEqual(
                 [item["chunk_size_m"] for item in report["levels"]],
                 [level.chunk_size_m for level in LOD_LEVELS],
             )
-            self.assertTrue(
-                all(not level.simplified for level in LOD_LEVELS),
-                "LOD changes building selection only; footprint silhouettes stay authoritative at every level",
-            )
+            self.assertTrue(all(level.simplified is False for level in LOD_LEVELS))
+
+            huge_geometry: bytes | None = None
             for level in LOD_LEVELS:
                 files = list((world / "building_mesh_lod" / f"lod{level.lod}").glob("*.bmc"))
                 self.assertTrue(files, f"lod{level.lod} emits at least one render chunk")
-                payload = files[0].read_bytes()
-                magic, version, vertices = HEADER_STRUCT.unpack_from(payload, 0)
-                self.assertEqual(magic, MAGIC)
-                self.assertEqual(version, FORMAT_VERSION)
+                vertices, records = self._records(files[0].read_bytes())
                 self.assertGreater(vertices, 0)
-                self.assertEqual(len(payload), HEADER_STRUCT.size + vertices * VERTEX_STRUCT.size)
+                self.assertEqual(len(records), level.lod + 1)
+                # Source order is stable and the huge building qualifies for every LOD.
+                if huge_geometry is None:
+                    huge_geometry = records[-1]["blob"]
+                else:
+                    self.assertEqual(
+                        huge_geometry,
+                        records[-1]["blob"],
+                        "qualifying LODs reuse the same exact building-relative geometry blob",
+                    )
 
             manifest = json.loads((world / "manifest.json").read_text(encoding="utf-8"))
             features = manifest["features"]
             self.assertEqual(features["building_mesh_lod_dir"], "building_mesh_lod")
             self.assertEqual(features["building_mesh_lod_format_version"], FORMAT_VERSION)
+            self.assertEqual(features["building_mesh_lod_geometry_builds"], 4)
             self.assertEqual(len(features["building_mesh_lod_levels"]), 4)
-            self.assertTrue(all(not item["simplified"] for item in features["building_mesh_lod_levels"]))
+            self.assertTrue(all(item["simplified"] is False for item in features["building_mesh_lod_levels"]))
             self.assertTrue(building_mesh_pyramid_cache_valid(world))
 
             first_hashes = self._payload_hashes(world)
