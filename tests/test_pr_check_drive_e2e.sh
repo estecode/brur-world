@@ -110,6 +110,7 @@ if grep -q '^STATUS .*--state success' "$ORDER_LOG"; then fail_scenario missing-
 if grep -q '^GODOT_VISUAL ' "$ORDER_LOG"; then fail_scenario missing-marker "visual Godot launched after incomplete objective test"; fi
 
 # CHECK THEN MERGE may launch the explicit human review only after all objective gates pass.
+# The runner must persist objective success before that blocking visual session starts.
 : > "$ORDER_LOG"
 set +e
 output="$(FAKE_DRIVE_MARKER=1 run_flow required 2>&1)"
@@ -125,7 +126,9 @@ headless_count="$(grep -c '^GODOT_HEADLESS ' "$ORDER_LOG" || true)"
 grep -q '^GODOT_HEADLESS res://tests/godot/test_production_fps_real_data.gd$' "$ORDER_LOG" || fail_scenario check-then-merge "production Drive headless step missing"
 grep -q '^GODOT_VISUAL ' "$ORDER_LOG" || fail_scenario check-then-merge "required visual review did not launch"
 
-# MERGE means no subjective review remains: the same real-data gates must complete without opening Godot visually.
+# MERGE means no subjective review remains: the PR-owned hook runs all real-data gates
+# headlessly and returns. Final success is owned by outer tools/pr_check.sh after this
+# runner exits, so the inner runner must not write an early success status here.
 : > "$ORDER_LOG"
 set +e
 output="$(FAKE_DRIVE_MARKER=1 run_flow none 2>&1)"
@@ -134,12 +137,18 @@ set -e
 [[ "$status" -eq 0 ]] || fail_scenario merge "flow exited $status"
 grep -q 'production Drive FPS real-data test: OK' <<<"$output" || fail_scenario merge "Drive completion marker missing"
 grep -q 'PR_CHECK=SKIP_VISUAL_REVIEW pr=235 reason=no-subjective-check-remains' <<<"$output" || fail_scenario merge "headless-only completion marker missing"
-grep -q 'PR_CHECK=STATUS success pr=235' <<<"$output" || fail_scenario merge "objective success output missing"
-status_count="$(grep -c '^STATUS .*--state success .*--stage objective-checks-complete' "$ORDER_LOG" || true)"
-[[ "$status_count" -eq 1 ]] || fail_scenario merge "expected one objective success, got $status_count"
+if grep -q 'PR_CHECK=STATUS success pr=235' <<<"$output"; then fail_scenario merge "inner runner wrote final success before outer Safe Check"; fi
+status_count="$(grep -c '^STATUS .*--state success' "$ORDER_LOG" || true)"
+[[ "$status_count" -eq 0 ]] || fail_scenario merge "inner runner unexpectedly persisted $status_count success status(es)"
 headless_count="$(grep -c '^GODOT_HEADLESS ' "$ORDER_LOG" || true)"
 [[ "$headless_count" -eq 4 ]] || fail_scenario merge "expected four automatic MERGE headless steps, got $headless_count"
 if grep -q '^GODOT_VISUAL ' "$ORDER_LOG"; then fail_scenario merge "redundant visual Godot session opened"; fi
+
+# Preserve the outer ownership contract: full Safe Check records success only after
+# the PR-owned runner returns green.
+hook_line="$(grep -n 'run_pr_owned_check.sh' "$ROOT/tools/pr_check.sh" | tail -n 1 | cut -d: -f1)"
+success_line="$(grep -n -- '--state success' "$ROOT/tools/pr_check.sh" | head -n 1 | cut -d: -f1)"
+[[ -n "$hook_line" && -n "$success_line" && "$hook_line" -lt "$success_line" ]] || fail_scenario merge "outer Safe Check no longer owns post-hook final success"
 
 bash -n "$ROOT/tools/pr_check_local.sh"
 bash -n "$ROOT/tools/run_pr_owned_check.sh"
