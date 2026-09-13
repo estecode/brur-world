@@ -14,8 +14,10 @@ const GRID_MIN_X: float = -90.0
 const GRID_MAX_X: float = 90.0
 const GRID_MIN_Z: float = -65.0
 const GRID_MAX_Z: float = 65.0
-const INNER_X: PackedFloat32Array = PackedFloat32Array([-30.0, 30.0])
-const INNER_Z: PackedFloat32Array = PackedFloat32Array([-22.0, 22.0])
+const INNER_X_LEFT: float = -30.0
+const INNER_X_RIGHT: float = 30.0
+const INNER_Z_NEAR: float = -22.0
+const INNER_Z_FAR: float = 22.0
 
 @onready var camera_rig: Node3D = $CameraRig
 @onready var follow_route: CheckButton = $Ui/Panel/Margin/VBox/FollowRoute
@@ -115,9 +117,9 @@ func _build_connected_roads() -> void:
 	_add_road(Vector3((GRID_MIN_X + GRID_MAX_X) * 0.5, ROAD_Y, GRID_MAX_Z), Vector3(GRID_MAX_X - GRID_MIN_X + ROAD_WIDTH, ROAD_HEIGHT, ROAD_WIDTH))
 	_add_road(Vector3(GRID_MIN_X, ROAD_Y, (GRID_MIN_Z + GRID_MAX_Z) * 0.5), Vector3(ROAD_WIDTH, ROAD_HEIGHT, GRID_MAX_Z - GRID_MIN_Z + ROAD_WIDTH))
 	_add_road(Vector3(GRID_MAX_X, ROAD_Y, (GRID_MIN_Z + GRID_MAX_Z) * 0.5), Vector3(ROAD_WIDTH, ROAD_HEIGHT, GRID_MAX_Z - GRID_MIN_Z + ROAD_WIDTH))
-	for x in INNER_X:
+	for x in [INNER_X_LEFT, INNER_X_RIGHT]:
 		_add_road(Vector3(x, ROAD_Y, 0.0), Vector3(ROAD_WIDTH, ROAD_HEIGHT, GRID_MAX_Z - GRID_MIN_Z + ROAD_WIDTH))
-	for z in INNER_Z:
+	for z in [INNER_Z_NEAR, INNER_Z_FAR]:
 		_add_road(Vector3(0.0, ROAD_Y, z), Vector3(GRID_MAX_X - GRID_MIN_X + ROAD_WIDTH, ROAD_HEIGHT, ROAD_WIDTH))
 
 func _add_road(position_value: Vector3, size_value: Vector3) -> void:
@@ -134,16 +136,16 @@ func _add_road(position_value: Vector3, size_value: Vector3) -> void:
 func _build_fixture_route() -> PackedVector3Array:
 	return PackedVector3Array([
 		Vector3(GRID_MIN_X, 0.8, GRID_MAX_Z),
-		Vector3(-30.0, 0.8, GRID_MAX_Z),
-		Vector3(30.0, 0.8, GRID_MAX_Z),
+		Vector3(INNER_X_LEFT, 0.8, GRID_MAX_Z),
+		Vector3(INNER_X_RIGHT, 0.8, GRID_MAX_Z),
 		Vector3(GRID_MAX_X, 0.8, GRID_MAX_Z),
-		Vector3(GRID_MAX_X, 0.8, 22.0),
-		Vector3(GRID_MAX_X, 0.8, -22.0),
+		Vector3(GRID_MAX_X, 0.8, INNER_Z_FAR),
+		Vector3(GRID_MAX_X, 0.8, INNER_Z_NEAR),
 		Vector3(GRID_MAX_X, 0.8, GRID_MIN_Z),
-		Vector3(30.0, 0.8, GRID_MIN_Z),
-		Vector3(-30.0, 0.8, GRID_MIN_Z),
+		Vector3(INNER_X_RIGHT, 0.8, GRID_MIN_Z),
+		Vector3(INNER_X_LEFT, 0.8, GRID_MIN_Z),
 		Vector3(GRID_MIN_X, 0.8, GRID_MIN_Z),
-		Vector3(GRID_MIN_X, 0.8, -22.0),
-		Vector3(GRID_MIN_X, 0.8, 22.0),
+		Vector3(GRID_MIN_X, 0.8, INNER_Z_NEAR),
+		Vector3(GRID_MIN_X, 0.8, INNER_Z_FAR),
 		Vector3(GRID_MIN_X, 0.8, GRID_MAX_Z),
 	])
