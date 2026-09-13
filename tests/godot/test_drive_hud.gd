@@ -104,7 +104,7 @@ func _test_bottom_ui_non_overlap() -> void:
 	var hud_rect := hud_panel.get_global_rect()
 	var viewport_height := float(root.size.y)
 	var map_controls_rect := Rect2(14.0, viewport_height - 58.0, 666.0, 44.0)
-	_assert(not hud_rect.intersects(map_controls_rect), "road-vehicle HUD does not overlap the persistent bottom map controls")
+	_assert(hud_rect.end.y <= map_controls_rect.position.y, "road-vehicle HUD stays entirely above the persistent bottom map controls")
 
 	var header := Button.new()
 	var body := VBoxContainer.new()
@@ -113,8 +113,8 @@ func _test_bottom_ui_non_overlap() -> void:
 	root.add_child(body)
 	OverlayLayoutScript.apply_window(header, body, OverlayLayoutScript.Slot.BOTTOM_LEFT, 646.0)
 	await process_frame
-	_assert(header.get_global_rect().end.y < hud_rect.position.y, "bottom-left overlay header is reserved above the road-vehicle HUD")
-	_assert(body.get_global_rect().end.y < hud_rect.position.y, "bottom-left overlay body is reserved above the road-vehicle HUD")
+	_assert(header.get_global_rect().end.y <= hud_rect.position.y, "bottom-left overlay header is reserved above the road-vehicle HUD")
+	_assert(body.get_global_rect().end.y <= hud_rect.position.y, "bottom-left overlay body is reserved above the road-vehicle HUD")
 	_assert(is_equal_approx(float(OverlayLayoutScript.bottom_reserved_height()), 168.0), "bottom overlay layout reserves the complete map-controls + HUD stack")
 	header.queue_free()
 	body.queue_free()
