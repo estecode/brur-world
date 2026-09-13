@@ -142,6 +142,8 @@ run_owned_hook() {
   fi
 
   printf 'PR_CHECK=RUN_PR_OWNED_OBJECTIVE_CHECKS pr=%s hook=tools/pr_check_local.sh\n' "$PR"
+  local hook_status
+  set +e
   (
     cd "$WORKTREE"
     BRUR_PR_CHECK_PR="$PR" \
@@ -157,6 +159,11 @@ run_owned_hook() {
     GODOT_BIN="$GODOT_WRAPPER" \
     bash "$HOOK"
   )
+  hook_status=$?
+  set -e
+  if [[ "$hook_status" -ne 0 ]]; then
+    return "$hook_status"
+  fi
   launch_required_review_if_missing
 }
 
