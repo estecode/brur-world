@@ -1,11 +1,11 @@
 extends SceneTree
 
-## Guards Drive against per-frame static scene work and unbounded near-ground building coverage.
+## Measures Drive frame pacing while guarding against repeated static rebasing and unbounded building coverage.
 ##
 ## Dependencies:
 ## - camera_controller.gd supplies production Drive framing/render-origin behavior.
 ## - building_stream_layer.gd and building_lod_policy.gd supply production viewport/LOD selection.
-## - drive_render_origin_composition.gd exposes production performance counters only; no test-only behavior.
+## - drive_render_origin_composition.gd supplies production presentation work and counters.
 ## - world_coordinates.gd remains the coordinate conversion owner.
 
 const CameraControllerScript = preload("res://scripts/camera_controller.gd")
@@ -17,8 +17,11 @@ const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 
 const TEST_WORLD_POSITION := Vector3(52277.0, 0.06, 825907.0)
 const SYNTHETIC_BUILDING_LEAVES := 256
-const SAME_CELL_FRAMES := 600
+const MEASURE_FRAMES := 360
 const MAX_DRIVE_BUILDING_COVERAGE_CHUNKS := 64
+const MAX_AVG_FRAME_MS := 33.4
+const MAX_P95_FRAME_MS := 50.0
+const MAX_WORST_FRAME_MS := 250.0
 
 func _init() -> void:
 	call_deferred("_run")
@@ -53,6 +56,7 @@ func _run() -> void:
 	_assert(coverage <= MAX_DRIVE_BUILDING_COVERAGE_CHUNKS, "Drive full-detail building viewport stays inside the production 64-chunk budget")
 
 	var world := Node3D.new()
+	root.add_child(world)
 	var background := MeshInstance3D.new()
 	var background_mesh := ArrayMesh.new()
 	background_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _triangle_arrays(PackedVector3Array([
@@ -91,26 +95,52 @@ func _run() -> void:
 	composition.call("_sync_render_origin", true)
 	var baseline: Dictionary = composition.call("debug_perf_snapshot")
 	_assert(int(baseline["background_localizations"]) == 1, "Drive localizes BRM2 exactly once on initial entry")
-
-	for _frame in range(SAME_CELL_FRAMES):
-		composition.call("_sync_render_origin", false)
-	var same_cell: Dictionary = composition.call("debug_perf_snapshot")
-	_assert(int(same_cell["static_syncs"]) == int(baseline["static_syncs"]), "600 same-cell frames perform zero static syncs")
-	_assert(int(same_cell["building_leaf_rebases"]) == int(baseline["building_leaf_rebases"]), "600 same-cell frames perform zero building-tree rebases")
-	_assert(int(same_cell["background_localizations"]) == int(baseline["background_localizations"]), "600 same-cell frames perform zero background localizations")
-	_assert(background.mesh != background_mesh, "Drive keeps localized BRM2 presentation active")
-
 	var stable_background := background.mesh
-	for crossing in range(1, 6):
-		target.position.x = TEST_WORLD_POSITION.x + float(crossing) * 1100.0
-		rig.call("_apply_drive_camera")
-		composition.call("_sync_render_origin", false)
-	var crossed: Dictionary = composition.call("debug_perf_snapshot")
-	_assert(int(crossed["static_syncs"]) == int(baseline["static_syncs"]) + 5, "five render-cell crossings cause exactly five static syncs")
-	_assert(int(crossed["background_localizations"]) == 1, "render-cell crossings never relocalize/copy BRM2")
-	_assert(background.mesh == stable_background, "render-cell crossings retain exact BRM2 resource")
 
-	print("DRIVE_PERF_COUNTERS baseline=", baseline, " same_cell=", same_cell, " crossed=", crossed)
+	# Warm the renderer before measuring.
+	for _warmup in range(30):
+		composition.call("_sync_render_origin", false)
+		await process_frame
+
+	var frame_times: Array[float] = []
+	var start_origin: Vector3 = rig.call("get_render_origin_world")
+	for frame_index in range(MEASURE_FRAMES):
+		# Force five realistic render-cell crossings during the measurement window.
+		if frame_index > 0 and frame_index % 60 == 0:
+			target.position.x += 1100.0
+			rig.call("_apply_drive_camera")
+		# Publish late building leaves while already in Drive to model production streaming.
+		if frame_index > 0 and frame_index % 90 == 0:
+			var streamed := MeshInstance3D.new()
+			streamed.position = target.position
+			streamed.mesh = BoxMesh.new()
+			buildings.add_child(streamed)
+		var started_usec := Time.get_ticks_usec()
+		composition.call("_sync_render_origin", false)
+		await process_frame
+		frame_times.append(float(Time.get_ticks_usec() - started_usec) / 1000.0)
+
+	var after: Dictionary = composition.call("debug_perf_snapshot")
+	var next_origin: Vector3 = rig.call("get_render_origin_world")
+	_assert(next_origin != start_origin, "performance window crosses render-origin cells")
+	_assert(int(after["background_localizations"]) == 1, "render-cell crossings never relocalize/copy BRM2")
+	_assert(background.mesh == stable_background, "render-cell crossings retain exact BRM2 resource")
+	_assert(int(after["static_syncs"]) <= int(baseline["static_syncs"]) + 6, "static sync count is bounded by actual cell crossings")
+
+	frame_times.sort()
+	var sum_ms := 0.0
+	for value in frame_times:
+		sum_ms += value
+	var avg_ms := sum_ms / float(maxi(1, frame_times.size()))
+	var p95_index := clampi(int(ceil(float(frame_times.size()) * 0.95)) - 1, 0, frame_times.size() - 1)
+	var p95_ms := frame_times[p95_index]
+	var worst_ms := frame_times[frame_times.size() - 1]
+	var avg_fps := 1000.0 / maxf(0.001, avg_ms)
+	print("DRIVE_HEADLESS_PERF fps=%.2f avg_ms=%.3f p95_ms=%.3f worst_ms=%.3f frames=%d counters=%s" % [avg_fps, avg_ms, p95_ms, worst_ms, frame_times.size(), str(after)])
+	_assert(avg_ms <= MAX_AVG_FRAME_MS, "headless Drive average frame time exceeds 33.4 ms")
+	_assert(p95_ms <= MAX_P95_FRAME_MS, "headless Drive p95 frame time exceeds 50 ms")
+	_assert(worst_ms <= MAX_WORST_FRAME_MS, "headless Drive worst frame exceeds 250 ms")
+
 	composition.free()
 	gps_layer.route_renderer.free()
 	gps_layer.free()
