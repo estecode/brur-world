@@ -47,6 +47,8 @@ func set_route(points: PackedVector3Array, speed_limits_mps: PackedFloat32Array 
 	_speed_limits_mps = speed_limits_mps
 	_target_index = _forward_target_index()
 	clear_upcoming_intersection()
+	if vehicle != null and has_route():
+		set_follow_enabled(true)
 
 func clear_route() -> void:
 	_points = PackedVector3Array()
