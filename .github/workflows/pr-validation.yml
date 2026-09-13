@@ -122,6 +122,7 @@ jobs:
         run: |
           bash -n tools/run_pr_owned_check.sh
           bash tests/test_pr_owned_check.sh
+          bash tests/test_pr_check_drive_e2e.sh
 
       - name: Run world streaming foundation tests
         run: |
