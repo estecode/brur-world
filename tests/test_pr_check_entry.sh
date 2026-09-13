@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Verifies current-main Safe Check bootstrap plus persistent mapped-checkout logging on success and failure.
-# Dependencies: bash, git, mktemp, and tools/pr_check_entry.sh.
+# Dependencies: bash, git, mktemp, tools/pr_check_entry.sh, and tools/run_pr_owned_check.sh.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 ENTRY="$ROOT/tools/pr_check_entry.sh"
+OWNED_RUNNER="$ROOT/tools/run_pr_owned_check.sh"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/brur-pr-check-entry-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -71,5 +72,35 @@ if grep -q 'LAUNCHER=NEW pr=97' "$SUCCESS_LOG"; then
   printf 'persistent PR log was not replaced for the latest run\n' >&2
   exit 1
 fi
+
+# Simulate a mapped checkout whose outer entrypoint is still old. The old entry
+# fetches current main and invokes this runner with a world_data symlink pointing
+# back to the mapped checkout; the runner must recover that stable root itself.
+FALLBACK_WORKTREE="$TMP/fallback-worktree"
+FALLBACK_LAUNCHER="$TMP/fallback-launcher"
+mkdir -p "$FALLBACK_WORKTREE/tools" "$FALLBACK_LAUNCHER"
+git -C "$FALLBACK_WORKTREE" init -q
+git -C "$FALLBACK_WORKTREE" config user.email test@example.invalid
+git -C "$FALLBACK_WORKTREE" config user.name test
+printf 'fixture\n' > "$FALLBACK_WORKTREE/fixture.txt"
+cat > "$FALLBACK_WORKTREE/tools/pr_check_local.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'FALLBACK_HOOK_FAILURE pr=%s\n' "$BRUR_PR_CHECK_PR"
+exit 23
+SH
+git -C "$FALLBACK_WORKTREE" add .
+git -C "$FALLBACK_WORKTREE" commit -qm fallback-fixture
+ln -s "$MAPPED/world_data" "$FALLBACK_LAUNCHER/world_data"
+set +e
+env -u BRUR_PR_CHECK_LOG_PATH -u BRUR_PR_CHECK_MAPPED_ROOT \
+  bash "$OWNED_RUNNER" "$FALLBACK_WORKTREE" 98 "$FALLBACK_LAUNCHER/world_data" /usr/bin/python3 /usr/bin/true >/dev/null 2>&1
+fallback_status=$?
+set -e
+[[ "$fallback_status" -eq 23 ]] || { printf 'expected fallback hook exit 23, got %s\n' "$fallback_status" >&2; exit 1; }
+FALLBACK_LOG="$MAPPED/.safecommand/logs/pr-check-98.log"
+[[ -f "$FALLBACK_LOG" ]]
+grep -q 'PR_CHECK=LOG_FALLBACK .*reason=stale-mapped-entrypoint' "$FALLBACK_LOG"
+grep -q 'FALLBACK_HOOK_FAILURE pr=98' "$FALLBACK_LOG"
+grep -q 'PR_CHECK=LOG_FALLBACK_FINISHED pr=98 exit=23' "$FALLBACK_LOG"
 
 printf 'PR_CHECK_ENTRY_TEST=PASS\n'
