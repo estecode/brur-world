@@ -1,7 +1,8 @@
-[gd_scene load_steps=12 format=3]
+[gd_scene load_steps=14 format=3]
 
 [ext_resource type="Script" path="res://scripts/vehicle.gd" id="1_vehicle"]
 [ext_resource type="Script" path="res://scripts/police_vehicle_visual.gd" id="2_police_visual"]
+[ext_resource type="Script" path="res://scripts/vehicle_seat.gd" id="3_seat"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_body"]
 size = Vector3(1.8, 1.2, 4.5)
@@ -9,6 +10,9 @@ size = Vector3(1.8, 1.2, 4.5)
 [sub_resource type="StandardMaterial3D" id="Material_body"]
 albedo_color = Color(0.85, 0.15, 0.12, 1)
 roughness = 0.8
+
+[sub_resource type="BoxShape3D" id="BoxShape_collision"]
+size = Vector3(1.8, 1.5, 4.5)
 
 [sub_resource type="BoxMesh" id="BoxMesh_police_body"]
 size = Vector3(1.879, 1.2, 4.939)
@@ -44,6 +48,23 @@ roughness = 0.2
 
 [node name="Vehicle" type="Node3D"]
 script = ExtResource("1_vehicle")
+
+[node name="PhysicsBody" type="AnimatableBody3D" parent="."]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="PhysicsBody"]
+position = Vector3(0, 0.75, 0)
+shape = SubResource("BoxShape_collision")
+
+[node name="DriverSeat" type="Node3D" parent="."]
+position = Vector3(-0.55, 0, -0.65)
+script = ExtResource("3_seat")
+driver_capable = true
+exit_offset = Vector3(-1.2, 0, 0)
+
+[node name="PassengerSeat" type="Node3D" parent="."]
+position = Vector3(0.55, 0, -0.65)
+script = ExtResource("3_seat")
+exit_offset = Vector3(1.2, 0, 0)
 
 [node name="VisualRoot" type="Node3D" parent="."]
 
