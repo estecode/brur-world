@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs deterministic camera altitude and Map-to-Drive transition contracts against production camera code.
+# Runs deterministic camera altitude, cinematic Map-to-Drive transition, Drive render-origin, GPU precision, building-streaming stability, and performance contracts.
 # Dependencies: Godot 4 (GODOT_BIN can override the default executable lookup).
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,31 +17,32 @@ else
   exit 2
 fi
 
-run_contract() {
+run_godot_contract() {
   local script="$1"
   local marker="$2"
-  local output
-  local status
-
+  local output status error_output
   set +e
   output="$($GODOT --headless --path "$ROOT" --script "$script" 2>&1)"
   status=$?
   set -e
   printf '%s\n' "$output"
 
-  local error_output
   error_output="$(grep -E 'SCRIPT ERROR:|Parse Error:|Failed to load script|(^|[[:space:]])ERROR:' <<<"$output" | grep -Ev '^ERROR: [0-9]+ resources still in use at exit' || true)"
   if [[ $status -ne 0 ]] || [[ -n "$error_output" ]]; then
-    echo "camera Godot tests: FAILED ($script)" >&2
+    echo "camera/render-origin Godot tests: FAILED ($script)" >&2
     exit 1
   fi
   if ! grep -Fq "$marker" <<<"$output"; then
-    echo "camera tests did not reach success marker: $marker" >&2
+    echo "Godot test did not reach success marker: $marker" >&2
     exit 1
   fi
 }
 
-run_contract tests/godot/test_camera_altitude.gd "godot camera-altitude tests: OK"
-run_contract tests/godot/test_camera_drive_transition.gd "godot camera-drive-transition tests: OK"
+run_godot_contract "tests/godot/test_camera_altitude.gd" "godot camera-altitude tests: OK"
+run_godot_contract "tests/godot/test_camera_drive_transition.gd" "godot camera-drive-transition tests: OK"
+run_godot_contract "tests/godot/test_drive_render_origin.gd" "godot drive-render-origin tests: OK"
+run_godot_contract "tests/godot/test_drive_gpu_precision.gd" "godot drive-gpu-precision tests: OK"
+run_godot_contract "tests/godot/test_building_viewport_hysteresis.gd" "godot building-viewport-hysteresis tests: OK"
+run_godot_contract "tests/godot/test_drive_performance_contract.gd" "godot drive-performance-contract tests: OK"
 
-echo "camera automated tests: OK"
+echo "camera altitude, cinematic transition, and Drive render/performance automated tests: OK"

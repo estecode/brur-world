@@ -1,9 +1,10 @@
 extends SceneTree
 
 ## Benchmarks production building viewport staging against real Sweden-derived prebuilt mesh chunks.
-## Dependencies: world_data manifest/building_mesh_lod, WorldCoordinates, and production BuildingStreamLayer.
+## Dependencies: world_data manifest/building_mesh_lod, WorldCoordinates, BuildingLodPolicy, and production BuildingStreamLayer.
 
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
+const BuildingLodPolicyScript = preload("res://scripts/building_lod_policy.gd")
 const BuildingStreamLayerScript = preload("res://scripts/building_stream_layer.gd")
 const WORLD_DIR := "res://world_data"
 const STOCKHOLM_ABSOLUTE := Vector2(2013000.0, 8251000.0)
@@ -68,39 +69,54 @@ func _run() -> void:
 	await _wait_ready(layer, 600)
 	var cold_total_ms := float(Time.get_ticks_usec() - cold_started) / 1000.0
 	var cold_metrics: Dictionary = layer.consume_perf_metrics()
+	var cold_snapshot: Dictionary = layer.debug_snapshot()
+	var stockholm_signature := String(cold_snapshot["active_signature"])
 	_assert(layer.is_viewport_ready(), "cold Stockholm viewport stages completely")
 	_assert(layer.active_mesh_count() == 1, "cold viewport publishes one coherent viewport group")
+	_assert(not stockholm_signature.is_empty(), "cold viewport publishes a stable signature")
 	_assert(cold_total_ms <= COLD_TARGET_MS, "cold local-SSD viewport meets %.0f ms target (%.1f ms)" % [COLD_TARGET_MS, cold_total_ms])
 	_assert(float(cold_metrics["building_prepare_max_ms"]) <= MAIN_THREAD_TARGET_MS, "hidden mesh preparation meets %.1f ms per-frame target (%.2f ms)" % [MAIN_THREAD_TARGET_MS, float(cold_metrics["building_prepare_max_ms"])])
 	_assert(float(cold_metrics["building_publish_max_ms"]) <= MAIN_THREAD_TARGET_MS, "atomic publish meets %.1f ms main-thread target (%.2f ms)" % [MAIN_THREAD_TARGET_MS, float(cold_metrics["building_publish_max_ms"])])
 
-	# Prime an adjacent view, then return to Stockholm so the third request is warm-cache.
-	camera.focus += Vector3(9000.0, 0.0, 0.0)
+	# Move farther than the retained viewport margin so hysteresis must issue and
+	# publish a genuinely different request before returning to Stockholm.
+	var active_lod := BuildingLodPolicyScript.choose_lod(camera.altitude)
+	var chunk_size_m := BuildingLodPolicyScript.chunk_size_m(active_lod)
+	var transition_distance_m := chunk_size_m * float(layer.view_margin_chunks + 2)
+	camera.focus += Vector3(transition_distance_m, 0.0, 0.0)
 	layer._process(0.0)
 	await _wait_ready(layer, 600)
-	layer.consume_perf_metrics()
-	camera.focus -= Vector3(9000.0, 0.0, 0.0)
+	var adjacent_snapshot: Dictionary = layer.debug_snapshot()
+	var adjacent_metrics: Dictionary = layer.consume_perf_metrics()
+	_assert(String(adjacent_snapshot["active_signature"]) != stockholm_signature, "adjacent view leaves retained hysteresis viewport")
+	_assert(int(adjacent_metrics["building_cache_misses"]) > 0, "adjacent view stages at least one uncached building chunk")
+
+	camera.focus -= Vector3(transition_distance_m, 0.0, 0.0)
 	var warm_started := Time.get_ticks_usec()
 	layer._process(0.0)
 	await _wait_ready(layer, 600)
 	var warm_total_ms := float(Time.get_ticks_usec() - warm_started) / 1000.0
 	var warm_metrics: Dictionary = layer.consume_perf_metrics()
+	var warm_snapshot: Dictionary = layer.debug_snapshot()
+	_assert(String(warm_snapshot["active_signature"]) == stockholm_signature, "warm return republishes the original Stockholm viewport")
 	_assert(warm_total_ms <= WARM_TARGET_MS, "warm-cache viewport meets %.0f ms target (%.1f ms)" % [WARM_TARGET_MS, warm_total_ms])
 	_assert(int(warm_metrics["building_cache_hits"]) > 0, "warm return reuses decoded building chunks")
 	_assert(float(warm_metrics["building_prepare_max_ms"]) <= MAIN_THREAD_TARGET_MS, "warm hidden mesh preparation stays within main-thread frame budget")
 	_assert(float(warm_metrics["building_publish_max_ms"]) <= MAIN_THREAD_TARGET_MS, "warm atomic publish stays within main-thread frame budget")
-	_assert(int(layer.debug_snapshot()["cache_chunks"]) <= layer.max_cache_chunks, "real-data chunk cache remains bounded")
+	_assert(int(warm_snapshot["cache_chunks"]) <= layer.max_cache_chunks, "real-data chunk cache remains bounded")
 
 	print(
-		"building real-data performance: OK cold=%.1fms warm=%.1fms cold_stage=%.1fms warm_stage=%.1fms prepare_max=%.2fms publish_max=%.2fms chunks=%d vertices=%d" % [
+		"building real-data performance: OK cold=%.1fms warm=%.1fms cold_stage=%.1fms warm_stage=%.1fms prepare_max=%.2fms publish_max=%.2fms chunks=%d vertices=%d transition=%.0fm warm_hits=%d" % [
 			cold_total_ms,
 			warm_total_ms,
 			float(cold_metrics["building_stage_max_ms"]),
 			float(warm_metrics["building_stage_max_ms"]),
 			maxf(float(cold_metrics["building_prepare_max_ms"]), float(warm_metrics["building_prepare_max_ms"])),
 			maxf(float(cold_metrics["building_publish_max_ms"]), float(warm_metrics["building_publish_max_ms"])),
-			int(layer.debug_snapshot()["active_chunks"]),
-			int(layer.debug_snapshot()["active_vertices"]),
+			int(warm_snapshot["active_chunks"]),
+			int(warm_snapshot["active_vertices"]),
+			transition_distance_m,
+			int(warm_metrics["building_cache_hits"]),
 		]
 	)
 	layer.set_streaming_enabled(false)

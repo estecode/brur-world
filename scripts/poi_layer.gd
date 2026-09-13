@@ -46,17 +46,23 @@ func _ready() -> void:
 	_refresh(true)
 
 func set_presentation_enabled(enabled: bool) -> void:
+	var changed := _presentation_enabled != enabled
 	_presentation_enabled = enabled
 	if marker_instance != null:
 		marker_instance.visible = enabled
 	if not enabled:
 		_hide_hover()
+		return
+	# POI presentation is optional and defaults OFF in production. Preserve loaded
+	# data while disabled, then catch presentation up once through the normal owner.
+	if changed and is_inside_tree() and not manifest.is_empty():
+		_refresh(true)
 
 func is_presentation_enabled() -> bool:
 	return _presentation_enabled
 
 func _process(delta: float) -> void:
-	if manifest.is_empty():
+	if manifest.is_empty() or not _presentation_enabled:
 		return
 
 	var distance: float = float(camera_rig.call("get_distance"))
@@ -67,11 +73,10 @@ func _process(delta: float) -> void:
 		refresh_accum = 0.0
 		_refresh(false)
 
-	if _presentation_enabled:
-		hover_accum += delta
-		if hover_accum >= HOVER_INTERVAL:
-			hover_accum = 0.0
-			_update_hover()
+	hover_accum += delta
+	if hover_accum >= HOVER_INTERVAL:
+		hover_accum = 0.0
+		_update_hover()
 
 	if hover_panel != null and hover_panel.visible:
 		var pulse: float = 0.88 + 0.12 * sin(float(Time.get_ticks_msec()) * 0.008)

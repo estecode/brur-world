@@ -17,6 +17,7 @@ const ROAD_MAGIC: String = "BRT1"
 const MAP_MAGIC: String = "BRM2"
 const ROAD_MESH_CACHE_LIMIT: int = 512
 const DRIVE_LAYER_SPACING_M: float = 0.01
+const DRIVE_BACKGROUND_LAYER_SPACING_M: float = 0.05
 
 const MAP_LAND: int = 0
 const MAP_FARMLAND: int = 1
@@ -42,8 +43,10 @@ var loaded: Dictionary = {}
 var mesh_cache: Dictionary = {}
 var mesh_cache_order: Array[String] = []
 var background_instances: Dictionary = {}
+var ground_instance: MeshInstance3D = null
 var city_lights: Node3D
 var road_material: StandardMaterial3D
+var current_drive_background_mode: int = -1
 
 var current_lod: int = -1
 var last_min_tile: Vector2i = Vector2i(999999, 999999)
@@ -156,12 +159,31 @@ func _setup_city_lights() -> void:
 func _choose_lod(distance: float) -> int:
 	return RoadLodPolicyScript.choose_lod(distance, current_lod)
 
+func _is_driving_view() -> bool:
+	return camera_rig != null and camera_rig.has_method("is_driving_view") and bool(camera_rig.call("is_driving_view"))
+
 func _layer_spacing() -> float:
-	if camera_rig != null and camera_rig.has_method("is_driving_view") and bool(camera_rig.call("is_driving_view")):
+	if _is_driving_view():
 		return DRIVE_LAYER_SPACING_M
 	return clampf(camera_rig.get_distance() / 6000.0, 4.0, 240.0)
 
 func _background_height(kind: int) -> float:
+	# Drive keeps the physical road/player surface compact while pushing the
+	# decorative map stack below it at materially larger intervals. This avoids
+	# spending the chase-camera depth budget on centimetre-separated coplanar
+	# surfaces without making the vehicle or buildings float above the road.
+	if _is_driving_view():
+		match kind:
+			MAP_LAND:
+				return -DRIVE_BACKGROUND_LAYER_SPACING_M * 5.0
+			MAP_WATER:
+				return -DRIVE_BACKGROUND_LAYER_SPACING_M * 4.0
+			MAP_FARMLAND:
+				return -DRIVE_BACKGROUND_LAYER_SPACING_M * 3.0
+			MAP_FOREST:
+				return -DRIVE_BACKGROUND_LAYER_SPACING_M * 2.0
+			MAP_URBAN:
+				return -DRIVE_BACKGROUND_LAYER_SPACING_M
 	# Heights preserve the existing world-space relationship with roads and city
 	# lights. Background visual precedence is handled by render priority instead
 	# of relying on depth-buffer precision between these nearly coplanar layers.
@@ -178,6 +200,11 @@ func _background_height(kind: int) -> float:
 			return current_layer_spacing * 5.0
 	return current_layer_spacing
 
+func _ground_height() -> float:
+	if _is_driving_view():
+		return -DRIVE_BACKGROUND_LAYER_SPACING_M * 6.0
+	return 0.0
+
 func _background_render_priority(kind: int) -> int:
 	match kind:
 		MAP_LAND:
@@ -192,24 +219,53 @@ func _background_render_priority(kind: int) -> int:
 			return -1
 	return -5
 
-func _background_material(kind: int, ocean_base: bool = false) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
+func _configure_background_material(mat: StandardMaterial3D, kind: int, ocean_base: bool, _drive_mode: bool) -> void:
+	# PR #155 established that overlapping BRM2/ocean surfaces must never decide
+	# visual precedence through the depth buffer. Drive keeps the larger physical
+	# separation introduced by #235, but uses the same deterministic compositor so
+	# camera movement cannot make ground classes fight or bleed into building bases.
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.render_priority = BACKGROUND_OCEAN_PRIORITY if ocean_base else _background_render_priority(kind)
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.albedo_color = _map_color(kind)
 	mat.roughness = 1.0 if ocean_base else 0.95
+
+func _background_material(kind: int, ocean_base: bool = false) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	_configure_background_material(mat, kind, ocean_base, _is_driving_view())
 	return mat
+
+func _update_background_render_state(drive_mode: bool) -> void:
+	var mode := 1 if drive_mode else 0
+	if current_drive_background_mode == mode:
+		return
+	current_drive_background_mode = mode
+	for kind_value in background_instances.keys():
+		var kind := int(kind_value)
+		var instance := background_instances[kind] as MeshInstance3D
+		if instance == null:
+			continue
+		var material := instance.material_override as StandardMaterial3D
+		if material != null:
+			_configure_background_material(material, kind, false, drive_mode)
+	if ground_instance != null:
+		var ground_material := ground_instance.material_override as StandardMaterial3D
+		if ground_material != null:
+			_configure_background_material(ground_material, MAP_WATER, true, drive_mode)
 
 func _road_height() -> float:
 	return current_layer_spacing * 6.0
 
 func _update_depth_layout(force: bool) -> void:
+	var drive_mode := _is_driving_view()
+	_update_background_render_state(drive_mode)
 	var spacing: float = _layer_spacing()
 	if not force and absf(spacing - current_layer_spacing) < 0.25:
 		return
 	current_layer_spacing = spacing
+	if ground_instance != null:
+		ground_instance.position.y = _ground_height()
 	for kind_value in background_instances.keys():
 		var kind: int = int(kind_value)
 		var instance: MeshInstance3D = background_instances[kind] as MeshInstance3D
@@ -514,10 +570,11 @@ func _create_ground() -> void:
 	var margin: float = maxf(80000.0, maxf(width, depth) * 0.12)
 	var center_absolute := Vector2((min_x + max_x) * 0.5, (min_y + max_y) * 0.5)
 	var center_world: Vector3 = world_coordinates.absolute_to_world(center_absolute)
-	var ground: MeshInstance3D = MeshInstance3D.new()
+	ground_instance = MeshInstance3D.new()
 	var plane: PlaneMesh = PlaneMesh.new()
 	plane.size = Vector2(width + margin * 2.0, depth + margin * 2.0)
-	ground.mesh = plane
-	ground.position = center_world
-	ground.material_override = _background_material(MAP_WATER, true)
-	world.add_child(ground)
+	ground_instance.mesh = plane
+	ground_instance.position = center_world
+	ground_instance.position.y = _ground_height()
+	ground_instance.material_override = _background_material(MAP_WATER, true)
+	world.add_child(ground_instance)

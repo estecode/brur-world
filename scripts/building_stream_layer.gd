@@ -7,10 +7,11 @@ class_name BuildingStreamLayer
 ## - building_lod_policy.gd selects altitude detail and spatial chunk scale.
 ## - building_mesh_chunk_codec.gd decodes prebuilt BMC1 render chunks without triangulation.
 ## - world_coordinates.gd is supplied explicitly by composition and remains the coordinate owner.
-## - Composition supplies a camera rig and the derived building_mesh_lod directory.
+## - Composition supplies a camera rig and the derived building_mesh_lod directory; Drive may expose a stable ground-streaming radius.
 
 const BuildingLodPolicyScript = preload("res://scripts/building_lod_policy.gd")
 const BuildingMeshChunkCodecScript = preload("res://scripts/building_mesh_chunk_codec.gd")
+const CHUNK_KEY_META: StringName = &"brur_building_chunk_key"
 
 @export var view_margin_chunks: int = 1
 @export var max_view_chunks: int = 64
@@ -59,6 +60,7 @@ var _perf_cache_misses := 0
 var _perf_bytes_loaded := 0
 var _perf_chunks_loaded := 0
 var _perf_stale_stages := 0
+var _perf_mesh_reuses := 0
 var _last_stage_ms := 0.0
 var _last_prepare_ms := 0.0
 var _last_publish_ms := 0.0
@@ -140,6 +142,12 @@ func _update_desired_request(force: bool) -> void:
 		_last_visible = false
 		return
 	_last_visible = true
+	var next_lod := BuildingLodPolicyScript.choose_lod(altitude)
+	if not force and not _desired_request.is_empty() and int(_desired_request.get("lod", -1)) == next_lod:
+		var retained_bounds: Dictionary = _desired_request.get("bounds", {})
+		var core_bounds := _chunk_bounds(next_lod, 0)
+		if _bounds_contains(retained_bounds, core_bounds):
+			return
 	var request := _select_viewport_request(altitude)
 	var signature := String(request.get("signature", ""))
 	if not force and signature == _desired_signature:
@@ -193,6 +201,29 @@ func _chunk_bounds(lod: int, margin_chunks: int) -> Dictionary:
 			for value in corners:
 				if typeof(value) == TYPE_VECTOR3 and (value as Vector3).is_finite():
 					world_points.append(value)
+	# Drive camera heading rotates an elongated ground frustum, and the visual
+	# Map->Drive transition briefly carries a much larger interpolated frustum.
+	# Building streaming uses the CameraRig's stable Drive radius when available;
+	# fixture rigs fall back to the actual corner radius. Map keeps raw corners.
+	if (
+		not world_points.is_empty()
+		and _camera_rig.has_method("is_driving_view")
+		and bool(_camera_rig.call("is_driving_view"))
+	):
+		var focus_world: Vector3 = _camera_rig.call("get_focus_world")
+		var radius_m := 0.0
+		if _camera_rig.has_method("get_streaming_ground_radius_m"):
+			radius_m = maxf(0.0, float(_camera_rig.call("get_streaming_ground_radius_m")))
+		else:
+			for point in world_points:
+				radius_m = maxf(radius_m, Vector2(point.x - focus_world.x, point.z - focus_world.z).length())
+		if radius_m > 0.0:
+			world_points = [
+				focus_world + Vector3(-radius_m, 0.0, -radius_m),
+				focus_world + Vector3(radius_m, 0.0, -radius_m),
+				focus_world + Vector3(radius_m, 0.0, radius_m),
+				focus_world + Vector3(-radius_m, 0.0, radius_m),
+			]
 	if world_points.is_empty():
 		world_points.append(_camera_rig.call("get_focus_world"))
 	var first_absolute: Vector2 = _coordinates.world_to_absolute(world_points[0])
@@ -216,6 +247,16 @@ func _chunk_bounds(lod: int, margin_chunks: int) -> Dictionary:
 
 func _bounds_chunk_count(bounds: Dictionary) -> int:
 	return maxi(0, int(bounds["max_x"]) - int(bounds["min_x"]) + 1) * maxi(0, int(bounds["max_y"]) - int(bounds["min_y"]) + 1)
+
+func _bounds_contains(outer: Dictionary, inner: Dictionary) -> bool:
+	if outer.is_empty() or inner.is_empty():
+		return false
+	return (
+		int(outer.get("min_x", 0)) <= int(inner.get("min_x", 0))
+		and int(outer.get("max_x", 0)) >= int(inner.get("max_x", 0))
+		and int(outer.get("min_y", 0)) <= int(inner.get("min_y", 0))
+		and int(outer.get("max_y", 0)) >= int(inner.get("max_y", 0))
+	)
 
 func _start_stage_if_needed() -> void:
 	if (
@@ -302,10 +343,16 @@ func _prepare_hidden_step() -> void:
 		var entry: Dictionary = _prepare_queue.pop_front()
 		var positions: PackedVector3Array = entry.get("positions", PackedVector3Array())
 		if not positions.is_empty():
-			var mesh := ArrayMesh.new()
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, BuildingMeshChunkCodecScript.arrays_for_mesh(entry))
+			var key := String(entry.get("key", ""))
+			var mesh := _active_mesh_for_key(key)
+			if mesh == null:
+				mesh = ArrayMesh.new()
+				mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, BuildingMeshChunkCodecScript.arrays_for_mesh(entry))
+			else:
+				_perf_mesh_reuses += 1
 			var instance := MeshInstance3D.new()
-			instance.name = "Chunk_%s" % String(entry.get("key", ""))
+			instance.name = "Chunk_%s" % key
+			instance.set_meta(CHUNK_KEY_META, key)
 			instance.mesh = mesh
 			instance.material_override = _material
 			instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -320,6 +367,17 @@ func _prepare_hidden_step() -> void:
 		# Publish on the next process tick so the last mesh-preparation frame and the
 		# atomic visibility swap can never combine into one main-thread spike.
 		_prepared_ready = true
+
+func _active_mesh_for_key(key: String) -> ArrayMesh:
+	if key.is_empty() or _active_group == null or not is_instance_valid(_active_group):
+		return null
+	for child_value in _active_group.get_children():
+		var instance := child_value as MeshInstance3D
+		if instance == null or String(instance.get_meta(CHUNK_KEY_META, "")) != key:
+			continue
+		if instance.mesh is ArrayMesh:
+			return instance.mesh as ArrayMesh
+	return null
 
 func _publish_prepared_viewport() -> void:
 	if not _prepared_ready or _prepared_group == null or not is_instance_valid(_prepared_group):
@@ -435,6 +493,7 @@ func debug_snapshot() -> Dictionary:
 		"viewport_ready": is_viewport_ready(),
 		"active_signature": _active_signature,
 		"desired_signature": _desired_signature,
+		"request_generation": _request_generation,
 		"building_lod": _active_lod,
 		"desired_lod": int(_desired_request.get("lod", -1)),
 		"active_chunks": _active_chunks,
@@ -448,6 +507,7 @@ func debug_snapshot() -> Dictionary:
 		"last_stage_ms": _last_stage_ms,
 		"last_prepare_ms": _last_prepare_ms,
 		"last_publish_ms": _last_publish_ms,
+		"mesh_reuses": _perf_mesh_reuses,
 	}
 
 func consume_perf_metrics() -> Dictionary:
@@ -466,6 +526,7 @@ func consume_perf_metrics() -> Dictionary:
 		"building_bytes_loaded": _perf_bytes_loaded,
 		"building_chunks_loaded": _perf_chunks_loaded,
 		"building_stale_stages": _perf_stale_stages,
+		"building_mesh_reuses": _perf_mesh_reuses,
 		"building_active_chunks": _active_chunks,
 		"building_active_vertices": _active_vertices,
 		"building_cache_chunks": _cache.size(),
@@ -481,4 +542,5 @@ func consume_perf_metrics() -> Dictionary:
 	_perf_bytes_loaded = 0
 	_perf_chunks_loaded = 0
 	_perf_stale_stages = 0
+	_perf_mesh_reuses = 0
 	return result

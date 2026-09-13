@@ -56,6 +56,9 @@ def main() -> None:
     assert building_tiles_required(BUILDING_UI_PR_FILES), (
         "production building changes must prepare or reuse derived building runtime data"
     )
+    assert building_tiles_required(("scripts/camera_controller.gd",)), (
+        "Drive camera presentation changes must run the production building/Drive real-data gate"
+    )
 
     for path in (
         "tools/build_routing.py",
@@ -101,6 +104,7 @@ def main() -> None:
         "scripts/building_mesh_chunk_codec.gd",
         "scripts/building_stream_layer.gd",
         "scripts/building_runtime_composition.gd",
+        "scripts/camera_controller.gd",
         "scenes/main.tscn",
     ):
         assert building_tiles_required((path,)), f"building runtime owner must trigger preparation: {path}"

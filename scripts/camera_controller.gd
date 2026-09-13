@@ -5,11 +5,14 @@ extends Node3D
 ## Dependencies:
 ## - camera_altitude_model.gd owns deterministic altitude state and readout formatting.
 ## - Camera3D presents framing; an explicitly wired generic Node3D may be followed in Drive mode or by Map Follow car.
+## - Drive render-origin conversion is presentation-only; logical/world coordinates remain owned by WorldCoordinates and the followed target.
+## - Building streaming may query a stable Drive ground radius independent of visual mode-transition interpolation.
 
 signal view_changed(focus_world: Vector3, distance_m: float, camera_world_position: Vector3)
 signal map_follow_changed(enabled: bool)
 
 const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.gd")
+const DRIVE_RENDER_ORIGIN_GRID_M: float = 1024.0
 
 @export var min_altitude_m: float = 50.0
 @export var max_altitude_m: float = 1400000.0
@@ -30,6 +33,9 @@ const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.g
 @export var drive_max_distance_m: float = 48.0
 @export var drive_look_ahead_m: float = 42.0
 @export var drive_fov: float = 58.0
+@export var drive_near_m: float = 0.5
+@export var drive_far_m: float = 5000.0
+@export var drive_building_stream_radius_m: float = 2500.0
 @export var mode_transition_seconds: float = 1.0
 @export_range(0.05, 0.95, 0.01) var drive_transition_approach_fraction: float = 0.4
 @export var drive_transition_entry_distance_m: float = 140.0
@@ -178,6 +184,9 @@ func _apply_camera(delta_s: float = 0.0) -> void:
 	_apply_mode_transition(delta_s)
 	view_changed.emit(focus, distance, camera.global_position)
 
+func _drive_camera_height() -> float:
+	return maxf(2.0, drive_height_m + maxf(0.0, _drive_distance_current_m - drive_distance_m) * 0.22)
+
 func _target_heading_rad() -> float:
 	if _follow_target != null and _follow_target.has_method("heading_rad"): return float(_follow_target.call("heading_rad"))
 	return _follow_target.global_rotation.y if _follow_target != null else 0.0
@@ -186,30 +195,48 @@ func _target_forward() -> Vector3:
 	var heading := _target_heading_rad()
 	return Vector3(-sin(heading), 0.0, -cos(heading)).normalized()
 
+func get_render_origin_world() -> Vector3:
+	if not _drive_mode or not _has_follow_target():
+		return Vector3.ZERO
+	var target_world := _follow_target.global_position
+	return Vector3(
+		roundf(target_world.x / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M,
+		0.0,
+		roundf(target_world.z / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M
+	)
+
+func world_to_render_position(world_position: Vector3) -> Vector3:
+	return world_position - get_render_origin_world()
+
+func render_to_world_position(render_position: Vector3) -> Vector3:
+	return render_position + get_render_origin_world()
+
 func _drive_world_transform(distance_m: float, height_m: float, look_ahead_m: float) -> Transform3D:
 	if not _has_follow_target(): return camera.global_transform
-	var target := _follow_target.global_position
+	var target_world := _follow_target.global_position
+	var target_render := world_to_render_position(target_world)
 	var forward := _target_forward()
-	var camera_world := target - forward * distance_m + Vector3.UP * height_m
-	var look_world := target + forward * look_ahead_m + Vector3.UP * 2.5
-	return Transform3D(Basis.IDENTITY, camera_world).looking_at(look_world, Vector3.UP)
+	var camera_render := target_render - forward * distance_m + Vector3.UP * height_m
+	var look_render := target_render + forward * look_ahead_m + Vector3.UP * 2.5
+	return Transform3D(Basis.IDENTITY, camera_render).looking_at(look_render, Vector3.UP)
 
 func _apply_drive_camera(delta_s: float = 0.0) -> void:
 	if not _has_follow_target(): return
-	var target := _follow_target.global_position
+	var target_world := _follow_target.global_position
+	var target_render := world_to_render_position(target_world)
 	var forward := _target_forward()
 	var extra_distance := maxf(0.0, _drive_distance_current_m - drive_distance_m)
-	var height := drive_height_m + extra_distance * 0.22
+	var height := _drive_camera_height()
 	var look_ahead := drive_look_ahead_m + extra_distance * 0.7
-	focus = Vector3(target.x, 0.0, target.z)
-	position = target
+	focus = Vector3(target_world.x, 0.0, target_world.z)
+	position = target_render
 	camera.position = -forward * _drive_distance_current_m + Vector3.UP * height
 	camera.fov = drive_fov
-	camera.look_at(target + forward * look_ahead + Vector3.UP * 2.5, Vector3.UP)
-	camera.near = 0.1
-	camera.far = 25000.0
+	camera.look_at(target_render + forward * look_ahead + Vector3.UP * 2.5, Vector3.UP)
+	camera.near = maxf(0.25, drive_near_m)
+	camera.far = maxf(camera.near + 100.0, drive_far_m)
 	_apply_mode_transition(delta_s)
-	view_changed.emit(focus, _drive_distance_current_m, camera.global_position)
+	view_changed.emit(focus, _drive_distance_current_m, render_to_world_position(camera.global_position))
 
 func _begin_mode_transition(to_drive: bool) -> void:
 	if not is_inside_tree() or camera == null or mode_transition_seconds <= 0.0:
@@ -222,6 +249,11 @@ func _begin_mode_transition(to_drive: bool) -> void:
 	_transition_to_drive = to_drive and _has_follow_target()
 	_transition_phase = "approach" if _transition_to_drive else "blend"
 	_transition_active = true
+
+func _rebase_transition_frame(previous_render_origin: Vector3, next_render_origin: Vector3) -> void:
+	if not _transition_active:
+		return
+	_transition_from_transform.origin += previous_render_origin - next_render_origin
 
 func _apply_mode_transition(delta_s: float) -> void:
 	if not _transition_active: return
@@ -286,7 +318,7 @@ func mode_transition_debug_snapshot() -> Dictionary:
 		"total_s": maxf(0.0, mode_transition_seconds),
 		"approach_s": approach_s,
 		"settle_s": maxf(0.0, mode_transition_seconds - approach_s),
-		"camera_world": camera.global_position if camera != null else Vector3.ZERO,
+		"camera_world": render_to_world_position(camera.global_position) if camera != null else Vector3.ZERO,
 		"target_world": target_world,
 		"clearance_m": (camera.global_position.y - target_world.y) if camera != null and _has_follow_target() else INF,
 	}
@@ -307,13 +339,28 @@ func _required_ground_far(distance: float) -> float:
 func get_ground_view_corners() -> PackedVector3Array:
 	var viewport_size := get_viewport().get_visible_rect().size
 	var result := PackedVector3Array()
+	var max_distance := maxf(camera.near, camera.far)
 	for screen_point in [Vector2.ZERO, Vector2(viewport_size.x, 0.0), viewport_size, Vector2(0.0, viewport_size.y)]:
 		var ray_origin := camera.project_ray_origin(screen_point)
 		var ray_direction := camera.project_ray_normal(screen_point)
-		if ray_direction.y >= -0.000001: continue
-		var t := -ray_origin.y / ray_direction.y
-		if t > 0.0: result.append(ray_origin + ray_direction * t)
+		var distance := max_distance
+		if ray_direction.y < -0.000001:
+			var ground_distance := -ray_origin.y / ray_direction.y
+			if ground_distance > 0.0:
+				distance = minf(ground_distance, max_distance)
+		result.append(render_to_world_position(ray_origin + ray_direction * distance))
 	return result
+
+func get_streaming_ground_radius_m() -> float:
+	if _drive_mode:
+		# The camera far plane is a clipping contract, not a full-detail building
+		# residency contract. Keep nearby Drive buildings deterministic and bounded;
+		# the BuildingStreamLayer adds its normal chunk margin around this radius.
+		return maxf(0.0, drive_building_stream_radius_m)
+	var radius_m := 0.0
+	for point in get_ground_view_corners():
+		radius_m = maxf(radius_m, Vector2(point.x - focus.x, point.z - focus.z).length())
+	return radius_m
 
 func set_view_altitude(new_focus: Vector3, new_altitude_m: float) -> void:
 	focus = Vector3(new_focus.x, 0.0, new_focus.z)
@@ -336,8 +383,11 @@ func clear_follow_target() -> void:
 
 func set_drive_mode(enabled: bool) -> void:
 	if _drive_mode == enabled: return
+	var previous_render_origin := get_render_origin_world()
 	_begin_mode_transition(enabled)
 	_drive_mode = enabled
+	var next_render_origin := get_render_origin_world()
+	_rebase_transition_frame(previous_render_origin, next_render_origin)
 	if enabled:
 		_suppress_map_wasd_until_released = false
 		set_map_follow_enabled(false)
@@ -367,6 +417,9 @@ func _center_on_follow_target() -> void:
 	focus = Vector3(target_position.x, 0.0, target_position.z)
 	_apply_camera()
 func get_focus_world() -> Vector3: return focus
-func get_altitude() -> float: return clampf(start_altitude_m, min_altitude_m, max_altitude_m) if altitude_model == null else altitude_model.get_altitude()
+func get_altitude() -> float:
+	if _drive_mode:
+		return _drive_camera_height()
+	return clampf(start_altitude_m, min_altitude_m, max_altitude_m) if altitude_model == null else altitude_model.get_altitude()
 func format_altitude_readout() -> String: return CameraAltitudeModelScript.format_altitude(get_altitude()) if altitude_model == null else altitude_model.format_readout()
 func get_distance() -> float: return _drive_distance_current_m if _drive_mode else _derived_distance()

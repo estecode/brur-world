@@ -5,10 +5,14 @@ extends SceneTree
 ## Dependencies:
 ## - scripts/camera_altitude_model.gd for portable altitude behavior.
 ## - scripts/camera_controller.gd for thin Camera3D integration.
+## - scripts/building_lod_policy.gd for Drive-mode building presentation detail.
+## - scripts/main.gd for Drive background/road depth-separation policy.
 ## - scenes/main.tscn for structural altitude-readout placement.
 
 const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.gd")
 const CameraControllerScript = preload("res://scripts/camera_controller.gd")
+const BuildingLodPolicyScript = preload("res://scripts/building_lod_policy.gd")
+const MainScript = preload("res://scripts/main.gd")
 const NORMAL_CLOUD_TOP_M: float = 12000.0
 
 func _init() -> void:
@@ -87,6 +91,52 @@ func _test_camera_adapter() -> void:
 	_assert(is_equal_approx(float(rig.call("get_altitude")), 1400000.0), "adapter applies model maximum")
 	_assert(camera.position.y > NORMAL_CLOUD_TOP_M, "full zoom-out camera can be above ordinary cloud layers")
 
+	var retained_map_altitude := float(rig.call("get_altitude"))
+	var target := Node3D.new()
+	root.add_child(target)
+	rig.call("set_follow_target", target)
+	rig.call("set_drive_mode", true)
+	var drive_altitude := float(rig.call("get_altitude"))
+	_assert(drive_altitude < BuildingLodPolicyScript.MEDIUM_ALTITUDE_M, "Drive exposes a near-ground effective presentation altitude")
+	_assert(BuildingLodPolicyScript.choose_lod(drive_altitude) == BuildingLodPolicyScript.LOD_FULL, "Drive from coarse Map altitude requests full building LOD")
+	_assert(camera.near >= 0.25, "Drive near plane stays away from zero for stable depth precision")
+	_assert(camera.far <= 5000.0, "Drive far plane is bounded to local chase-camera range")
+
+	var main := MainScript.new() as Node3D
+	main.set("camera_rig", rig)
+	var ground := MeshInstance3D.new()
+	ground.material_override = main.call("_background_material", 4, true)
+	main.add_child(ground)
+	main.set("ground_instance", ground)
+	main.call("_update_depth_layout", true)
+	var road_height := float(main.call("get_road_surface_height"))
+	var urban_height := float(main.call("_background_height", 3))
+	var land_height := float(main.call("_background_height", 0))
+	var ocean_height := ground.position.y
+	_assert(road_height - urban_height >= 0.10, "Drive keeps the nearest decorative background materially below the road")
+	_assert(urban_height - land_height >= 0.15, "Drive background kinds no longer compete inside a centimetre-scale depth stack")
+	_assert(land_height - ocean_height >= 0.04, "Drive ocean base sits below the complete decorative background stack")
+	_assert(road_height - ocean_height >= 0.30, "Drive ocean base cannot fight the road/player/building surface")
+	var drive_ground_material := ground.material_override as StandardMaterial3D
+	_assert(drive_ground_material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA, "Drive keeps deterministic transparent background compositing")
+	_assert(drive_ground_material.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED, "Drive background classes cannot write competing depth")
+	_assert(drive_ground_material.render_priority == -6, "Drive ocean base keeps the lowest deterministic background priority")
+	var drive_urban_material := main.call("_background_material", 3, false) as StandardMaterial3D
+	_assert(drive_urban_material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA, "Drive BRM2 categories use the same compositor contract as Map")
+	_assert(drive_urban_material.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED, "Drive BRM2 categories do not compete through the depth buffer")
+	_assert(drive_urban_material.render_priority == -1, "Drive BRM2 priority ordering stays deterministic")
+
+	rig.call("set_drive_mode", false)
+	main.call("_update_depth_layout", true)
+	_assert(is_equal_approx(float(rig.call("get_altitude")), retained_map_altitude), "leaving Drive restores the retained Map altitude")
+	_assert(is_equal_approx(ground.position.y, 0.0), "Map mode restores the ocean base to its map presentation height")
+	var map_ground_material := ground.material_override as StandardMaterial3D
+	_assert(map_ground_material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA, "Map mode retains priority-based background compositing")
+	_assert(map_ground_material.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED, "Map mode retains the established non-depth background compositor")
+	_assert(map_ground_material.render_priority == -6, "Map mode preserves ocean-first deterministic ordering")
+	main.free()
+
+	target.free()
 	rig.queue_free()
 	print("godot camera-altitude tests: OK")
 	quit(0)

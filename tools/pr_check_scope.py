@@ -59,6 +59,7 @@ BUILDING_TILE_OWNERS = frozenset(
         "scripts/building_mesh_chunk_codec.gd",
         "scripts/building_stream_layer.gd",
         "scripts/building_runtime_composition.gd",
+        "scripts/camera_controller.gd",
         "scenes/main.tscn",
     }
 )

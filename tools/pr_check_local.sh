@@ -155,7 +155,7 @@ PY
 }
 
 run_godot_test() {
-  local script="$1" log status
+  local script="$1" required_marker="${2:-}" log status
   log="$(mktemp "${TMPDIR:-/tmp}/brur-world-test.XXXXXX.log")"
   set +e
   "$GODOT" --headless --path "$WORKTREE" --script "$script" 2>&1 | tee "$log"
@@ -163,6 +163,11 @@ run_godot_test() {
   set -e
   if [[ $status -ne 0 ]] || grep -Eq 'SCRIPT ERROR:|Failed to load script|test failed:' "$log"; then
     printf 'PR_CHECK=FAIL Godot reported script/test errors for %s\n' "$script" >&2
+    rm -f "$log"
+    return 1
+  fi
+  if [[ -n "$required_marker" ]] && ! grep -Fq "$required_marker" "$log"; then
+    printf 'PR_CHECK=FAIL Godot test exited without required completion marker for %s: %s\n' "$script" "$required_marker" >&2
     rm -f "$log"
     return 1
   fi
@@ -209,6 +214,8 @@ if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
   run_godot_test res://tests/godot/test_building_mesh_real_data.gd
   printf 'PR_CHECK=CHECK_MAP_CONTROLS_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
   run_godot_test res://tests/godot/test_map_controls.gd
+  printf 'PR_CHECK=CHECK_PRODUCTION_DRIVE_FPS_REAL_DATA pr=%s targets=avg33.4ms-p95_50ms-worst250ms\n' "$BRUR_PR_CHECK_PR"
+  run_godot_test res://tests/godot/test_production_fps_real_data.gd 'production Drive FPS real-data test: OK'
 fi
 
 if [[ "$ROAD_LOD_SCOPE" == "required" ]]; then
@@ -242,7 +249,7 @@ PY
   run_godot_test res://tests/godot/test_world_showcase.gd
 fi
 
-if [[ "$MANUAL_REVIEW" == "none" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$DRIVING_VISUAL_SCOPE" == "skip" && "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]]; then
+if [[ "$MANUAL_REVIEW" == "none" && "$DRIVING_VISUAL_SCOPE" == "skip" && "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "$BRUR_PR_CHECK_PR"
   exit 0
 fi
@@ -269,7 +276,7 @@ if [[ "$MANUAL_REVIEW" == "required" && "$BUILDING_TILE_SCOPE" == "skip" && "$RO
   exit 0
 fi
 if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
-  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION confirm HUS starts OFF; turn HUS ON and zoom/pan across Stockholm: each settled viewport must appear coherently in one swap with no block-by-block reveal, remain playable, and reuse nearby views quickly; turn HUS OFF and verify buildings disappear; close Godot when finished\n'
+  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION production Drive real-data FPS/building checks have already passed automatically; inspect only genuinely perceptual presentation quality if desired, then close Godot\n'
 else
   printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION inspect only the changed real-data presentation; close Godot when finished\n'
 fi
