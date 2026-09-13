@@ -13,6 +13,14 @@ SERVER_OUT="$ROOT/bin/brur-gps-server"
 SEARCH_SERVER_OUT="$ROOT/bin/brur-gps-search-server"
 mkdir -p "$ROOT/bin"
 
+if [[ "$(uname -s)" == "Darwin" && -n "${SDKROOT:-}" && ! -d "$SDKROOT" ]] && command -v xcrun >/dev/null 2>&1; then
+  RESOLVED_SDKROOT="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+  if [[ -n "$RESOLVED_SDKROOT" && -d "$RESOLVED_SDKROOT" ]]; then
+    printf '[native-gps] replacing stale SDKROOT with current macOS SDK: %s\n' "$RESOLVED_SDKROOT"
+    export SDKROOT="$RESOLVED_SDKROOT"
+  fi
+fi
+
 COMMON_FLAGS=(
   -std=c++20
   -O3
