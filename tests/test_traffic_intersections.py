@@ -81,6 +81,26 @@ class TrafficIntersectionTests(unittest.TestCase):
         self.assertGreaterEqual(len(intersection.movements), 2)
         self.assertEqual(intersection, build_from_runtime_data(dataset, graph).intersections[0])
 
+    def test_junction_level_signal_expands_to_incoming_controlled_approaches(self) -> None:
+        graph, _ = build_graph([
+            WayInput(101, [1, 2, 3], [(18.0, 59.0), (18.0001, 59.0), (18.0002, 59.0)], {"highway": "primary"}),
+            WayInput(102, [4, 2, 5], [(18.0001, 58.9999), (18.0001, 59.0), (18.0001, 59.0001)], {"highway": "secondary"}),
+        ])
+        junction = next(node for node in graph.nodes if node.osm_id == 2)
+        dataset = {"format": "BTS1", "signals": [{"id": "n2", "osm_node_id": 2, "x": junction.x, "y": junction.y, "highway_way_ids": [101, 102], "direction_source": "unknown", "explicit_stop_line": False, "group_candidate_id": "junction-node:2"}]}
+        report = build_from_runtime_data(dataset, graph)
+        self.assertEqual(report.unresolved_signal_ids, ())
+        self.assertEqual(len(report.intersections), 1)
+        item = report.intersections[0]
+        self.assertEqual(len(item.approaches), 4)
+        self.assertEqual(len(item.exits), 4)
+        self.assertTrue(all(row.signal_id == "n2" for row in item.approaches))
+        self.assertTrue(all(row.direction_source == "unknown" for row in item.approaches))
+        self.assertTrue(all(row.relationship_source == "inferred" and row.resolved for row in item.approaches))
+        self.assertTrue(all(row.stop.source == "derived" for row in item.approaches))
+        self.assertGreater(item.conflicts.__len__(), 0)
+        self.assertEqual(item, build_from_runtime_data(dataset, graph).intersections[0])
+
     def test_way_id_split_is_not_mistaken_for_physical_junction(self) -> None:
         graph, _ = build_graph([
             WayInput(101, [1, 2], [(18.0, 59.0), (18.0001, 59.0)], {"highway": "primary"}),
