@@ -1,4 +1,4 @@
-[gd_scene load_steps=18 format=3]
+[gd_scene load_steps=19 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -17,6 +17,7 @@
 [ext_resource path="res://scripts/day_night_environment_adapter.gd" type="Script" id="15_day_night"]
 [ext_resource path="res://scripts/building_stream_layer.gd" type="Script" id="16_buildings"]
 [ext_resource path="res://scripts/building_runtime_composition.gd" type="Script" id="17_building_composition"]
+[ext_resource path="res://scripts/drive_render_origin_composition.gd" type="Script" id="18_drive_render_origin"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -57,6 +58,15 @@ script = ExtResource("5_gps")
 main_path = NodePath("..")
 camera_rig_path = NodePath("../CameraRig")
 camera_path = NodePath("../CameraRig/Camera3D")
+
+[node name="DriveRenderOriginComposition" type="Node" parent="."]
+script = ExtResource("18_drive_render_origin")
+camera_rig_path = NodePath("../CameraRig")
+world_path = NodePath("../World")
+poi_layer_path = NodePath("../PoiLayer")
+cloud_field_path = NodePath("../CloudField")
+building_layer_path = NodePath("../BuildingLayer")
+gps_route_layer_path = NodePath("../GpsRouteLayer")
 
 [node name="GpsSearchUi" type="CanvasLayer" parent="."]
 script = ExtResource("6_search_ui")
