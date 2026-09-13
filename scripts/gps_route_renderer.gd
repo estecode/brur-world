@@ -11,6 +11,7 @@ extends Node3D
 const ROUTE_OUTLINE_PRIORITY := 100
 const ROUTE_CORE_PRIORITY := 101
 const DRIVE_ROUTE_CLEARANCE_M := 0.08
+const CLOSE_DRIVE_CAMERA_DISTANCE_M := 150.0
 
 var _to_world: Callable
 var _route_outline_instance: MeshInstance3D
@@ -113,7 +114,9 @@ func clear() -> void:
 
 func update_height(camera_distance: float, road_surface_height: float = 0.0) -> void:
 	_ensure_visuals()
-	var close_drive_view := camera_distance < 100.0
+	# Near-ground map/follow views must use the same bounded presentation as Drive mode;
+	# otherwise a ~100 m harness camera produces a road-obscuring map ribbon and giant target marker.
+	var close_drive_view := camera_distance < CLOSE_DRIVE_CAMERA_DISTANCE_M
 	if close_drive_view:
 		_set_route_height(road_surface_height + DRIVE_ROUTE_CLEARANCE_M)
 		_set_route_always_on_top(false)
