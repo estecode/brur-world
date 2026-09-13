@@ -130,11 +130,15 @@ func set_world_position(new_position: Vector3) -> void:
 
 func set_render_origin_world(render_origin: Vector3) -> void:
 	# Vehicle state and root transform stay in authoritative world coordinates.
-	# Only the dedicated visual child is translated into the Drive render frame.
+	# VisualRoot becomes top-level so its render-local position is not rotated or
+	# re-expanded through the large logical parent transform.
 	var visual_root := get_node_or_null("VisualRoot") as Node3D
 	if visual_root == null:
 		return
-	visual_root.position = Vector3(-render_origin.x, 0.0, -render_origin.z)
+	visual_root.top_level = true
+	var visual_transform := global_transform
+	visual_transform.origin = global_position - Vector3(render_origin.x, 0.0, render_origin.z)
+	visual_root.global_transform = visual_transform
 
 func set_heading_rad(new_heading_rad: float) -> void:
 	_state.heading_rad = wrapf(new_heading_rad, -PI, PI)
