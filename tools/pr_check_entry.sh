@@ -7,6 +7,14 @@ PR="${1:-}"
 [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { printf 'PR_CHECK=FAIL invalid PR number\n' >&2; exit 64; }
 
 ROOT="$(git rev-parse --show-toplevel)"
+LOG_DIR="$ROOT/.safecommand/logs"
+LOG_PATH="$LOG_DIR/pr-check-${PR}.log"
+mkdir -p "$LOG_DIR"
+: > "$LOG_PATH"
+exec > >(tee -a "$LOG_PATH") 2>&1
+printf 'PR_CHECK=LOG path=%s\n' "$LOG_PATH"
+printf 'PR_CHECK=LOG_STARTED pr=%s started_at=%s\n' "$PR" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 [[ -d "$ROOT/world_data" ]] || { printf 'PR_CHECK=FAIL missing %s/world_data\n' "$ROOT" >&2; exit 66; }
 
 LAUNCHER_TMP="$(mktemp -d "${TMPDIR:-/tmp}/brur-world-pr-check-main.XXXXXX")"
@@ -18,6 +26,7 @@ cleanup() {
     git -C "$ROOT" worktree remove --force "$LAUNCHER_TMP" >/dev/null 2>&1 || true
   fi
   rm -rf "$LAUNCHER_TMP"
+  printf 'PR_CHECK=LOG_FINISHED pr=%s exit=%s finished_at=%s path=%s\n' "$PR" "$status" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LOG_PATH"
   exit "$status"
 }
 trap cleanup EXIT INT TERM
