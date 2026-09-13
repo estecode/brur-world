@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Starts the production-backed driving harness headless and fails on runtime script/load errors.
-# Dependencies: Godot 4 plus the repository driving harness and production vehicle/camera scripts.
+# Dependencies: Godot 4 plus the repository driving harness and production vehicle/camera/GPS route-renderer scripts.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
