@@ -111,6 +111,24 @@ grep -q 'harness/driving/driving_harness.tscn' "$ROOT/tools/pr_check_local.sh" |
   printf 'driving human review must still launch the production-backed driving harness\n' >&2
   exit 1
 }
+grep -q 'DRIVE_HUD_VISUAL_SCOPE="required"' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'Drive HUD presentation changes must request exact-revision production-scene review\n' >&2
+  exit 1
+}
+grep -q 'VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'Drive HUD human review must identify the production Main scene explicitly\n' >&2
+  exit 1
+}
+grep -Fq '"$WORKTREE/scenes/main.tscn"' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'Drive HUD human review must launch scenes/main.tscn, not the driving harness\n' >&2
+  exit 1
+}
+hud_line="$(grep -n 'if \[\[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" \]\]' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
+driving_line="$(grep -n 'if \[\[ "$DRIVING_VISUAL_SCOPE" == "required" \]\]' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
+[[ -n "$hud_line" && -n "$driving_line" && "$hud_line" -lt "$driving_line" ]] || {
+  printf 'Drive HUD review must take priority when a route-follower change also marks driving visual scope\n' >&2
+  exit 1
+}
 
 bash -n "$ROOT/tools/run_pr_owned_check.sh"
 bash -n "$ROOT/tools/pr_check_local.sh"
