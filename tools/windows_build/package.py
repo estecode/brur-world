@@ -13,8 +13,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
-import tempfile
 import zipfile
 from pathlib import Path
 
@@ -76,62 +74,54 @@ def package_client(
     hashes = runtime_hashes(runtime_data)
     output_zip.parent.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="brur-windows-package-") as directory:
-        staging = Path(directory) / "BRUR"
-        logs = staging / "logs"
-        staging.mkdir(parents=True)
-        logs.mkdir()
+    final_build_info = dict(build_info)
+    final_build_info["client_ready"] = True
+    final_build_info["world_data_source_manifest_sha256"] = sha256(source_manifest)
+    final_build_info["runtime_files"] = hashes
+    final_build_info["runtime_delivery"] = RUNTIME_DELIVERY
+    final_build_info["packaging_format_version"] = FORMAT_VERSION
 
-        shutil.copy2(exe, staging / exe.name)
-        shutil.copy2(pck, staging / pck.name)
+    bundle_info = {
+        "schema_version": 1,
+        "repository": repository,
+        "commit": commit,
+        "short_commit": commit[:12],
+        "ref": final_build_info.get("ref"),
+        "pr": final_build_info.get("pr"),
+        "issue": final_build_info.get("issue"),
+        "world_data_source_manifest_sha256": final_build_info["world_data_source_manifest_sha256"],
+        "runtime_files": hashes,
+        "runtime_delivery": RUNTIME_DELIVERY,
+        "packaging_format_version": FORMAT_VERSION,
+    }
 
-        final_build_info = dict(build_info)
-        final_build_info["client_ready"] = True
-        final_build_info["world_data_source_manifest_sha256"] = sha256(source_manifest)
-        final_build_info["runtime_files"] = hashes
-        final_build_info["runtime_delivery"] = RUNTIME_DELIVERY
-        final_build_info["packaging_format_version"] = FORMAT_VERSION
-        (staging / "build_info.json").write_text(
-            json.dumps(final_build_info, indent=2, sort_keys=True), encoding="utf-8"
+    with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        archive.write(exe, f"BRUR/{exe.name}")
+        archive.write(pck, f"BRUR/{pck.name}")
+        archive.writestr(
+            "BRUR/build_info.json",
+            json.dumps(final_build_info, indent=2, sort_keys=True),
         )
+        archive.writestr(
+            "BRUR/client_bundle_info.json",
+            json.dumps(bundle_info, indent=2, sort_keys=True),
+        )
+        archive.writestr("BRUR/logs/", "")
 
-        bundle_info = {
-            "schema_version": 1,
-            "repository": repository,
-            "commit": commit,
-            "short_commit": commit[:12],
-            "ref": final_build_info.get("ref"),
-            "pr": final_build_info.get("pr"),
-            "issue": final_build_info.get("issue"),
-            "world_data_source_manifest_sha256": final_build_info["world_data_source_manifest_sha256"],
-            "runtime_files": hashes,
-            "runtime_delivery": RUNTIME_DELIVERY,
-            "packaging_format_version": FORMAT_VERSION,
+    with zipfile.ZipFile(output_zip, "r") as archive:
+        names = set(archive.namelist())
+        required = {
+            f"BRUR/{exe.name}",
+            f"BRUR/{pck.name}",
+            "BRUR/build_info.json",
+            "BRUR/client_bundle_info.json",
+            "BRUR/logs/",
         }
-        (staging / "client_bundle_info.json").write_text(
-            json.dumps(bundle_info, indent=2, sort_keys=True), encoding="utf-8"
-        )
-
-        with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-            archive.writestr("BRUR/logs/", "")
-            for path in sorted(staging.rglob("*")):
-                if path.is_file():
-                    archive.write(path, Path("BRUR") / path.relative_to(staging))
-
-        with zipfile.ZipFile(output_zip, "r") as archive:
-            names = set(archive.namelist())
-            required = {
-                f"BRUR/{exe.name}",
-                f"BRUR/{pck.name}",
-                "BRUR/build_info.json",
-                "BRUR/client_bundle_info.json",
-                "BRUR/logs/",
-            }
-            missing = required - names
-            if missing:
-                raise SystemExit(f"client ZIP validation failed; missing: {sorted(missing)}")
-            if any(name.startswith("BRUR/runtime_data/") for name in names):
-                raise SystemExit("client ZIP duplicated embedded runtime data beside the PCK")
+        missing = required - names
+        if missing:
+            raise SystemExit(f"client ZIP validation failed; missing: {sorted(missing)}")
+        if any(name.startswith("BRUR/runtime_data/") for name in names):
+            raise SystemExit("client ZIP duplicated embedded runtime data beside the PCK")
 
     print(
         f"[windows-package] ready zip={output_zip} commit={commit[:12]} "

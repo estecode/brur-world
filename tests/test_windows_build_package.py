@@ -72,6 +72,8 @@ class WindowsPackageTests(unittest.TestCase):
                 names = set(archive.namelist())
                 self.assertIn("BRUR/logs/", names)
                 self.assertFalse(any(name.startswith("BRUR/runtime_data/") for name in names))
+                self.assertEqual(archive.read("BRUR/brur-deadbeef0000-win64.exe"), b"exe")
+                self.assertEqual(archive.read("BRUR/brur-deadbeef0000-win64.pck"), b"pck")
                 packaged_build = json.loads(archive.read("BRUR/build_info.json"))
                 packaged_bundle = json.loads(archive.read("BRUR/client_bundle_info.json"))
 
@@ -86,6 +88,13 @@ class WindowsPackageTests(unittest.TestCase):
                 packaged_bundle["world_data_source_manifest_sha256"],
                 windows_package.sha256(source_manifest),
             )
+
+    def test_package_archives_exported_binaries_without_full_size_staging_copy(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("shutil.copy2", source)
+        self.assertNotIn("TemporaryDirectory", source)
+        self.assertIn('archive.write(exe, f"BRUR/{exe.name}")', source)
+        self.assertIn('archive.write(pck, f"BRUR/{pck.name}")', source)
 
     def test_missing_matching_pck_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
