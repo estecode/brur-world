@@ -45,7 +45,7 @@ func _run() -> void:
 	var gpu_x := _f32(_f32(rebased_tile_origin.x) + _f32(road_local_vertex.x))
 	var gpu_z := _f32(_f32(rebased_tile_origin.z) + _f32(road_local_vertex.z))
 	var gpu_error := Vector2(gpu_x, gpu_z).distance_to(Vector2(target_render.x, target_render.z))
-	_assert(gpu_error <= MAX_FLOAT32_EFFECTIVE_ERROR_M, "32 km BRT1 tile arithmetic stays below the explicit 2 cm Drive precision budget")
+	_assert(gpu_error <= MAX_FLOAT32_EFFECTIVE_ERROR_M, "32 km BRT1 tile arithmetic stays below explicit 2 cm Drive precision budget")
 
 	var world := Node3D.new()
 	var road_leaf := MeshInstance3D.new()
@@ -111,9 +111,6 @@ func _run() -> void:
 	_assert(ground_leaf.mesh == stable_ground_mesh, "local ocean mesh resource is stable for 120 same-cell syncs")
 	_assert(background_leaf.mesh == stable_background_mesh, "localized BRM2 resource is stable for 120 same-cell syncs")
 
-	# A 1 km cell crossing previously rebuilt the entire BRM2 ArrayMesh. The
-	# resource identity must now remain stable so cell crossings cannot trigger a
-	# Sweden-scale CPU mesh copy on the frame thread.
 	target.position.x += 1100.0
 	rig.call("_apply_drive_camera")
 	var next_origin: Vector3 = rig.call("get_render_origin_world")
