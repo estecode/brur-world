@@ -38,7 +38,8 @@ enum GapScenario {
 
 @onready var camera_rig: Node3D = $CameraRig
 @onready var control_mode: OptionButton = $Ui/Panel/Margin/VBox/ControlMode
-@onready var follow_route: CheckButton = $Ui/Panel/Margin/VBox/FollowRoute
+@onready var set_route_button: Button = $Ui/Panel/Margin/VBox/SetRoute
+@onready var clear_route_button: Button = $Ui/Panel/Margin/VBox/ClearRoute
 @onready var follow_car: CheckButton = $Ui/Panel/Margin/VBox/FollowCar
 @onready var driving_mode: OptionButton = $Ui/Panel/Margin/VBox/DrivingMode
 @onready var intersection_gap: OptionButton = $Ui/Panel/Margin/VBox/IntersectionGap
@@ -52,6 +53,7 @@ var _fixture_route: PackedVector3Array = PackedVector3Array()
 var _fixture_speed_limits: PackedFloat32Array = PackedFloat32Array()
 var _control_mode: int = ControlMode.MANUAL
 var _gap_scenario: int = GapScenario.CLEAR
+var _route_is_set: bool = false
 
 func _ready() -> void:
 	_build_ground()
@@ -59,17 +61,16 @@ func _ready() -> void:
 	_spawn_player()
 	_fixture_route = _build_fixture_route()
 	_fixture_speed_limits = _build_fixture_speed_limits(_fixture_route.size())
-	if route_follower != null:
-		route_follower.call("set_route", _fixture_route, _fixture_speed_limits)
 	_setup_control_modes()
 	_setup_driving_modes()
 	_setup_intersection_scenarios()
 	control_mode.item_selected.connect(_on_control_mode_selected)
+	set_route_button.pressed.connect(_on_set_route_pressed)
+	clear_route_button.pressed.connect(_on_clear_route_pressed)
 	follow_car.toggled.connect(_on_follow_car_toggled)
 	driving_mode.item_selected.connect(_on_driving_mode_selected)
 	intersection_gap.item_selected.connect(_on_intersection_gap_selected)
 	$Ui/Panel/Margin/VBox/Reset.pressed.connect(_reset_player)
-	follow_route.disabled = true
 	follow_car.button_pressed = true
 	_reset_player()
 	_set_control_mode(ControlMode.MANUAL)
@@ -79,9 +80,10 @@ func _process(_delta: float) -> void:
 		return
 	speed.text = "Speed: %.1f km/h   Road limit: %.0f km/h" % [float(player.call("speed_kmh")), ROUTE_SPEED_LIMIT_MPS * 3.6]
 	var owner: int = int(player.call("control_owner"))
-	status.text = "Control: %s   AI: %s   Intersection: %s   Camera: %s" % [
+	status.text = "Control: %s   Route: %s   AI: %s   Intersection: %s   Camera: %s" % [
 		"GPS" if owner == 1 else "MANUAL",
-		_active_mode_name() if _control_mode == ControlMode.GPS else "inactive",
+		"SET" if _route_is_set else "NONE",
+		_active_mode_name() if _control_mode == ControlMode.GPS and _route_is_set else "inactive",
 		_gap_scenario_name(),
 		"FOLLOW" if follow_car.button_pressed else "FREE",
 	]
@@ -119,29 +121,51 @@ func _setup_intersection_scenarios() -> void:
 	intersection_gap.add_item("Assertive gap (3.0 s)", GapScenario.ASSERTIVE)
 	intersection_gap.add_item("Risky gap (2.0 s)", GapScenario.RISKY)
 	intersection_gap.select(0)
-	_apply_intersection_scenario()
 
 func _on_control_mode_selected(index: int) -> void:
 	_set_control_mode(control_mode.get_item_id(index))
 
 func _set_control_mode(next_mode: int) -> void:
 	_control_mode = next_mode
-	var gps_enabled := _control_mode == ControlMode.GPS
+	var gps_requested := _control_mode == ControlMode.GPS
 	if player_controller != null:
-		player_controller.set("enabled", not gps_enabled)
+		player_controller.set("enabled", not gps_requested)
 	if route_follower != null:
+		var gps_enabled := gps_requested and _route_is_set
 		route_follower.call("set_follow_enabled", gps_enabled)
-	follow_route.set_pressed_no_signal(gps_enabled)
-	driving_mode.disabled = not gps_enabled or route_follower == null
+		if gps_requested and not _route_is_set:
+			player.call("set_control_owner", 0)
+	driving_mode.disabled = not gps_requested or not _route_is_set or route_follower == null
 	# Manual drive reserves WASD for the player; GPS drive leaves WASD available for map pan.
-	camera_rig.call("set_drive_mode", not gps_enabled)
+	camera_rig.call("set_drive_mode", not gps_requested)
 	if follow_car.button_pressed:
 		camera_rig.call("set_follow_target", player)
-		if gps_enabled:
+		if gps_requested:
 			camera_rig.call("set_map_follow_enabled", true)
 
+func _on_set_route_pressed() -> void:
+	_set_fixture_route_and_start()
+
+func _set_fixture_route_and_start() -> void:
+	if route_follower == null:
+		return
+	route_follower.call("set_follow_enabled", false)
+	route_follower.call("set_route", _fixture_route, _fixture_speed_limits)
+	_route_is_set = true
+	_apply_intersection_scenario()
+	control_mode.select(ControlMode.GPS)
+	_set_control_mode(ControlMode.GPS)
+
+func _on_clear_route_pressed() -> void:
+	if route_follower != null:
+		route_follower.call("set_follow_enabled", false)
+		route_follower.call("clear_route")
+	_route_is_set = false
+	control_mode.select(ControlMode.MANUAL)
+	_set_control_mode(ControlMode.MANUAL)
+
 func _on_driving_mode_selected(index: int) -> void:
-	if route_follower == null or _control_mode != ControlMode.GPS:
+	if route_follower == null or _control_mode != ControlMode.GPS or not _route_is_set:
 		return
 	var requested_mode: int = driving_mode.get_item_id(index)
 	if not bool(route_follower.call("set_driving_mode", requested_mode)):
@@ -152,7 +176,7 @@ func _on_intersection_gap_selected(index: int) -> void:
 	_apply_intersection_scenario()
 
 func _apply_intersection_scenario() -> void:
-	if route_follower == null or _fixture_route.is_empty():
+	if route_follower == null or not _route_is_set:
 		return
 	route_follower.call(
 		"set_upcoming_intersection",
@@ -198,10 +222,11 @@ func _reset_player() -> void:
 		return
 	if route_follower != null:
 		route_follower.call("set_follow_enabled", false)
-		route_follower.call("set_route", _fixture_route, _fixture_speed_limits)
-		_apply_intersection_scenario()
 	player.call("set_world_position", Vector3(GRID_MIN_X, 0.8, GRID_MAX_Z))
 	player.call("set_motion_state", 0.0, PI / 2.0)
+	if _route_is_set and route_follower != null:
+		route_follower.call("set_route", _fixture_route, _fixture_speed_limits)
+		_apply_intersection_scenario()
 	if follow_car.button_pressed:
 		camera_rig.call("set_follow_target", player)
 		camera_rig.call("set_view_altitude", player.global_position, RESET_CAMERA_ALTITUDE_M)
@@ -264,7 +289,6 @@ func _build_fixture_route() -> PackedVector3Array:
 		Vector3(GRID_MIN_X, 0.8, GRID_MIN_Z),
 		Vector3(GRID_MIN_X, 0.8, INNER_Z_NEAR),
 		Vector3(GRID_MIN_X, 0.8, INNER_Z_FAR),
-		Vector3(GRID_MIN_X, 0.8, GRID_MAX_Z),
 	])
 
 func _build_fixture_speed_limits(count: int) -> PackedFloat32Array:
