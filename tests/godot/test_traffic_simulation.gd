@@ -1,6 +1,8 @@
 extends SceneTree
 
 const TrafficSimulationScript = preload("res://scripts/traffic_simulation.gd")
+const TrafficTopologyViewScript = preload("res://scripts/traffic_topology_view.gd")
+const TrafficRuntimeCompositionScript = preload("res://scripts/traffic_runtime_composition.gd")
 const VehicleScene = preload("res://scenes/vehicle.tscn")
 const TrafficVehicleControllerScript = preload("res://scripts/traffic_vehicle_controller.gd")
 
@@ -34,6 +36,8 @@ func _init() -> void:
 	_test_deterministic_choice()
 	_test_promotion_hysteresis_and_state_handoff()
 	_test_promoted_vehicle_uses_shared_vehicle_dynamics()
+	_test_brg1_topology_world_mapping()
+	_assert(TrafficRuntimeCompositionScript != null, "traffic runtime composition parses headlessly")
 	if failures == 0:
 		print("traffic simulation tests: PASS")
 		quit(0)
@@ -52,8 +56,6 @@ func _test_lightweight_progress_and_edge_transition() -> void:
 	_assert(state.next_edge_id == 2, "next directed edge is prepared from shared topology")
 
 func _test_deterministic_choice() -> void:
-	var topology := FakeTopology.new()
-	topology.set("outgoing_edge_ids", topology.get("outgoing_edge_ids")) if false else null
 	var a = _simulation().add_agent(42, 0, 0.0, 10.0, 123)
 	var b = _simulation().add_agent(42, 0, 0.0, 10.0, 123)
 	_assert(a.next_edge_id == b.next_edge_id, "same seed/state produces deterministic next edge")
@@ -68,7 +70,6 @@ func _test_promotion_hysteresis_and_state_handoff() -> void:
 	_assert(not (mid["demote"] as Array).has(state), "hysteresis prevents immediate demotion")
 	var far := sim.transition_requests(Vector3(100,0,100))
 	_assert((far["demote"] as Array).has(state), "detailed agent requests demotion outside demotion radius")
-	state.approach_state = {"signal": "yield"}; state.next_edge_id = 1
 	sim.apply_demotion(state, {"position": Vector3(0,0,-25), "speed_mps": 7.5, "next_edge_id": 1, "approach_state": {"signal": "yield"}})
 	_assert(not state.detailed and absf(state.progress_m - 25.0) < 0.01, "demotion preserves road-relative position")
 	_assert(absf(state.speed_mps - 7.5) < 0.01 and state.next_edge_id == 1, "demotion preserves speed and next edge")
@@ -85,6 +86,25 @@ func _test_promoted_vehicle_uses_shared_vehicle_dynamics() -> void:
 		controller._physics_process(0.1); vehicle._physics_process(0.1)
 	_assert(float(vehicle.call("speed_mps")) > 5.0, "promoted traffic advances through shared VehicleDynamics")
 	root.free()
+
+func _test_brg1_topology_world_mapping() -> void:
+	var path := "user://traffic_minimal.brg"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_buffer("BRG1".to_ascii_buffer()); f.store_32(2); f.store_32(1)
+	_store_node(f, 1, 1000.0, 2000.0, 0, 1); _store_node(f, 2, 1000.0, 1900.0, 1, 0)
+	f.store_64(7); f.store_32(0); f.store_32(0); f.store_32(1); f.store_float(100.0); f.store_float(36.0)
+	for value in [0,0,0,0,0,0]: f.store_8(value)
+	f.close()
+	var topology = TrafficTopologyViewScript.new(); topology.set_world_origin(Vector2(900.0, 2100.0))
+	_assert(topology.load_graph(path), "BRG1 traffic topology loads")
+	_assert(topology.outgoing_edge_ids(0).is_empty(), "directed topology does not invent outgoing edges")
+	var p: Vector3 = topology.edge_world_position(0, 0.5)
+	_assert(p.is_equal_approx(Vector3(100.0, 0.0, 150.0)), "BRG1 projected coordinates map through shared world origin convention")
+	_assert(absf(topology.edge_speed_mps(0) - 10.0) < 0.001, "BRG1 speed is reused without duplicate traffic policy")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+func _store_node(f: FileAccess, osm_id: int, x: float, y: float, adjacency_offset: int, adjacency_count: int) -> void:
+	f.store_64(osm_id); f.store_double(0.0); f.store_double(0.0); f.store_float(x); f.store_float(y); f.store_32(adjacency_offset); f.store_32(adjacency_count)
 
 func _assert(condition: bool, message: String) -> void:
 	if condition: return
