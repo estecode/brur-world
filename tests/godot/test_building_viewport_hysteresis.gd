@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Verifies building viewport requests stay stable when the camera jitters across a chunk edge that is still covered by the retained margin.
+## Verifies building viewport requests stay stable across chunk-edge jitter and Drive heading changes covered by the retained margin.
 ## Dependencies: production BuildingStreamLayer, BuildingLodPolicy, and WorldCoordinates with tiny BMC fixture chunks.
 
 const BuildingStreamLayerScript = preload("res://scripts/building_stream_layer.gd")
@@ -26,6 +26,31 @@ class DummyCameraRig:
 			focus + Vector3(-view_half_extent_m, 0.0, view_half_extent_m),
 		])
 
+class DriveCameraRig:
+	extends Node
+	var focus := Vector3.ZERO
+	var altitude := 12.0
+	var heading := 0.0
+	var side_extent_m := 1500.0
+	var forward_extent_m := 4500.0
+	func get_focus_world() -> Vector3:
+		return focus
+	func get_altitude() -> float:
+		return altitude
+	func is_driving_view() -> bool:
+		return true
+	func get_ground_view_corners() -> PackedVector3Array:
+		var basis := Basis(Vector3.UP, heading)
+		var points := PackedVector3Array()
+		for local in [
+			Vector3(-side_extent_m, 0.0, -forward_extent_m),
+			Vector3(side_extent_m, 0.0, -forward_extent_m),
+			Vector3(side_extent_m, 0.0, forward_extent_m),
+			Vector3(-side_extent_m, 0.0, forward_extent_m),
+		]:
+			points.append(focus + basis * local)
+		return points
+
 func _init() -> void:
 	call_deferred("_run")
 
@@ -33,6 +58,15 @@ func _run() -> void:
 	var directory := "user://building_hysteresis_%d" % Time.get_ticks_usec()
 	_write_grid(directory, BuildingLodPolicyScript.LOD_FULL, 8)
 	var coordinates = WorldCoordinatesScript.new(Vector2.ZERO, 2000.0)
+	await _test_chunk_edge_hysteresis(directory, coordinates)
+	await _test_drive_heading_hysteresis(directory, coordinates)
+	if _failed:
+		quit(1)
+		return
+	print("godot building-viewport-hysteresis tests: OK")
+	quit(0)
+
+func _test_chunk_edge_hysteresis(directory: String, coordinates) -> void:
 	var camera := DummyCameraRig.new()
 	camera.focus = Vector3(1745.0, 0.0, 0.0)
 	root.add_child(camera)
@@ -66,15 +100,43 @@ func _run() -> void:
 	var moved: Dictionary = layer.debug_snapshot()
 	_assert(String(moved["desired_signature"]) != signature, "leaving the retained margin requests a new viewport")
 	_assert(int(moved["request_generation"]) > generation, "real viewport movement advances the request generation")
+	layer.queue_free()
+	camera.queue_free()
+	await process_frame
+
+func _test_drive_heading_hysteresis(directory: String, coordinates) -> void:
+	var camera := DriveCameraRig.new()
+	camera.focus = Vector3.ZERO
+	root.add_child(camera)
+	var layer := BuildingStreamLayerScript.new()
+	layer.view_margin_chunks = 1
+	layer.max_view_chunks = 64
+	layer.streaming_enabled = false
+	root.add_child(layer)
+	layer.setup(coordinates, camera, directory)
+	layer.set_streaming_enabled(true)
+	await _wait_until_ready(layer, 240)
+	_assert(layer.is_viewport_ready(), "Drive viewport becomes ready")
+	var initial: Dictionary = layer.debug_snapshot()
+	var signature := String(initial["desired_signature"])
+	var generation := int(initial["request_generation"])
+	_assert(int(initial["coverage_chunks"]) <= layer.max_view_chunks, "Drive rotation-invariant coverage stays within configured chunk budget")
+
+	# A raw axis-aligned AABB for this 3 km x 9 km frustum changes shape as the
+	# vehicle turns. Building streaming must instead retain the same radial Drive
+	# coverage while heading rotates, otherwise production never reaches ready.
+	for index in range(72):
+		camera.heading = TAU * float(index) / 72.0
+		layer._process(0.0)
+		await process_frame
+		var snapshot: Dictionary = layer.debug_snapshot()
+		_assert(String(snapshot["desired_signature"]) == signature, "Drive heading changes keep one building viewport signature")
+		_assert(int(snapshot["request_generation"]) == generation, "Drive heading changes do not restart building staging")
+		_assert(layer.is_viewport_ready(), "Drive heading changes keep buildings ready")
 
 	layer.queue_free()
 	camera.queue_free()
 	await process_frame
-	if _failed:
-		quit(1)
-		return
-	print("godot building-viewport-hysteresis tests: OK")
-	quit(0)
 
 func _wait_until_ready(layer: Node, max_frames: int) -> void:
 	for _index in range(max_frames):
