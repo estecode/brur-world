@@ -121,6 +121,27 @@ class WindowsPackageTests(unittest.TestCase):
                 windows_package.sha256(source_manifest),
             )
 
+    def test_package_accepts_pre_226_launcher_runtime_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary, runtime_info, build_info, source_manifest, _runtime_pack = self._fixture(root)
+            legacy_runtime_out = root / "legacy-runtime-data"
+            legacy_runtime_out.mkdir()
+            legacy_info = legacy_runtime_out / "runtime_pack_info.json"
+            legacy_info.write_bytes(runtime_info.read_bytes())
+
+            output = root / "out" / "client.zip"
+            report = windows_package.package_client(
+                binary,
+                legacy_runtime_out,
+                build_info,
+                source_manifest,
+                output,
+            )
+
+            self.assertEqual(report["runtime_pack_fingerprint"], "f" * 64)
+            self.assertTrue(output.is_file())
+
     def test_package_streams_cached_runtime_pack_without_recompression(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
         self.assertNotIn("runtime_hashes", source)
@@ -153,6 +174,12 @@ class WindowsPackageTests(unittest.TestCase):
         self.assertIn('--main-pack "$PCK_PATH"', target)
         self.assertIn("test_windows_packaged_world_data.gd", target)
         self.assertIn('"$RUNTIME_PACK_PATH"', target)
+
+    def test_target_supports_stable_main_launcher_contract(self) -> None:
+        target = TARGET_PATH.read_text(encoding="utf-8")
+        self.assertIn('LEGACY_RUNTIME_OUT="${BRUR_WINDOWS_RUNTIME_DATA_OUT:-}"', target)
+        self.assertIn('RUNTIME_PACK_INFO="$LEGACY_RUNTIME_OUT/runtime_pack_info.json"', target)
+        self.assertIn("missing runtime pack output contract", target)
 
     def test_target_preserves_selected_revision_production_entrypoint(self) -> None:
         target = TARGET_PATH.read_text(encoding="utf-8")
