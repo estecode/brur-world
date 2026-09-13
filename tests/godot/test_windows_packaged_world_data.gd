@@ -1,12 +1,13 @@
 extends SceneTree
 
-## Verifies the exported PCK contains the production world-data contract at res://world_data.
+## Verifies the external Windows runtime resource pack exposes production world data at res://world_data.
 ##
 ## Dependencies:
-## - Reads only packaged runtime files through Godot's virtual filesystem.
-## - Does not depend on rendering, native GPS processes, or local checkout data.
+## - Starts from the exported game PCK, which must not contain world_data itself.
+## - Mounts the derived runtime ZIP passed after `--` and validates its virtual filesystem contract.
 
 const DELIVERY_MANIFEST := "windows_runtime_manifest.json"
+const WORLD_MANIFEST := "res://world_data/manifest.json"
 
 const REQUIRED_FILES := [
 	"manifest.json",
@@ -24,10 +25,26 @@ const REQUIRED_DIRS := [
 	"lod1",
 	"lod2",
 	"poi_tiles",
-	"building_tiles",
+	"building_mesh_lod",
 ]
 
 func _initialize() -> void:
+	if FileAccess.file_exists(WORLD_MANIFEST):
+		_fail("game PCK unexpectedly embeds world_data")
+		return
+
+	var args := OS.get_cmdline_user_args()
+	if args.size() != 1:
+		_fail("expected exactly one external runtime pack path")
+		return
+	var runtime_pack := String(args[0])
+	if not FileAccess.file_exists(runtime_pack):
+		_fail("runtime pack does not exist: %s" % runtime_pack)
+		return
+	if not ProjectSettings.load_resource_pack(runtime_pack, true):
+		_fail("failed to mount runtime pack: %s" % runtime_pack)
+		return
+
 	for name in REQUIRED_FILES:
 		var path := "res://world_data/%s" % name
 		if not FileAccess.file_exists(path):
@@ -42,6 +59,9 @@ func _initialize() -> void:
 
 	if DirAccess.open("res://world_data/osm_source_cache") != null:
 		_fail("source cache was packaged")
+		return
+	if DirAccess.open("res://world_data/building_tiles") != null:
+		_fail("obsolete building_tiles was packaged")
 		return
 
 	var delivery_path := "res://world_data/%s" % DELIVERY_MANIFEST
@@ -64,7 +84,7 @@ func _initialize() -> void:
 	for relative_value in files:
 		var relative := String(relative_value)
 		if relative.is_empty() or not FileAccess.file_exists("res://world_data/" + relative):
-			_fail("selected runtime file missing from PCK: %s" % relative)
+			_fail("selected runtime file missing from mounted pack: %s" % relative)
 			return
 
 	print("WINDOWS_PACK_DATA=OK files=%d" % files.size())

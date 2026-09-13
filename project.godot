@@ -2,6 +2,9 @@
 config/name="Brur World POC"
 run/main_scene="res://scenes/main.tscn"
 
+[autoload]
+WindowsRuntimePack="*res://scripts/windows_runtime_pack_loader.gd"
+
 [display]
 window/size/viewport_width=1280
 window/size/viewport_height=720
