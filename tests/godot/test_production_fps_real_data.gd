@@ -31,9 +31,6 @@ var _frame_times: Array[float] = []
 var _cell_crossings := 0
 
 func _initialize() -> void:
-	# Hosted CI has no full Sweden runtime dataset. This mode still compiles the
-	# complete script and its production scene dependencies so local-only test
-	# changes cannot silently ship with a parse error.
 	if OS.has_environment("BRUR_PARSE_ONLY"):
 		print("production Drive FPS real-data test parse: OK")
 		quit(0)
@@ -55,15 +52,10 @@ func _initialize() -> void:
 		push_error("production Drive FPS real-data test failed: production scene dependencies missing")
 		quit(1)
 		return
-	# HUS is intentionally off by default in gameplay. This performance regression
-	# specifically concerns Drive with buildings visible, so enable the production
-	# stream explicitly instead of accidentally benchmarking the cheap default.
 	_building_layer.call("set_streaming_enabled", true)
-	print("PRODUCTION_DRIVE_FPS_REAL_DATA waiting for production player")
+	print("PRODUCTION_DRIVE_FPS_REAL_DATA waiting for production player prepare_budget_ms=", _building_layer.get("prepare_budget_ms"))
 
 func _process(delta: float) -> bool:
-	# SceneTree/MainLoop uses true as a request to terminate. Keep returning false
-	# until _finish_measurement() or _fail() explicitly calls quit().
 	if _main == null:
 		return false
 	match _state:
@@ -88,7 +80,9 @@ func _process(delta: float) -> bool:
 			if _stable_elapsed >= STABLE_S:
 				_begin_measurement()
 			elif _settle_elapsed >= SETTLE_TIMEOUT_S:
-				_fail("production Drive did not settle: road_pending=%d buildings_ready=%s" % [road_pending, str(buildings_ready)])
+				var snapshot: Dictionary = _building_layer.call("debug_snapshot")
+				var metrics: Dictionary = _building_layer.call("consume_perf_metrics")
+				_fail("production Drive did not settle: road_pending=%d buildings_ready=%s snapshot=%s metrics=%s" % [road_pending, str(buildings_ready), str(snapshot), str(metrics)])
 		2:
 			var now_usec := Time.get_ticks_usec()
 			if _frame_started_usec > 0:
@@ -113,8 +107,6 @@ func _begin_measurement() -> void:
 	])
 
 func _cross_render_cell() -> void:
-	# Use the production player API so CameraRig, building streaming, road streaming,
-	# and floating-origin composition observe the same logical movement contract as gameplay.
 	var next_position := _player.global_position + Vector3(1100.0, 0.0, 0.0)
 	_player.call("set_world_position", next_position)
 	if _camera_rig.has_method("_apply_drive_camera"):
