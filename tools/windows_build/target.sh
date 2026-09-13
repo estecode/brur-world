@@ -25,6 +25,7 @@ if [[ -z "$RUNTIME_PACK_INFO" ]]; then
   RUNTIME_PACK_INFO="$LEGACY_RUNTIME_OUT/runtime_pack_info.json"
 fi
 
+printf 'WINDOWS_BUILD=RUNTIME_PACK checking reusable world-data pack\n'
 TIMEFORMAT='WINDOWS_TIMING stage=runtime_pack seconds=%3R'
 time "$PYTHON" "$BRUR_WINDOWS_SOURCE_ROOT/tools/windows_build/runtime_pack.py" \
   "$BRUR_WINDOWS_WORLD_DATA" \
@@ -42,13 +43,38 @@ PY
 )"
 
 printf 'WINDOWS_TARGET=EXPORT name=%s runtime_pack=%s\n' "$BRUR_WINDOWS_BUILD_NAME" "$RUNTIME_PACK_PATH"
+EXPORT_LOG="$(mktemp "${TMPDIR:-/tmp}/brur-windows-export.XXXXXX.log")"
+cleanup_export_log() {
+  rm -f "$EXPORT_LOG"
+}
+trap cleanup_export_log EXIT INT TERM
+
+set +e
 TIMEFORMAT='WINDOWS_TIMING stage=godot_export seconds=%3R'
 time "$GODOT_BIN" --headless --path "$BRUR_WINDOWS_SOURCE_ROOT" \
-  --export-release "Windows Desktop" "$BRUR_WINDOWS_EXPORT_DIR/$BRUR_WINDOWS_BUILD_NAME.exe"
+  --export-release "Windows Desktop" "$BRUR_WINDOWS_EXPORT_DIR/$BRUR_WINDOWS_BUILD_NAME.exe" \
+  2>&1 | tee "$EXPORT_LOG"
+GODOT_EXPORT_STATUS=${PIPESTATUS[0]}
+set -e
+if [[ "$GODOT_EXPORT_STATUS" -ne 0 ]]; then
+  printf 'WINDOWS_TARGET=FAIL Godot export exited with status %s\n' "$GODOT_EXPORT_STATUS" >&2
+  exit "$GODOT_EXPORT_STATUS"
+fi
+if grep -Eq 'SCRIPT ERROR:|Parse Error:|Compile Error:|Failed to load script' "$EXPORT_LOG"; then
+  printf 'WINDOWS_TARGET=FAIL Godot export reported script compile errors\n' >&2
+  exit 1
+fi
 
 PCK_PATH="$BRUR_WINDOWS_EXPORT_DIR/$BRUR_WINDOWS_BUILD_NAME.pck"
 [[ -s "$PCK_PATH" ]] || { printf 'WINDOWS_TARGET=FAIL missing exported PCK\n' >&2; exit 1; }
 printf 'WINDOWS_TARGET=VERIFY_EXTERNAL_WORLD_DATA\n'
+printf 'WINDOWS_TARGET=VERIFY isolated_from_source_world_data\n'
 TIMEFORMAT='WINDOWS_TIMING stage=runtime_pack_verify seconds=%3R'
-time "$GODOT_BIN" --headless --main-pack "$PCK_PATH" \
-  --script res://tests/godot/test_windows_packaged_world_data.gd -- "$RUNTIME_PACK_PATH"
+time (
+  cd "$BRUR_WINDOWS_EXPORT_DIR"
+  "$GODOT_BIN" --headless --main-pack "$PCK_PATH" \
+    --script res://tests/godot/test_windows_packaged_world_data.gd -- "$RUNTIME_PACK_PATH"
+)
+
+trap - EXIT INT TERM
+cleanup_export_log
