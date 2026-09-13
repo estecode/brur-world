@@ -87,8 +87,8 @@ class TrafficIntersectionTests(unittest.TestCase):
             WayInput(102, [2, 3], [(18.0001, 59.0), (18.0002, 59.0)], {"highway": "primary"}),
             WayInput(103, [4, 3, 5], [(18.0002, 58.9999), (18.0002, 59.0), (18.0002, 59.0001)], {"highway": "secondary"}),
         ])
-        signal = next(node for node in graph.nodes if node.osm_id == 2)
-        dataset = {"format": "BTS1", "signals": [{"id": "n2", "osm_node_id": 2, "x": signal.x, "y": signal.y, "highway_way_ids": [101, 102], "direction_source": "explicit", "explicit_stop_line": False}]}
+        signal = next(node for node in graph.nodes if node.osm_id == 1)
+        dataset = {"format": "BTS1", "signals": [{"id": "n1", "osm_node_id": 1, "x": signal.x, "y": signal.y, "highway_way_ids": [101], "direction_source": "explicit", "explicit_stop_line": False}]}
         report = build_from_runtime_data(dataset, graph)
         self.assertEqual(report.unresolved_signal_ids, ())
         self.assertEqual(len(report.intersections), 1)
