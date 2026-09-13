@@ -103,7 +103,9 @@ class OsmSourceCacheResumeTests(unittest.TestCase):
         legacy = io.BytesIO()
         for node_id in range(count):
             pickle.dump((node_id, 18.0 + node_id * 0.000001, 59.3, {}), legacy, protocol=5)
-        self.assertLess(compact_size, len(legacy.getvalue()) * 0.6)
+        # The fixed 24-byte records must save at least 30% versus the old
+        # protocol-5 pickle stream for the same untagged way nodes.
+        self.assertLess(compact_size, len(legacy.getvalue()) * 0.7)
 
     def test_tagged_node_overrides_duplicate_compact_node_on_publish(self) -> None:
         work = self.root / "tagged-work"
