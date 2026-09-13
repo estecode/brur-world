@@ -4,11 +4,13 @@ extends RefCounted
 ##
 ## Dependencies:
 ## - Operates only on Godot Control anchors/offsets in presentation code.
+## - Reserves the production bottom control/HUD stack so persistent windows never cover it.
 ## - Does not depend on gameplay, routing, world state, or subsystem internals.
 
 const MARGIN: float = 14.0
 const HEADER_HEIGHT: float = 32.0
 const HEADER_GAP: float = 6.0
+const BOTTOM_RESERVED_HEIGHT: float = 168.0
 
 enum Slot {
 	TOP_LEFT,
@@ -35,18 +37,22 @@ static func apply_window(header: Control, body: Control, slot: int, width: float
 			body.offset_bottom = body.offset_top
 			body.grow_vertical = Control.GROW_DIRECTION_END
 		Slot.BOTTOM_LEFT, Slot.BOTTOM_RIGHT:
+			var reserved_bottom := MARGIN + BOTTOM_RESERVED_HEIGHT
 			header.anchor_top = 1.0
 			header.anchor_bottom = 1.0
-			header.offset_top = -MARGIN - HEADER_HEIGHT
-			header.offset_bottom = -MARGIN
+			header.offset_top = -reserved_bottom - HEADER_HEIGHT
+			header.offset_bottom = -reserved_bottom
 			body.anchor_top = 1.0
 			body.anchor_bottom = 1.0
-			body.offset_top = -MARGIN - HEADER_HEIGHT - HEADER_GAP
+			body.offset_top = -reserved_bottom - HEADER_HEIGHT - HEADER_GAP
 			body.offset_bottom = body.offset_top
 			body.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
 	header.reset_size()
 	body.reset_size()
+
+static func bottom_reserved_height() -> float:
+	return BOTTOM_RESERVED_HEIGHT
 
 static func _apply_horizontal(control: Control, slot: int, width: float) -> void:
 	if slot == Slot.TOP_LEFT or slot == Slot.BOTTOM_LEFT:
