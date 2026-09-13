@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Regression tests for expensive PR-check scope decisions.
+"""Regression tests for expensive PR-check scope and Safe Check handoff decisions.
 
 Dependencies:
-- Imports the project-owned tools/pr_check_scope.py policy.
-- Uses representative changed-file sets only; no runtime/world data is required.
+- Imports the project-owned PR-check scope and merge-decision policies.
+- Uses representative changed-file sets and a fake Godot launcher; no runtime/world data is required.
 """
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from pr_check_scope import (  # noqa: E402
     route_geometry_check_required,
     world_showcase_real_data_required,
 )
+from pr_merge_decision import parse_merge_decision  # noqa: E402
 
 
 BUILDING_UI_PR_FILES = (
@@ -113,6 +115,23 @@ def main() -> None:
     assert not city_light_real_data_required(())
     assert not world_showcase_real_data_required(())
     assert not building_tiles_required(())
+
+    prefix = "## Merge decision\n\n**Merge recommendation**\n"
+    assert parse_merge_decision(prefix + "MERGE\n") == "merge"
+    assert parse_merge_decision(prefix + "CHECK THEN MERGE\n\nCHECK: game\n") == "check"
+    assert parse_merge_decision(prefix + "DO NOT MERGE\n\nFIX: blocker\n") == "block"
+    try:
+        parse_merge_decision("CHECK THEN MERGE without marker")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("ambiguous PR metadata must fail closed")
+
+    subprocess.run(
+        [sys.executable, str(ROOT / "tests/test_pr_check_visual_contract.py")],
+        cwd=ROOT,
+        check=True,
+    )
 
     print("PR check scope tests: OK")
 
