@@ -117,8 +117,7 @@ func _physics_process(_delta: float) -> void:
 func _drive_route() -> void:
 	var current := vehicle.global_position
 	var speed_mps: float = maxf(float(vehicle.call("speed_mps")), 0.0)
-	var target_index := _lookahead_index(lookahead_base_m + speed_mps * lookahead_speed_seconds)
-	var target := _points[target_index]
+	var target := _lookahead_point(lookahead_base_m + speed_mps * lookahead_speed_seconds)
 	var dx := target.x - current.x
 	var dz := target.z - current.z
 	var desired_heading := atan2(-dx, -dz)
@@ -157,24 +156,33 @@ func _drive_route() -> void:
 
 func _update_progress() -> void:
 	while _target_index < _points.size() - 1:
-		if _flat_distance(vehicle.global_position, _points[_target_index]) > waypoint_radius_m:
-			break
-		_target_index += 1
+		if _flat_distance(vehicle.global_position, _points[_target_index]) <= waypoint_radius_m or _passed_target_plane(_target_index):
+			_target_index += 1
+			continue
+		break
 	if _intersection_index >= 0 and _target_index > _intersection_index:
 		clear_upcoming_intersection()
 
-func _lookahead_index(distance_m: float) -> int:
-	var index := _target_index
-	var remaining := maxf(distance_m, 0.0)
-	var cursor := vehicle.global_position
-	while index < _points.size() - 1:
-		var segment := _flat_distance(cursor, _points[index])
-		if segment >= remaining:
-			break
-		remaining -= segment
-		cursor = _points[index]
+func _lookahead_point(distance_m: float) -> Vector3:
+	if _points.is_empty():
+		return vehicle.global_position if vehicle != null else Vector3.ZERO
+	if _points.size() == 1:
+		return _points[0]
+	var index: int = clampi(_target_index, 1, _points.size() - 1)
+	var segment_start: Vector3 = _points[index - 1]
+	var segment_end: Vector3 = _points[index]
+	var cursor: Vector3 = _closest_point_on_segment(vehicle.global_position, segment_start, segment_end)
+	var remaining: float = maxf(distance_m, 0.0)
+	while true:
+		var segment_remaining: float = _flat_distance(cursor, segment_end)
+		if segment_remaining >= remaining and segment_remaining > 0.0001:
+			return cursor.lerp(segment_end, remaining / segment_remaining)
+		remaining -= segment_remaining
+		if index >= _points.size() - 1:
+			return _points[_points.size() - 1]
 		index += 1
-	return index
+		cursor = segment_end
+		segment_end = _points[index]
 
 func _route_distance_to_index(route_point_index: int) -> float:
 	if route_point_index < _target_index or route_point_index >= _points.size():
@@ -214,6 +222,25 @@ func _distance_to_upcoming_route() -> float:
 	for i in range(start, _points.size() - 1):
 		best = minf(best, _distance_to_segment(vehicle.global_position, _points[i], _points[i + 1]))
 	return best
+
+func _passed_target_plane(index: int) -> bool:
+	if index <= 0 or index >= _points.size():
+		return false
+	var a := Vector2(_points[index - 1].x, _points[index - 1].z)
+	var b := Vector2(_points[index].x, _points[index].z)
+	var p := Vector2(vehicle.global_position.x, vehicle.global_position.z)
+	var segment := b - a
+	if segment.length_squared() < 0.0001:
+		return true
+	return (p - a).dot(segment) / segment.length_squared() >= 1.0
+
+func _closest_point_on_segment(point: Vector3, a: Vector3, b: Vector3) -> Vector3:
+	var p := Vector2(point.x, point.z)
+	var av := Vector2(a.x, a.z)
+	var bv := Vector2(b.x, b.z)
+	var ab := bv - av
+	var t := clampf((p - av).dot(ab) / maxf(ab.length_squared(), 0.0001), 0.0, 1.0)
+	return Vector3(lerpf(a.x, b.x, t), lerpf(a.y, b.y, t), lerpf(a.z, b.z, t))
 
 func _distance_to_segment(point: Vector3, a: Vector3, b: Vector3) -> float:
 	var p := Vector2(point.x, point.z)
