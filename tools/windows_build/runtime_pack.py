@@ -30,6 +30,7 @@ PACK_FORMAT_VERSION = 1
 STATE_SCHEMA_VERSION = 1
 PACK_FILENAME = "brur-world-data.zip"
 HASH_STATE_FILENAME = "runtime_file_hashes.json"
+PROGRESS_INTERVAL_SECONDS = 2.0
 
 
 def sha256(path: Path) -> str:
@@ -68,6 +69,39 @@ def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
     os.replace(temp, path)
 
 
+def _human_bytes(value: int) -> str:
+    amount = float(max(value, 0))
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if amount < 1024.0 or unit == "TB":
+            return f"{amount:.1f} {unit}"
+        amount /= 1024.0
+    return f"{amount:.1f} TB"
+
+
+class _Progress:
+    def __init__(self, stage: str, total_items: int, total_bytes: int | None = None) -> None:
+        self.stage = stage
+        self.total_items = max(total_items, 1)
+        self.total_bytes = total_bytes
+        self.started = time.monotonic()
+        self.last_print = 0.0
+
+    def update(self, items: int, processed_bytes: int = 0, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self.last_print < PROGRESS_INTERVAL_SECONDS:
+            return
+        self.last_print = now
+        percent = min(100.0, 100.0 * items / self.total_items)
+        elapsed = now - self.started
+        detail = f"{items:,}/{self.total_items:,} files"
+        if self.total_bytes is not None:
+            detail += f" | {_human_bytes(processed_bytes)}/{_human_bytes(self.total_bytes)}"
+        print(
+            f"[runtime-pack] {self.stage:<11} {percent:5.1f}% | {detail} | {elapsed:.1f}s",
+            flush=True,
+        )
+
+
 def _verified_hashes(source: Path, cache_dir: Path) -> tuple[dict[str, str], int, int]:
     source = source.resolve()
     selected = selected_runtime_files(source)
@@ -77,14 +111,33 @@ def _verified_hashes(source: Path, cache_dir: Path) -> tuple[dict[str, str], int
     if not isinstance(previous_files, dict):
         previous_files = {}
 
+    if previous_files:
+        print("WINDOWS BUILD — CHECKING CACHED WORLD PACK", flush=True)
+        print("[runtime-pack] unchanged data will use SHIPPING only", flush=True)
+    else:
+        print("WINDOWS BUILD — PACKING + SHIPPING", flush=True)
+        print("[runtime-pack] first/new world pack: checking files before packing", flush=True)
+
+    identities: dict[str, dict[str, int]] = {}
+    total_bytes = 0
+    check_progress = _Progress("checking", len(selected))
+    for number, relative in enumerate(selected, 1):
+        relative_name = relative.as_posix()
+        identity = _stat_identity(source / relative)
+        identities[relative_name] = identity
+        total_bytes += identity["size"]
+        check_progress.update(number)
+    check_progress.update(len(selected), force=True)
+
     hashes: dict[str, str] = {}
     next_files: dict[str, dict[str, Any]] = {}
     reused = 0
     rehashed = 0
+    bytes_hashed = 0
+    files_to_hash = []
     for relative in selected:
         relative_name = relative.as_posix()
-        absolute = source / relative
-        identity = _stat_identity(absolute)
+        identity = identities[relative_name]
         cached = previous_files.get(relative_name)
         if (
             isinstance(cached, dict)
@@ -92,13 +145,31 @@ def _verified_hashes(source: Path, cache_dir: Path) -> tuple[dict[str, str], int
             and isinstance(cached.get("sha256"), str)
             and len(cached["sha256"]) == 64
         ):
-            digest = cached["sha256"]
+            hashes[relative_name] = cached["sha256"]
+            next_files[relative_name] = {"identity": identity, "sha256": cached["sha256"]}
             reused += 1
         else:
-            digest = sha256(absolute)
+            files_to_hash.append(relative)
+
+    hash_total_bytes = sum(identities[path.as_posix()]["size"] for path in files_to_hash)
+    if files_to_hash:
+        print(
+            f"[runtime-pack] {len(files_to_hash):,} file(s) need hashing; "
+            f"{_human_bytes(hash_total_bytes)} will be read",
+            flush=True,
+        )
+        hash_progress = _Progress("hashing", len(files_to_hash), hash_total_bytes)
+        for number, relative in enumerate(files_to_hash, 1):
+            relative_name = relative.as_posix()
+            digest = sha256(source / relative)
+            hashes[relative_name] = digest
+            next_files[relative_name] = {"identity": identities[relative_name], "sha256": digest}
             rehashed += 1
-        hashes[relative_name] = digest
-        next_files[relative_name] = {"identity": identity, "sha256": digest}
+            bytes_hashed += identities[relative_name]["size"]
+            hash_progress.update(number, bytes_hashed)
+        hash_progress.update(len(files_to_hash), bytes_hashed, force=True)
+    else:
+        print("[runtime-pack] hashing      100.0% | 0 files changed — no content reread", flush=True)
 
     _write_json_atomic(
         state_path,
@@ -145,6 +216,20 @@ def _pack_cache_valid(pack_path: Path, fingerprint: str) -> bool:
         return False
 
 
+def _verify_built_pack(pack_path: Path) -> None:
+    with zipfile.ZipFile(pack_path, "r") as archive:
+        entries = [entry for entry in archive.infolist() if not entry.is_dir()]
+        total_bytes = sum(entry.file_size for entry in entries)
+        progress = _Progress("verifying", len(entries), total_bytes)
+        verified_bytes = 0
+        for number, entry in enumerate(entries, 1):
+            with archive.open(entry, "r") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    verified_bytes += len(chunk)
+            progress.update(number, verified_bytes)
+        progress.update(len(entries), verified_bytes, force=True)
+
+
 def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[str, str]) -> None:
     source = source.resolve()
     pack_path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,6 +237,9 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
     os.close(fd)
     temp_path = Path(temp_name)
     try:
+        total_bytes = sum((source / relative_name).stat().st_size for relative_name in hashes)
+        packed_bytes = 0
+        progress = _Progress("packing", len(hashes), total_bytes)
         with zipfile.ZipFile(
             temp_path,
             "w",
@@ -159,8 +247,11 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
             compresslevel=6,
             allowZip64=True,
         ) as archive:
-            for relative_name in sorted(hashes):
-                archive.write(source / relative_name, f"world_data/{relative_name}")
+            for number, relative_name in enumerate(sorted(hashes), 1):
+                path = source / relative_name
+                archive.write(path, f"world_data/{relative_name}")
+                packed_bytes += path.stat().st_size
+                progress.update(number, packed_bytes)
             archive.writestr(
                 f"world_data/{DELIVERY_MANIFEST}",
                 json.dumps(
@@ -175,10 +266,8 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
                     sort_keys=True,
                 ),
             )
-        with zipfile.ZipFile(temp_path, "r") as archive:
-            bad_file = archive.testzip()
-            if bad_file is not None:
-                raise SystemExit(f"runtime resource pack verification failed: {bad_file}")
+        progress.update(len(hashes), packed_bytes, force=True)
+        _verify_built_pack(temp_path)
         os.replace(temp_path, pack_path)
     finally:
         temp_path.unlink(missing_ok=True)
@@ -208,7 +297,12 @@ def prepare_cached_runtime_pack(source: Path, cache_dir: Path) -> dict[str, Any]
 
     pack_started = time.monotonic()
     cache_hit = _pack_cache_valid(pack_path, fingerprint)
-    if not cache_hit:
+    if cache_hit:
+        print("WINDOWS BUILD — SHIPPING", flush=True)
+        print("[runtime-pack] reusable world pack unchanged — skipping packing", flush=True)
+    else:
+        print("WINDOWS BUILD — PACKING + SHIPPING", flush=True)
+        print("[runtime-pack] building reusable world pack", flush=True)
         _build_pack(source, pack_path, fingerprint, hashes)
     pack_seconds = time.monotonic() - pack_started
 
