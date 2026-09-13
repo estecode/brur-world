@@ -199,6 +199,26 @@ func _chunk_bounds(lod: int, margin_chunks: int) -> Dictionary:
 			for value in corners:
 				if typeof(value) == TYPE_VECTOR3 and (value as Vector3).is_finite():
 					world_points.append(value)
+	# Drive camera heading rotates an elongated ground frustum. Streaming its raw
+	# axis-aligned bounds makes a stationary vehicle restage buildings while merely
+	# turning. Use the same frustum radius around the authoritative focus so Drive
+	# coverage is rotation-invariant without changing Map, road, or POI streaming.
+	if (
+		not world_points.is_empty()
+		and _camera_rig.has_method("is_driving_view")
+		and bool(_camera_rig.call("is_driving_view"))
+	):
+		var focus_world: Vector3 = _camera_rig.call("get_focus_world")
+		var radius_m := 0.0
+		for point in world_points:
+			radius_m = maxf(radius_m, Vector2(point.x - focus_world.x, point.z - focus_world.z).length())
+		if radius_m > 0.0:
+			world_points = [
+				focus_world + Vector3(-radius_m, 0.0, -radius_m),
+				focus_world + Vector3(radius_m, 0.0, -radius_m),
+				focus_world + Vector3(radius_m, 0.0, radius_m),
+				focus_world + Vector3(-radius_m, 0.0, radius_m),
+			]
 	if world_points.is_empty():
 		world_points.append(_camera_rig.call("get_focus_world"))
 	var first_absolute: Vector2 = _coordinates.world_to_absolute(world_points[0])
