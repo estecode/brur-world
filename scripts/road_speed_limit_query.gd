@@ -6,7 +6,7 @@ extends RefCounted
 ## Dependencies:
 ## - Reads routing.brg and routing_snap.brs only; it does not create a second road graph.
 ## - Uses the shared WorldCoordinates owner for world-to-projected conversion.
-## - Returns unknown for routing fallback speeds so presentation never invents a legal limit.
+## - Returns unknown when the nearest road uses a routing fallback, so presentation never invents a legal limit.
 
 const GRAPH_MAGIC := "BRG1"
 const SNAP_MAGIC := "BRS2"
@@ -17,9 +17,7 @@ const SNAP_HEADER_SIZE := 20
 const SNAP_CELL_RECORD_SIZE := 16
 const SNAP_EDGE_REF_SIZE := 4
 const NODE_X_OFFSET := 24
-const NODE_Y_OFFSET := 28
 const EDGE_SOURCE_OFFSET := 12
-const EDGE_TARGET_OFFSET := 16
 const EDGE_SPEED_OFFSET := 24
 const EDGE_SPEED_SOURCE_OFFSET := 31
 const SPEED_SOURCE_OSM := 0
@@ -87,7 +85,7 @@ func speed_limit_kmh_at(world_position: Vector3, max_distance_m: float = DEFAULT
 	var ref_offset := int(cell_record["offset"])
 	var ref_count := int(cell_record["count"])
 	var best_distance := maxf(0.0, max_distance_m)
-	var best_speed: Variant = null
+	var best_edge: Dictionary = {}
 	for item in range(ref_count):
 		var ref_position := _ref_table_offset + (ref_offset + item) * SNAP_EDGE_REF_SIZE
 		_snap.seek(ref_position)
@@ -95,7 +93,7 @@ func speed_limit_kmh_at(world_position: Vector3, max_distance_m: float = DEFAULT
 		if edge_index < 0 or edge_index >= _edge_count:
 			continue
 		var edge := _read_edge(edge_index)
-		if edge.is_empty() or int(edge["speed_source"]) != SPEED_SOURCE_OSM:
+		if edge.is_empty():
 			continue
 		var source := _read_node_xy(int(edge["source_index"]))
 		var target := _read_node_xy(int(edge["target_index"]))
@@ -104,14 +102,16 @@ func speed_limit_kmh_at(world_position: Vector3, max_distance_m: float = DEFAULT
 		var distance := _distance_to_segment(absolute, source, target)
 		if distance <= best_distance:
 			best_distance = distance
-			best_speed = float(edge["speed_kmh"])
-	return best_speed
+			best_edge = edge
+	if best_edge.is_empty() or int(best_edge["speed_source"]) != SPEED_SOURCE_OSM:
+		return null
+	return float(best_edge["speed_kmh"])
 
 func _find_cell(cx: int, cy: int) -> Dictionary:
 	var low := 0
 	var high := _cell_count
 	while low < high:
-		var middle := (low + high) / 2
+		var middle := floori(float(low + high) * 0.5)
 		var record := _read_cell(middle)
 		var record_x := int(record["x"])
 		var record_y := int(record["y"])
