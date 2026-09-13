@@ -5,20 +5,33 @@ set -euo pipefail
 
 : "${BRUR_WINDOWS_SOURCE_ROOT:?}"
 : "${BRUR_WINDOWS_WORLD_DATA:?}"
-: "${BRUR_WINDOWS_RUNTIME_PACK_INFO:?}"
 : "${BRUR_WINDOWS_EXPORT_DIR:?}"
 : "${BRUR_WINDOWS_BUILD_NAME:?}"
 : "${GODOT_BIN:?}"
 PYTHON="${PYTHON_BIN:-python3}"
 CACHE_DIR="${BRUR_WINDOWS_CACHE_DIR:-$HOME/.cache/brur-world/windows-build}"
 
+# The current main launcher still provides BRUR_WINDOWS_RUNTIME_DATA_OUT while
+# this PR's build.sh provides BRUR_WINDOWS_RUNTIME_PACK_INFO. Support both so a
+# PR can be tested safely through the stable main Safe Command bootstrap before merge.
+RUNTIME_PACK_INFO="${BRUR_WINDOWS_RUNTIME_PACK_INFO:-}"
+if [[ -z "$RUNTIME_PACK_INFO" ]]; then
+  LEGACY_RUNTIME_OUT="${BRUR_WINDOWS_RUNTIME_DATA_OUT:-}"
+  [[ -n "$LEGACY_RUNTIME_OUT" ]] || {
+    printf 'WINDOWS_TARGET=FAIL missing runtime pack output contract\n' >&2
+    exit 64
+  }
+  mkdir -p "$LEGACY_RUNTIME_OUT"
+  RUNTIME_PACK_INFO="$LEGACY_RUNTIME_OUT/runtime_pack_info.json"
+fi
+
 TIMEFORMAT='WINDOWS_TIMING stage=runtime_pack seconds=%3R'
 time "$PYTHON" "$BRUR_WINDOWS_SOURCE_ROOT/tools/windows_build/runtime_pack.py" \
   "$BRUR_WINDOWS_WORLD_DATA" \
   --cache-dir "$CACHE_DIR" \
-  --output-info "$BRUR_WINDOWS_RUNTIME_PACK_INFO"
+  --output-info "$RUNTIME_PACK_INFO"
 
-RUNTIME_PACK_PATH="$($PYTHON - "$BRUR_WINDOWS_RUNTIME_PACK_INFO" <<'PY'
+RUNTIME_PACK_PATH="$($PYTHON - "$RUNTIME_PACK_INFO" <<'PY'
 import json, pathlib, sys
 info = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 path = pathlib.Path(info["pack_path"])
