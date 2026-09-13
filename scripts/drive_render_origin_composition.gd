@@ -20,6 +20,7 @@ const LOGICAL_MESH_META: StringName = &"brur_drive_logical_mesh"
 const LOCALIZED_ORIGIN_META: StringName = &"brur_drive_localized_origin"
 const DRIVE_GROUND_DIAMETER_MIN_M: float = 4096.0
 const DRIVE_GROUND_DIAMETER_MAX_M: float = 12000.0
+const DRIVE_DECORATIVE_MAX_Y_M: float = -0.20
 
 var _camera_rig: Node = null
 var _world: Node3D = null
@@ -104,6 +105,11 @@ func _rebase_background_mesh(instance: MeshInstance3D, origin: Vector3) -> void:
 		instance.position.z = logical_xz.y
 		instance.remove_meta(LOCALIZED_ORIGIN_META)
 		return
+
+	# Keep decorative transparent surfaces materially below the physical Drive
+	# surface. This is deliberately a presentation-only safety margin; road,
+	# building and vehicle logical heights remain unchanged.
+	instance.position.y = minf(instance.position.y, DRIVE_DECORATIVE_MAX_Y_M)
 
 	# The ocean base is a Sweden-scale PlaneMesh. In Drive only a bounded local
 	# patch around the camera is required, so never send the country-scale plane
