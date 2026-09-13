@@ -11,8 +11,9 @@ const CAR_LENGTH_M := 4.5
 const CAR_WIDTH_M := 1.8
 const CABIN_LENGTH_M := 2.45
 const CABIN_WIDTH_M := 1.52
-const NEAR_DISTANCE_M := 250.0
-const MAX_VISUAL_SCALE := 28.0
+const PHYSICAL_SCALE_DISTANCE_M := 800.0
+const FAR_SCALE_EXPONENT := 1.30
+const MAX_VISUAL_SCALE := 8192.0
 
 var _body: MeshInstance3D
 var _cabin: MeshInstance3D
@@ -30,9 +31,10 @@ func set_view_state(camera_distance_m: float, driving_view: bool, vehicle_headin
 	scale = Vector3.ONE * visual_scale
 
 static func scale_for_distance(camera_distance_m: float) -> float:
-	if camera_distance_m <= NEAR_DISTANCE_M:
+	if camera_distance_m <= PHYSICAL_SCALE_DISTANCE_M:
 		return 1.0
-	return clampf(pow(camera_distance_m / NEAR_DISTANCE_M, 0.45), 1.0, MAX_VISUAL_SCALE)
+	var ratio := camera_distance_m / PHYSICAL_SCALE_DISTANCE_M
+	return clampf(pow(ratio, FAR_SCALE_EXPONENT), 1.0, MAX_VISUAL_SCALE)
 
 static func physical_size_m() -> Vector2:
 	return Vector2(CAR_WIDTH_M, CAR_LENGTH_M)
