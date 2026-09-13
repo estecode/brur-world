@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Packages a validated Windows export whose production world data is embedded in its PCK.
+"""Packages a validated Windows export with a cached external runtime world-data resource pack.
 
 Dependencies:
 - Reads an EXE/PCK pair produced by the selected revision's Windows target.
-- Reads prepared runtime-data fingerprints and the authoritative source manifest; it never rebuilds world truth.
-- The target has already verified the PCK exposes the prepared data at res://world_data.
+- Reads runtime-pack identity/hashes produced by runtime_pack.py; it never rebuilds or rehashes world truth.
+- The target has already verified that mounting the runtime pack exposes res://world_data.
 - Uses only Python standard library modules.
 """
 
@@ -15,9 +15,10 @@ import hashlib
 import json
 import zipfile
 from pathlib import Path
+from typing import Any
 
-FORMAT_VERSION = 2
-RUNTIME_DELIVERY = "embedded_pck:res://world_data"
+FORMAT_VERSION = 3
+RUNTIME_DELIVERY = "resource_pack:brur-world-data.zip=>res://world_data"
 
 
 def sha256(path: Path) -> str:
@@ -39,22 +40,55 @@ def find_binary_pair(binary_dir: Path) -> tuple[Path, Path]:
     return exe, pck
 
 
-def runtime_hashes(runtime_data: Path) -> dict[str, str]:
-    files = sorted(path for path in runtime_data.rglob("*") if path.is_file())
-    if not files:
-        raise SystemExit(f"runtime data is empty: {runtime_data}")
-    return {path.relative_to(runtime_data).as_posix(): sha256(path) for path in files}
+def load_runtime_pack_info(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise SystemExit(f"missing runtime pack info: {path}")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"invalid runtime pack info: {path}: {exc}") from exc
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        raise SystemExit("unsupported runtime pack info schema")
+
+    pack_path = Path(str(value.get("pack_path", ""))).expanduser().resolve()
+    pack_filename = str(value.get("pack_filename", ""))
+    fingerprint = str(value.get("fingerprint", ""))
+    runtime_files = value.get("runtime_files")
+    if pack_filename != "brur-world-data.zip":
+        raise SystemExit(f"unexpected runtime pack filename: {pack_filename}")
+    if len(fingerprint) != 64:
+        raise SystemExit("runtime pack info is missing a full fingerprint")
+    if not isinstance(runtime_files, dict) or not runtime_files:
+        raise SystemExit("runtime pack info has no runtime file hashes")
+    if not pack_path.is_file() or pack_path.stat().st_size <= 0:
+        raise SystemExit(f"runtime pack is missing or empty: {pack_path}")
+    if not zipfile.is_zipfile(pack_path):
+        raise SystemExit(f"runtime pack is not a valid ZIP resource pack: {pack_path}")
+    with zipfile.ZipFile(pack_path, "r") as archive:
+        if "world_data/windows_runtime_manifest.json" not in archive.namelist():
+            raise SystemExit("runtime pack is missing its delivery manifest")
+
+    normalized_hashes: dict[str, str] = {}
+    for relative_name, digest in runtime_files.items():
+        if not isinstance(relative_name, str) or not isinstance(digest, str) or len(digest) != 64:
+            raise SystemExit("runtime pack info contains an invalid file hash")
+        normalized_hashes[relative_name] = digest
+
+    result = dict(value)
+    result["pack_path"] = str(pack_path)
+    result["runtime_files"] = normalized_hashes
+    return result
 
 
 def package_client(
     binary_dir: Path,
-    runtime_data: Path,
+    runtime_pack_info_path: Path,
     build_info_path: Path,
     source_manifest: Path,
     output_zip: Path,
 ) -> dict:
     binary_dir = binary_dir.resolve()
-    runtime_data = runtime_data.resolve()
+    runtime_pack_info_path = runtime_pack_info_path.resolve()
     build_info_path = build_info_path.resolve()
     source_manifest = source_manifest.resolve()
     output_zip = output_zip.expanduser().resolve()
@@ -71,13 +105,19 @@ def package_client(
         raise SystemExit("build info must contain repository and full 40-character commit SHA")
 
     exe, pck = find_binary_pair(binary_dir)
-    hashes = runtime_hashes(runtime_data)
+    runtime_info = load_runtime_pack_info(runtime_pack_info_path)
+    runtime_pack = Path(runtime_info["pack_path"])
+    pack_filename = runtime_info["pack_filename"]
+    hashes = runtime_info["runtime_files"]
+    fingerprint = runtime_info["fingerprint"]
     output_zip.parent.mkdir(parents=True, exist_ok=True)
 
     final_build_info = dict(build_info)
     final_build_info["client_ready"] = True
     final_build_info["world_data_source_manifest_sha256"] = sha256(source_manifest)
     final_build_info["runtime_files"] = hashes
+    final_build_info["runtime_pack_fingerprint"] = fingerprint
+    final_build_info["runtime_pack_cache_hit"] = bool(runtime_info.get("cache_hit", False))
     final_build_info["runtime_delivery"] = RUNTIME_DELIVERY
     final_build_info["packaging_format_version"] = FORMAT_VERSION
 
@@ -91,13 +131,17 @@ def package_client(
         "issue": final_build_info.get("issue"),
         "world_data_source_manifest_sha256": final_build_info["world_data_source_manifest_sha256"],
         "runtime_files": hashes,
+        "runtime_pack_fingerprint": fingerprint,
         "runtime_delivery": RUNTIME_DELIVERY,
         "packaging_format_version": FORMAT_VERSION,
     }
 
-    with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+    with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
         archive.write(exe, f"BRUR/{exe.name}")
         archive.write(pck, f"BRUR/{pck.name}")
+        # The runtime resource pack is already compressed and content-addressed. Store it
+        # verbatim so repeated client packaging does not recompress multi-GB stable data.
+        archive.write(runtime_pack, f"BRUR/{pack_filename}", compress_type=zipfile.ZIP_STORED)
         archive.writestr(
             "BRUR/build_info.json",
             json.dumps(final_build_info, indent=2, sort_keys=True),
@@ -113,6 +157,7 @@ def package_client(
         required = {
             f"BRUR/{exe.name}",
             f"BRUR/{pck.name}",
+            f"BRUR/{pack_filename}",
             "BRUR/build_info.json",
             "BRUR/client_bundle_info.json",
             "BRUR/logs/",
@@ -121,11 +166,14 @@ def package_client(
         if missing:
             raise SystemExit(f"client ZIP validation failed; missing: {sorted(missing)}")
         if any(name.startswith("BRUR/runtime_data/") for name in names):
-            raise SystemExit("client ZIP duplicated embedded runtime data beside the PCK")
+            raise SystemExit("client ZIP duplicated runtime data beside the resource pack")
+        runtime_member = archive.getinfo(f"BRUR/{pack_filename}")
+        if runtime_member.compress_type != zipfile.ZIP_STORED:
+            raise SystemExit("client ZIP recompressed the cached runtime resource pack")
 
     print(
         f"[windows-package] ready zip={output_zip} commit={commit[:12]} "
-        f"runtime_files={len(hashes)} delivery={RUNTIME_DELIVERY}"
+        f"runtime_files={len(hashes)} delivery={RUNTIME_DELIVERY} fingerprint={fingerprint[:12]}"
     )
     return bundle_info
 
@@ -133,14 +181,14 @@ def package_client(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("binary_dir", type=Path)
-    parser.add_argument("runtime_data", type=Path)
+    parser.add_argument("runtime_pack_info", type=Path)
     parser.add_argument("build_info", type=Path)
     parser.add_argument("source_manifest", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     package_client(
         args.binary_dir,
-        args.runtime_data,
+        args.runtime_pack_info,
         args.build_info,
         args.source_manifest,
         args.output,
