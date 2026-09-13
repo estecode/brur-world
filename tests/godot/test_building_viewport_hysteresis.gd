@@ -85,6 +85,7 @@ func _test_chunk_edge_hysteresis(directory: String, coordinates) -> void:
 	var initial: Dictionary = layer.debug_snapshot()
 	var signature := String(initial["desired_signature"])
 	var generation := int(initial["request_generation"])
+	var initial_meshes := _active_meshes_by_key(layer)
 
 	# 1745 -> 1755 m makes the core viewport cross the x=2000 m chunk edge.
 	# The already requested one-chunk margin covers both core bounds, so a stable
@@ -103,6 +104,19 @@ func _test_chunk_edge_hysteresis(directory: String, coordinates) -> void:
 	var moved: Dictionary = layer.debug_snapshot()
 	_assert(String(moved["desired_signature"]) != signature, "leaving the retained margin requests a new viewport")
 	_assert(int(moved["request_generation"]) > generation, "real viewport movement advances the request generation")
+	await _wait_until_ready(layer, 240)
+	_assert(layer.is_viewport_ready(), "moved viewport becomes ready")
+	var moved_meshes := _active_meshes_by_key(layer)
+	var overlap := 0
+	for key_value in initial_meshes.keys():
+		var key := String(key_value)
+		if not moved_meshes.has(key):
+			continue
+		overlap += 1
+		_assert(moved_meshes[key] == initial_meshes[key], "overlapping viewport chunks reuse the exact uploaded ArrayMesh resource")
+	_assert(overlap > 0, "viewport movement fixture retains overlapping building chunks")
+	var metrics: Dictionary = layer.consume_perf_metrics()
+	_assert(int(metrics.get("building_mesh_reuses", 0)) >= overlap, "viewport movement records mesh-resource reuse for overlapping chunks")
 	layer.queue_free()
 	camera.queue_free()
 	await process_frame
@@ -140,6 +154,20 @@ func _test_drive_heading_hysteresis(directory: String, coordinates) -> void:
 	layer.queue_free()
 	camera.queue_free()
 	await process_frame
+
+func _active_meshes_by_key(layer: Node) -> Dictionary:
+	var result: Dictionary = {}
+	var active_group := layer.get("_active_group") as Node3D
+	if active_group == null:
+		return result
+	for child_value in active_group.get_children():
+		var instance := child_value as MeshInstance3D
+		if instance == null or not instance.mesh is ArrayMesh:
+			continue
+		var key := String(instance.get_meta(&"brur_building_chunk_key", ""))
+		if not key.is_empty():
+			result[key] = instance.mesh
+	return result
 
 func _wait_until_ready(layer: Node, max_frames: int) -> void:
 	for _index in range(max_frames):
