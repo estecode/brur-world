@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verifies that PR Safe Check bootstraps current origin/main instead of stale mapped-checkout tooling.
+# Verifies current-main Safe Check bootstrap plus persistent mapped-checkout logging on success and failure.
 # Dependencies: bash, git, mktemp, and tools/pr_check_entry.sh.
 set -euo pipefail
 
@@ -46,6 +46,11 @@ if printf '%s\n' "$output" | grep -q 'LAUNCHER=OLD'; then
   printf 'stale mapped launcher was executed\n' >&2
   exit 1
 fi
+SUCCESS_LOG="$MAPPED/.safecommand/logs/pr-check-97.log"
+[[ -f "$SUCCESS_LOG" ]]
+grep -q 'PR_CHECK=LOG_STARTED pr=97' "$SUCCESS_LOG"
+grep -q 'LAUNCHER=NEW pr=97' "$SUCCESS_LOG"
+grep -q 'PR_CHECK=LOG_FINISHED pr=97 exit=0' "$SUCCESS_LOG"
 
 rm "$SEED/tools/pr_check.sh"
 git -C "$SEED" add -u
@@ -58,5 +63,13 @@ status=$?
 set -e
 [[ "$status" -ne 0 ]]
 printf '%s\n' "$failure_output" | grep -q 'current origin/main has no tools/pr_check.sh'
+[[ -f "$SUCCESS_LOG" ]]
+grep -q 'PR_CHECK=LOG_STARTED pr=97' "$SUCCESS_LOG"
+grep -q 'current origin/main has no tools/pr_check.sh' "$SUCCESS_LOG"
+grep -q 'PR_CHECK=LOG_FINISHED pr=97 exit=66' "$SUCCESS_LOG"
+if grep -q 'LAUNCHER=NEW pr=97' "$SUCCESS_LOG"; then
+  printf 'persistent PR log was not replaced for the latest run\n' >&2
+  exit 1
+fi
 
 printf 'PR_CHECK_ENTRY_TEST=PASS\n'
