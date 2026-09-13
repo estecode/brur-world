@@ -130,6 +130,51 @@ driving_line="$(grep -n 'if \[\[ "$DRIVING_VISUAL_SCOPE" == "required" \]\]' "$R
   exit 1
 }
 
+# Execute the real PR-owned selector with fake scope/Godot helpers so this regression
+# proves that simultaneous HUD + route-follower changes open production Main, not the driving harness.
+SELECTOR="$TMP/selector"
+mkdir -p "$SELECTOR/tools" "$SELECTOR/scenes" "$SELECTOR/harness/driving"
+cp "$ROOT/tools/pr_check_local.sh" "$SELECTOR/tools/pr_check_local.sh"
+cat > "$SELECTOR/tools/pr_check_scope.py" <<'PY'
+#!/usr/bin/env python3
+import sys
+print("skip")
+PY
+chmod +x "$SELECTOR/tools/pr_check_scope.py"
+touch "$SELECTOR/scenes/main.tscn" "$SELECTOR/harness/driving/driving_harness.tscn"
+git -C "$SELECTOR" init -q
+git -C "$SELECTOR" config user.name test
+git -C "$SELECTOR" config user.email test@example.invalid
+git -C "$SELECTOR" add .
+git -C "$SELECTOR" commit -qm selector
+SELECTOR_GODOT="$TMP/selector-godot"
+cat > "$SELECTOR_GODOT" <<'GODOT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'SELECTOR_GODOT %s\n' "$*" >> "$ORDER_LOG"
+exit 0
+GODOT
+chmod +x "$SELECTOR_GODOT"
+: > "$ORDER_LOG"
+BRUR_PR_CHECK_WORKTREE="$SELECTOR" \
+BRUR_PR_CHECK_WORLD_DATA="$WORLD_DATA" \
+BRUR_PR_CHECK_PR=248 \
+BRUR_PR_CHECK_CHANGED_FILES=$'scripts/drive_hud.gd\nscripts/vehicle_route_follower.gd' \
+PYTHON_BIN=/usr/bin/python3 \
+GODOT_BIN="$SELECTOR_GODOT" \
+bash "$SELECTOR/tools/pr_check_local.sh" >/dev/null
+selector_visual="$(grep '^SELECTOR_GODOT ' "$ORDER_LOG" | tail -n 1)"
+grep -Fq "$SELECTOR/scenes/main.tscn" <<<"$selector_visual" || {
+  printf 'HUD + route-follower PR must launch production Main for visual review\n' >&2
+  cat "$ORDER_LOG" >&2
+  exit 1
+}
+if grep -Fq "$SELECTOR/harness/driving/driving_harness.tscn" <<<"$selector_visual"; then
+  printf 'HUD + route-follower PR incorrectly launched driving harness\n' >&2
+  cat "$ORDER_LOG" >&2
+  exit 1
+fi
+
 bash -n "$ROOT/tools/run_pr_owned_check.sh"
 bash -n "$ROOT/tools/pr_check_local.sh"
 bash "$ROOT/tests/test_pr_check_entry.sh"
