@@ -11,6 +11,8 @@ LOG_DIR="$ROOT/.safecommand/logs"
 LOG_PATH="$LOG_DIR/pr-check-${PR}.log"
 mkdir -p "$LOG_DIR"
 : > "$LOG_PATH"
+export BRUR_PR_CHECK_MAPPED_ROOT="$ROOT"
+export BRUR_PR_CHECK_LOG_PATH="$LOG_PATH"
 exec > >(tee -a "$LOG_PATH") 2>&1
 printf 'PR_CHECK=LOG path=%s\n' "$LOG_PATH"
 printf 'PR_CHECK=LOG_STARTED pr=%s started_at=%s\n' "$PR" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

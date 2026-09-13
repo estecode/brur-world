@@ -64,18 +64,49 @@ exit 0
 WRAPPER
 chmod +x "$GODOT_WRAPPER"
 
-printf 'PR_CHECK=RUN_PR_OWNED_OBJECTIVE_CHECKS pr=%s hook=tools/pr_check_local.sh\n' "$PR"
-(
-  cd "$WORKTREE"
-  BRUR_PR_CHECK_PR="$PR" \
-  BRUR_PR_CHECK_WORKTREE="$WORKTREE" \
-  BRUR_PR_CHECK_WORLD_DATA="$WORLD_DATA" \
-  BRUR_PR_CHECK_HEAD="$WORKTREE_HEAD" \
-  BRUR_PR_CHECK_REAL_GODOT="$GODOT_BIN" \
-  BRUR_PR_CHECK_SUCCESS_MARKER="$SUCCESS_MARKER" \
-  BRUR_PR_CHECK_STATUS_HELPER="$STATUS_HELPER" \
-  BRUR_PR_CHECK_PYTHON="$PYTHON_BIN" \
-  PYTHON_BIN="$PYTHON_BIN" \
-  GODOT_BIN="$GODOT_WRAPPER" \
-  bash "$HOOK"
-)
+run_owned_hook() {
+  printf 'PR_CHECK=RUN_PR_OWNED_OBJECTIVE_CHECKS pr=%s hook=tools/pr_check_local.sh\n' "$PR"
+  (
+    cd "$WORKTREE"
+    BRUR_PR_CHECK_PR="$PR" \
+    BRUR_PR_CHECK_WORKTREE="$WORKTREE" \
+    BRUR_PR_CHECK_WORLD_DATA="$WORLD_DATA" \
+    BRUR_PR_CHECK_HEAD="$WORKTREE_HEAD" \
+    BRUR_PR_CHECK_REAL_GODOT="$GODOT_BIN" \
+    BRUR_PR_CHECK_SUCCESS_MARKER="$SUCCESS_MARKER" \
+    BRUR_PR_CHECK_STATUS_HELPER="$STATUS_HELPER" \
+    BRUR_PR_CHECK_PYTHON="$PYTHON_BIN" \
+    PYTHON_BIN="$PYTHON_BIN" \
+    GODOT_BIN="$GODOT_WRAPPER" \
+    bash "$HOOK"
+  )
+}
+
+# New mapped checkouts are already fully tee'd by pr_check_entry.sh. Older mapped
+# checkouts still bootstrap current main before this runner, so recover the stable
+# mapped root through the world_data symlink and persist the objective hook here.
+if [[ -n "${BRUR_PR_CHECK_LOG_PATH:-}" ]]; then
+  run_owned_hook
+  exit $?
+fi
+
+MAPPED_ROOT="${BRUR_PR_CHECK_MAPPED_ROOT:-}"
+if [[ -z "$MAPPED_ROOT" ]]; then
+  MAPPED_ROOT="$("$PYTHON_BIN" - "$WORLD_DATA" <<'PY'
+import os
+import sys
+print(os.path.dirname(os.path.realpath(sys.argv[1])))
+PY
+)"
+fi
+LOG_DIR="$MAPPED_ROOT/.safecommand/logs"
+LOG_PATH="$LOG_DIR/pr-check-${PR}.log"
+mkdir -p "$LOG_DIR"
+: > "$LOG_PATH"
+printf 'PR_CHECK=LOG_FALLBACK path=%s reason=stale-mapped-entrypoint\n' "$LOG_PATH" | tee -a "$LOG_PATH"
+set +e
+run_owned_hook 2>&1 | tee -a "$LOG_PATH"
+status=${PIPESTATUS[0]}
+set -e
+printf 'PR_CHECK=LOG_FALLBACK_FINISHED pr=%s exit=%s path=%s\n' "$PR" "$status" "$LOG_PATH" | tee -a "$LOG_PATH"
+exit "$status"
