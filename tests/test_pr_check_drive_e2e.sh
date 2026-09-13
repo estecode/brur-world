@@ -83,8 +83,9 @@ GODOT
 chmod +x "$FAKE_GODOT"
 
 run_flow() {
+  local review_mode="${1:-required}"
   BRUR_PR_CHECK_CHANGED_FILES='scripts/camera_controller.gd' \
-  BRUR_PR_CHECK_MANUAL_REVIEW=required \
+  BRUR_PR_CHECK_MANUAL_REVIEW="$review_mode" \
   FAKE_DRIVE_MARKER="${FAKE_DRIVE_MARKER:-0}" \
   bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 235 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT"
 }
@@ -92,7 +93,7 @@ run_flow() {
 # Regression case: a clean Godot exit without the final measurement marker must fail closed.
 : > "$ORDER_LOG"
 set +e
-output="$(FAKE_DRIVE_MARKER=0 run_flow 2>&1)"
+output="$(FAKE_DRIVE_MARKER=0 run_flow required 2>&1)"
 status=$?
 set -e
 [[ "$status" -ne 0 ]] || { printf 'expected missing Drive completion marker to fail the Safe Check\n' >&2; exit 1; }
@@ -106,9 +107,9 @@ if grep -q '^GODOT_VISUAL ' "$ORDER_LOG"; then
   printf 'Safe Check launched visual Godot after an incomplete objective Drive test\n' >&2; cat "$ORDER_LOG" >&2; exit 1
 fi
 
-# Positive case: the exact same flow may record success only after the explicit 360-frame marker appears.
+# CHECK THEN MERGE may launch the explicit human review only after all objective gates pass.
 : > "$ORDER_LOG"
-output="$(FAKE_DRIVE_MARKER=1 run_flow 2>&1)"
+output="$(FAKE_DRIVE_MARKER=1 run_flow required 2>&1)"
 grep -q 'production Drive FPS real-data test: OK' <<<"$output"
 grep -q 'PR_CHECK=STATUS success pr=235' <<<"$output"
 status_count="$(grep -c '^STATUS .*--state success .*--stage objective-checks-complete' "$ORDER_LOG")"
@@ -117,6 +118,18 @@ headless_count="$(grep -c '^GODOT_HEADLESS ' "$ORDER_LOG")"
 [[ "$headless_count" -eq 4 ]] || { printf 'expected four building/Drive headless steps, got %s\n' "$headless_count" >&2; cat "$ORDER_LOG" >&2; exit 1; }
 grep -q '^GODOT_HEADLESS res://tests/godot/test_production_fps_real_data.gd$' "$ORDER_LOG"
 grep -q '^GODOT_VISUAL ' "$ORDER_LOG"
+
+# MERGE means no subjective review remains: the same real-data gates must complete without opening Godot visually.
+: > "$ORDER_LOG"
+output="$(FAKE_DRIVE_MARKER=1 run_flow none 2>&1)"
+grep -q 'production Drive FPS real-data test: OK' <<<"$output"
+grep -q 'PR_CHECK=SKIP_VISUAL_REVIEW pr=235 reason=no-subjective-check-remains' <<<"$output"
+grep -q 'PR_CHECK=STATUS success pr=235' <<<"$output"
+headless_count="$(grep -c '^GODOT_HEADLESS ' "$ORDER_LOG")"
+[[ "$headless_count" -eq 4 ]] || { printf 'expected four automatic MERGE headless steps, got %s\n' "$headless_count" >&2; cat "$ORDER_LOG" >&2; exit 1; }
+if grep -q '^GODOT_VISUAL ' "$ORDER_LOG"; then
+  printf 'MERGE Safe Check opened a redundant visual Godot session\n' >&2; cat "$ORDER_LOG" >&2; exit 1
+fi
 
 bash -n "$ROOT/tools/pr_check_local.sh"
 bash -n "$ROOT/tools/run_pr_owned_check.sh"
