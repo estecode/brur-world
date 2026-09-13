@@ -46,13 +46,16 @@ func _run() -> void:
 	var drive_altitude := float(rig.call("get_altitude"))
 	var drive_lod := BuildingLodPolicyScript.choose_lod(drive_altitude)
 	_assert(drive_lod == BuildingLodPolicyScript.LOD_FULL, "Drive uses full building detail")
+	var stable_stream_radius := float(rig.call("get_streaming_ground_radius_m"))
+	_assert(stable_stream_radius >= float(rig.get("drive_far_m")), "Drive streaming radius covers the production far plane")
+	_assert(stable_stream_radius < 10000.0, "Drive streaming radius ignores the transient Map-to-Drive camera transform")
 
 	var building_stream := BuildingStreamLayerScript.new()
 	building_stream.set("_camera_rig", rig)
 	building_stream.set("_coordinates", WorldCoordinatesScript.new(Vector2.ZERO, 32000.0))
 	var bounds: Dictionary = building_stream.call("_chunk_bounds", drive_lod, 1)
 	var coverage := int(building_stream.call("_bounds_chunk_count", bounds))
-	print("DRIVE_PERF_BUILDING_COVERAGE chunks=", coverage, " bounds=", bounds, " altitude=", drive_altitude)
+	print("DRIVE_PERF_BUILDING_COVERAGE chunks=", coverage, " bounds=", bounds, " altitude=", drive_altitude, " radius=", stable_stream_radius)
 	_assert(coverage <= MAX_DRIVE_BUILDING_COVERAGE_CHUNKS, "Drive full-detail building viewport stays inside the production 64-chunk budget")
 
 	var world := Node3D.new()
