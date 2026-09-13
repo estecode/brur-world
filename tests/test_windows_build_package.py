@@ -8,6 +8,7 @@ Dependencies:
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import tempfile
@@ -34,7 +35,7 @@ class WindowsPackageTests(unittest.TestCase):
         (binary / "brur-deadbeef0000-win64.pck").write_bytes(b"pck")
 
         runtime_pack = root / "brur-world-data.zip"
-        with zipfile.ZipFile(runtime_pack, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with zipfile.ZipFile(runtime_pack, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
             archive.writestr("world_data/manifest.json", '{"runtime": true}')
             archive.writestr("world_data/tiles/city.bin", b"world")
             archive.writestr(
@@ -47,7 +48,7 @@ class WindowsPackageTests(unittest.TestCase):
             json.dumps(
                 {
                     "schema_version": 1,
-                    "pack_format_version": 1,
+                    "pack_format_version": 2,
                     "pack_path": str(runtime_pack),
                     "pack_filename": "brur-world-data.zip",
                     "fingerprint": "f" * 64,
@@ -92,6 +93,7 @@ class WindowsPackageTests(unittest.TestCase):
 
             self.assertEqual(report["pr"], 321)
             self.assertEqual(report["commit"], "d" * 40)
+            self.assertFalse(report["shipping_payload_cache_hit"])
             self.assertEqual(
                 report["runtime_delivery"],
                 "resource_pack:brur-world-data.zip=>res://world_data",
@@ -106,20 +108,70 @@ class WindowsPackageTests(unittest.TestCase):
                 self.assertEqual(archive.read("BRUR/brur-world-data.zip"), runtime_pack.read_bytes())
                 self.assertEqual(
                     archive.getinfo("BRUR/brur-world-data.zip").compress_type,
-                    zipfile.ZIP_STORED,
+                    zipfile.ZIP_DEFLATED,
                 )
                 packaged_build = json.loads(archive.read("BRUR/build_info.json"))
                 packaged_bundle = json.loads(archive.read("BRUR/client_bundle_info.json"))
 
             self.assertTrue(packaged_build["client_ready"])
-            self.assertEqual(packaged_build["packaging_format_version"], 3)
+            self.assertEqual(packaged_build["packaging_format_version"], 4)
             self.assertTrue(packaged_build["runtime_pack_cache_hit"])
+            self.assertFalse(packaged_build["shipping_payload_cache_hit"])
             self.assertEqual(packaged_build["runtime_pack_fingerprint"], "f" * 64)
             self.assertEqual(packaged_build["runtime_files"]["tiles/city.bin"], "b" * 64)
             self.assertEqual(
                 packaged_bundle["world_data_source_manifest_sha256"],
                 windows_package.sha256(source_manifest),
             )
+
+    def test_second_package_reuses_precompressed_shipping_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary, runtime_info, build_info, source_manifest, _runtime_pack = self._fixture(root)
+            first_output = root / "first.zip"
+            second_output = root / "second.zip"
+
+            first = windows_package.package_client(binary, runtime_info, build_info, source_manifest, first_output)
+            second = windows_package.package_client(binary, runtime_info, build_info, source_manifest, second_output)
+
+            self.assertFalse(first["shipping_payload_cache_hit"])
+            self.assertTrue(second["shipping_payload_cache_hit"])
+            self.assertTrue(second_output.is_file())
+            with zipfile.ZipFile(second_output) as archive:
+                runtime_members = [
+                    entry for entry in archive.infolist()
+                    if entry.filename == "BRUR/brur-world-data.zip"
+                ]
+            self.assertEqual(len(runtime_members), 1)
+            self.assertEqual(runtime_members[0].compress_type, zipfile.ZIP_DEFLATED)
+
+    def test_monolithic_shipping_compression_beats_per_file_nested_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            seed = b"".join(hashlib.sha256(str(index).encode("ascii")).digest() for index in range(256))
+            runtime_pack = root / "stored-runtime.zip"
+            with zipfile.ZipFile(runtime_pack, "w", compression=zipfile.ZIP_STORED) as archive:
+                for index in range(64):
+                    archive.writestr(f"world_data/chunks/{index:03d}.bin", seed)
+                archive.writestr("world_data/windows_runtime_manifest.json", "{}")
+
+            shipping_base, hit = windows_package.prepare_shipping_base(
+                runtime_pack,
+                "brur-world-data.zip",
+                "a" * 64,
+            )
+            self.assertFalse(hit)
+
+            legacy_inner = root / "per-file-compressed.zip"
+            with zipfile.ZipFile(legacy_inner, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+                for index in range(64):
+                    archive.writestr(f"world_data/chunks/{index:03d}.bin", seed)
+                archive.writestr("world_data/windows_runtime_manifest.json", "{}")
+            legacy_outer = root / "legacy-outer.zip"
+            with zipfile.ZipFile(legacy_outer, "w") as archive:
+                archive.write(legacy_inner, "BRUR/brur-world-data.zip", compress_type=zipfile.ZIP_STORED)
+
+            self.assertLess(shipping_base.stat().st_size, legacy_outer.stat().st_size * 0.4)
 
     def test_package_accepts_pre_226_launcher_runtime_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -142,11 +194,12 @@ class WindowsPackageTests(unittest.TestCase):
             self.assertEqual(report["runtime_pack_fingerprint"], "f" * 64)
             self.assertTrue(output.is_file())
 
-    def test_package_streams_cached_runtime_pack_without_recompression(self) -> None:
+    def test_package_uses_cached_shipping_base_instead_of_recompressing_each_build(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
         self.assertNotIn("runtime_hashes", source)
-        self.assertIn("compress_type=zipfile.ZIP_STORED", source)
-        self.assertIn('archive.write(runtime_pack, f"BRUR/{pack_filename}"', source)
+        self.assertIn("shutil.copy2(shipping_base, output_zip)", source)
+        self.assertIn('with zipfile.ZipFile(output_zip, "a"', source)
+        self.assertIn("WINDOWS_SHIPPING_PAYLOAD=HIT", source)
 
     def test_missing_matching_pck_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
