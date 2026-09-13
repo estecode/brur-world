@@ -67,6 +67,7 @@ jobs:
           bash -n tools/windows_build/build.sh
           bash -n tools/windows_build/target.sh
           python -m unittest tests.test_windows_runtime_data
+          python -m unittest tests.test_windows_runtime_pack
           python -m unittest tests.test_windows_build_package
 
       - name: Install Godot 4 headless runtime
@@ -100,6 +101,9 @@ jobs:
       - name: Validate PR check scope
         run: python tests/test_pr_check_scope.py
 
+      - name: Validate native GPS build environment
+        run: python tests/test_native_gps_build_env.py
+
       - name: Validate persistent local PR-check status
         run: |
           bash -n tools/pr_check.sh
@@ -113,6 +117,7 @@ jobs:
       - name: Run world streaming foundation tests
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_streaming_foundation.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_building_mesh_compact_codec.gd
 
       - name: Run road surface query tests
         run: |
