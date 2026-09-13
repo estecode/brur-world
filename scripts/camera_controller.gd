@@ -78,7 +78,7 @@ func _map_pan_input() -> Vector2:
 	var wasd_pressed := Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_S)
 	if _suppress_map_wasd_until_released:
 		if wasd_pressed:
-			return input
+			return Vector2.ZERO
 		_suppress_map_wasd_until_released = false
 	if Input.is_key_pressed(KEY_A): input.x -= 1.0
 	if Input.is_key_pressed(KEY_D): input.x += 1.0
@@ -86,114 +86,97 @@ func _map_pan_input() -> Vector2:
 	if Input.is_key_pressed(KEY_S): input.y += 1.0
 	return input
 
-func _input(event: InputEvent) -> void:
+func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
-		var e := event as InputEventMouseButton
-		if e.button_index == MOUSE_BUTTON_WHEEL_UP and e.pressed: _zoom_by(0.78, e.position)
-		elif e.button_index == MOUSE_BUTTON_WHEEL_DOWN and e.pressed: _zoom_by(1.0 / 0.78, e.position)
-		elif e.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
-			dragging = e.pressed
-			last_mouse = e.position
-	elif event is InputEventMouseMotion and dragging:
-		var e := event as InputEventMouseMotion
-		var delta_px := e.position - last_mouse
-		last_mouse = e.position
-		_pan_pixels(delta_px)
-	elif event is InputEventPanGesture: _pan_pixels((event as InputEventPanGesture).delta * 28.0)
-	elif event is InputEventMagnifyGesture:
-		var e := event as InputEventMagnifyGesture
-		if e.factor > 0.0: _zoom_by(1.0 / e.factor, e.position)
-
-func _pan_pixels(delta_px: Vector2) -> void:
-	if _drive_mode: return
-	_cancel_map_follow()
-	focus += Vector3(-delta_px.x, 0.0, -delta_px.y) * (get_distance() / 900.0)
-	_apply_camera()
-
-func _zoom_by(factor: float, screen_position: Vector2) -> void:
-	if _drive_mode:
-		_drive_distance_current_m = clampf(_drive_distance_current_m * factor, drive_min_distance_m, drive_max_distance_m)
-		_apply_drive_camera()
-		return
-	var before := _ground_point(screen_position)
-	var old_altitude_m := get_altitude()
-	altitude_model.zoom_by(factor)
-	if is_equal_approx(get_altitude(), old_altitude_m): return
-	_apply_camera()
-	if not before.is_finite(): return
-	var after := _ground_point(screen_position)
-	if not after.is_finite(): return
-	var correction := before - after
-	correction.y = 0.0
-	focus += correction
-	_apply_camera()
-
-func _ground_point(screen_position: Vector2) -> Vector3:
-	var ray_origin := camera.project_ray_origin(screen_position)
-	var ray_direction := camera.project_ray_normal(screen_position)
-	if ray_direction.y >= -0.000001: return Vector3(INF, INF, INF)
-	var t := -ray_origin.y / ray_direction.y
-	if t <= 0.0: return Vector3(INF, INF, INF)
-	return render_to_world_position(ray_origin + ray_direction * t)
-
-func _gameplay_blend() -> float:
-	if get_altitude() >= gameplay_blend_start_altitude_m: return 0.0
-	var raw := 1.0 - inverse_lerp(min_altitude_m, gameplay_blend_start_altitude_m, get_altitude())
-	return raw * raw * (3.0 - 2.0 * raw)
-
-func _low_altitude_blend() -> float:
-	if get_altitude() >= low_altitude_blend_end_m:
-		return 0.0
-	var raw := 1.0 - inverse_lerp(min_altitude_m, maxf(min_altitude_m + 1.0, low_altitude_blend_end_m), get_altitude())
-	raw = clampf(raw, 0.0, 1.0)
-	return raw * raw * (3.0 - 2.0 * raw)
-
-func _pitch_radians() -> float:
-	var normal_pitch := lerpf(overview_pitch_degrees, gameplay_pitch_degrees, _gameplay_blend())
-	return deg_to_rad(lerpf(normal_pitch, low_altitude_pitch_degrees, _low_altitude_blend()))
-
-func _map_forward_look() -> float:
-	return lerpf(gameplay_forward_look, low_altitude_forward_look, _low_altitude_blend())
-
-func _derived_distance() -> float:
-	var sine_pitch := sin(_pitch_radians())
-	return get_altitude() if sine_pitch <= 0.000001 else get_altitude() / sine_pitch
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			dragging = event.pressed
+			last_mouse = event.position
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed:
+			if _drive_mode:
+				_drive_distance_current_m = maxf(drive_min_distance_m, _drive_distance_current_m * 0.9)
+				_apply_drive_camera()
+			else:
+				set_altitude(get_altitude() * 0.8)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed:
+			if _drive_mode:
+				_drive_distance_current_m = minf(drive_max_distance_m, _drive_distance_current_m * 1.1)
+				_apply_drive_camera()
+			else:
+				set_altitude(get_altitude() * 1.25)
+	elif event is InputEventMouseMotion and dragging and not _drive_mode:
+		_cancel_map_follow()
+		var delta := event.position - last_mouse
+		last_mouse = event.position
+		var world_per_pixel := maxf(0.5, get_distance() * 0.0012)
+		focus += Vector3(-delta.x * world_per_pixel, 0.0, -delta.y * world_per_pixel)
+		_apply_camera()
 
 func _apply_camera(delta_s: float = 0.0) -> void:
-	if _drive_mode and _has_follow_target():
+	if _drive_mode:
 		_apply_drive_camera(delta_s)
 		return
-	position = focus
-	var blend := _gameplay_blend()
-	var pitch := _pitch_radians()
+	var altitude := get_altitude()
 	var distance := _derived_distance()
-	camera.fov = lerpf(overview_fov, gameplay_fov, blend)
-	camera.position = Vector3(0.0, get_altitude(), cos(pitch) * distance)
-	camera.look_at(global_position + Vector3(0.0, 0.0, -distance * _map_forward_look() * blend), Vector3.UP)
-	camera.near = clampf(distance * 0.0025, 0.5, 2500.0)
-	camera.far = maxf(maxf(25000.0, distance * 3.5), _required_ground_far(distance) * 1.12)
+	var pitch := deg_to_rad(_derived_pitch_degrees())
+	var forward_look := _derived_forward_look()
+	var y := sin(pitch) * distance
+	var back := cos(pitch) * distance
+	position = Vector3(focus.x, 0.0, focus.z)
+	camera.position = Vector3(0.0, y, back)
+	camera.fov = _derived_fov()
+	camera.look_at(Vector3(0.0, 0.0, -distance * forward_look), Vector3.UP)
+	camera.near = maxf(5.0, altitude * 0.00002)
+	camera.far = maxf(altitude * 4.0, _required_ground_far(distance) * 1.1)
 	_apply_mode_transition(delta_s)
 	view_changed.emit(focus, distance, camera.global_position)
 
-func _target_heading_rad() -> float:
-	if _follow_target != null and _follow_target.has_method("heading_rad"): return float(_follow_target.call("heading_rad"))
-	return _follow_target.global_rotation.y if _follow_target != null else 0.0
+func _derived_distance() -> float:
+	var altitude := get_altitude()
+	var pitch := deg_to_rad(_derived_pitch_degrees())
+	return altitude / maxf(0.08, sin(pitch))
+
+func _derived_pitch_degrees() -> float:
+	var altitude := get_altitude()
+	if altitude >= gameplay_blend_start_altitude_m:
+		return overview_pitch_degrees
+	if altitude <= low_altitude_blend_end_m:
+		return low_altitude_pitch_degrees
+	var t := inverse_lerp(low_altitude_blend_end_m, gameplay_blend_start_altitude_m, altitude)
+	return lerpf(low_altitude_pitch_degrees, gameplay_pitch_degrees, t)
+
+func _derived_fov() -> float:
+	var altitude := get_altitude()
+	if altitude >= gameplay_blend_start_altitude_m:
+		return overview_fov
+	if altitude <= low_altitude_blend_end_m:
+		return gameplay_fov
+	var t := inverse_lerp(low_altitude_blend_end_m, gameplay_blend_start_altitude_m, altitude)
+	return lerpf(gameplay_fov, overview_fov, t)
+
+func _derived_forward_look() -> float:
+	var altitude := get_altitude()
+	if altitude >= gameplay_blend_start_altitude_m:
+		return 0.0
+	if altitude <= low_altitude_blend_end_m:
+		return low_altitude_forward_look
+	var t := inverse_lerp(low_altitude_blend_end_m, gameplay_blend_start_altitude_m, altitude)
+	return lerpf(low_altitude_forward_look, gameplay_forward_look, t)
 
 func _drive_camera_height() -> float:
-	var extra_distance := maxf(0.0, _drive_distance_current_m - drive_distance_m)
-	return drive_height_m + extra_distance * 0.22
+	return maxf(2.0, drive_height_m + maxf(0.0, _drive_distance_current_m - drive_distance_m) * 0.18)
+
+func _target_heading_rad() -> float:
+	if not _has_follow_target(): return 0.0
+	return _follow_target.rotation.y
 
 func get_render_origin_world() -> Vector3:
 	if not _drive_mode or not _has_follow_target():
 		return Vector3.ZERO
-	var target := _follow_target.global_position
-	# Keep a stable local cell while driving instead of translating every static
-	# presentation root every frame. The target stays within 512 m of the render
-	# origin, while the cell changes only after crossing a 1 km boundary.
+	var target_world := _follow_target.global_position
 	return Vector3(
-		roundf(target.x / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M,
+		floorf(target_world.x / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M,
 		0.0,
-		roundf(target.z / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M
+		floorf(target_world.z / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M
 	)
 
 func world_to_render_position(world_position: Vector3) -> Vector3:
@@ -275,6 +258,17 @@ func get_ground_view_corners() -> PackedVector3Array:
 				distance = minf(ground_distance, max_distance)
 		result.append(render_to_world_position(ray_origin + ray_direction * distance))
 	return result
+
+func get_streaming_ground_radius_m() -> float:
+	# Drive streaming must not inherit the transient Map->Drive camera transform.
+	# The production far plane plus chase offset bounds every Drive ground sample
+	# independently of heading and the visual mode transition.
+	if _drive_mode:
+		return maxf(camera.near + 100.0, drive_far_m) + maxf(0.0, _drive_distance_current_m)
+	var radius_m := 0.0
+	for point in get_ground_view_corners():
+		radius_m = maxf(radius_m, Vector2(point.x - focus.x, point.z - focus.z).length())
+	return radius_m
 
 func set_view_altitude(new_focus: Vector3, new_altitude_m: float) -> void:
 	focus = Vector3(new_focus.x, 0.0, new_focus.z)
