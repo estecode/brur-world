@@ -103,14 +103,62 @@ success_line="$(grep -n -- '--state success' "$ROOT/tools/pr_check.sh" | head -n
   exit 1
 }
 
-grep -q 'DRIVING_VISUAL_SCOPE="required"' "$ROOT/tools/pr_check_local.sh" || {
-  printf 'driving changes must still request exact-revision human review\n' >&2
+grep -q 'DRIVE_HUD_VISUAL_SCOPE="required"' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'Drive HUD presentation changes must request exact-revision production-scene review\n' >&2
   exit 1
 }
-grep -q 'harness/driving/driving_harness.tscn' "$ROOT/tools/pr_check_local.sh" || {
-  printf 'driving human review must still launch the production-backed driving harness\n' >&2
+grep -q 'VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'Drive HUD human review must identify the production Main scene explicitly\n' >&2
   exit 1
 }
+grep -q 'VISUAL_REVIEW_EXPECT window=production-main not=driving-harness' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'Drive HUD handoff must state the expected production review surface\n' >&2
+  exit 1
+}
+hud_line="$(grep -n 'if \[\[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" \]\]' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
+driving_line="$(grep -n 'if \[\[ "$DRIVING_VISUAL_SCOPE" == "required" \]\]' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
+[[ -n "$hud_line" && -n "$driving_line" && "$hud_line" -lt "$driving_line" ]] || {
+  printf 'Drive HUD review must take priority over generic driving review when both scopes match\n' >&2
+  exit 1
+}
+
+SELECTOR="$TMP/selector"
+mkdir -p "$SELECTOR/tools" "$SELECTOR/scenes" "$SELECTOR/harness/driving"
+cp "$ROOT/tools/pr_check_local.sh" "$SELECTOR/tools/pr_check_local.sh"
+cat > "$SELECTOR/tools/pr_check_scope.py" <<'PY'
+#!/usr/bin/env python3
+print("skip")
+PY
+chmod +x "$SELECTOR/tools/pr_check_scope.py"
+touch "$SELECTOR/scenes/main.tscn" "$SELECTOR/harness/driving/driving_harness.tscn"
+git -C "$SELECTOR" init -q
+git -C "$SELECTOR" config user.name test
+git -C "$SELECTOR" config user.email test@example.invalid
+git -C "$SELECTOR" add .
+git -C "$SELECTOR" commit -qm selector
+SELECTOR_GODOT="$TMP/selector-godot"
+cat > "$SELECTOR_GODOT" <<'GODOT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'SELECTOR_GODOT %s\n' "$*" >> "$ORDER_LOG"
+exit 0
+GODOT
+chmod +x "$SELECTOR_GODOT"
+: > "$ORDER_LOG"
+BRUR_PR_CHECK_WORKTREE="$SELECTOR" BRUR_PR_CHECK_WORLD_DATA="$WORLD_DATA" BRUR_PR_CHECK_PR=248 \
+BRUR_PR_CHECK_CHANGED_FILES=$'scripts/drive_hud.gd\nscripts/vehicle_route_follower.gd' \
+PYTHON_BIN=/usr/bin/python3 GODOT_BIN="$SELECTOR_GODOT" bash "$SELECTOR/tools/pr_check_local.sh" >/dev/null
+selector_visual="$(grep '^SELECTOR_GODOT ' "$ORDER_LOG" | tail -n 1)"
+grep -Fq "$SELECTOR/scenes/main.tscn" <<<"$selector_visual" || {
+  printf 'HUD + route-follower PR must launch production Main for visual review\n' >&2
+  cat "$ORDER_LOG" >&2
+  exit 1
+}
+if grep -Fq "$SELECTOR/harness/driving/driving_harness.tscn" <<<"$selector_visual"; then
+  printf 'HUD + route-follower PR incorrectly launched driving harness\n' >&2
+  cat "$ORDER_LOG" >&2
+  exit 1
+fi
 
 bash -n "$ROOT/tools/run_pr_owned_check.sh"
 bash -n "$ROOT/tools/pr_check_local.sh"

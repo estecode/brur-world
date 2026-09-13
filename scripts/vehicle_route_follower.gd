@@ -60,6 +60,20 @@ func clear_route() -> void:
 func has_route() -> bool:
 	return _points.size() >= 2
 
+func remaining_route_time_s() -> float:
+	if vehicle == null or not has_route():
+		return -1.0
+	var target_index := clampi(_target_index, 1, _points.size() - 1)
+	var cursor := vehicle.global_position
+	var total_seconds := 0.0
+	for index in range(target_index, _points.size()):
+		var speed_mps := _speed_limit_at(index)
+		if speed_mps <= 0.0:
+			return -1.0
+		total_seconds += _flat_distance(cursor, _points[index]) / speed_mps
+		cursor = _points[index]
+	return total_seconds
+
 func set_driving_mode(mode: int) -> bool:
 	return _policy.set_mode(mode)
 
@@ -192,6 +206,11 @@ func _route_distance_to_index(route_point_index: int) -> float:
 	for index in range(_target_index, route_point_index):
 		distance += _flat_distance(_points[index], _points[index + 1])
 	return distance
+
+func _speed_limit_at(index: int) -> float:
+	if index < 0 or index >= _speed_limits_mps.size():
+		return -1.0
+	return float(_speed_limits_mps[index])
 
 func _forward_target_index() -> int:
 	if vehicle == null or _points.is_empty():

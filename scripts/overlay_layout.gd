@@ -4,6 +4,7 @@ extends RefCounted
 ##
 ## Dependencies:
 ## - Operates only on Godot Control anchors/offsets in presentation code.
+## - Supports an explicit per-window bottom reservation for persistent HUD/control stacks.
 ## - Does not depend on gameplay, routing, world state, or subsystem internals.
 
 const MARGIN: float = 14.0
@@ -17,7 +18,7 @@ enum Slot {
 	BOTTOM_RIGHT,
 }
 
-static func apply_window(header: Control, body: Control, slot: int, width: float) -> void:
+static func apply_window(header: Control, body: Control, slot: int, width: float, bottom_reserve: float = 0.0) -> void:
 	_apply_horizontal(header, slot, width)
 	_apply_horizontal(body, slot, width)
 	header.custom_minimum_size = Vector2(width, HEADER_HEIGHT)
@@ -35,13 +36,14 @@ static func apply_window(header: Control, body: Control, slot: int, width: float
 			body.offset_bottom = body.offset_top
 			body.grow_vertical = Control.GROW_DIRECTION_END
 		Slot.BOTTOM_LEFT, Slot.BOTTOM_RIGHT:
+			var reserved_bottom := MARGIN + maxf(0.0, bottom_reserve)
 			header.anchor_top = 1.0
 			header.anchor_bottom = 1.0
-			header.offset_top = -MARGIN - HEADER_HEIGHT
-			header.offset_bottom = -MARGIN
+			header.offset_top = -reserved_bottom - HEADER_HEIGHT
+			header.offset_bottom = -reserved_bottom
 			body.anchor_top = 1.0
 			body.anchor_bottom = 1.0
-			body.offset_top = -MARGIN - HEADER_HEIGHT - HEADER_GAP
+			body.offset_top = -reserved_bottom - HEADER_HEIGHT - HEADER_GAP
 			body.offset_bottom = body.offset_top
 			body.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
