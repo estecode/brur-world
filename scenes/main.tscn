@@ -241,5 +241,6 @@ target_path = NodePath("../SunTimeOverride")
 title_text = "SUN / TIME"
 slot = 2
 panel_width = 646.0
+bottom_reserve = 168.0
 
 [connection signal="view_changed" from="CameraRig" to="CloudField" method="set_view_state"]
