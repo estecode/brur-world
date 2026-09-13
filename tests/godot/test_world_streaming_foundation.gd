@@ -113,11 +113,12 @@ func _test_chunk_codec() -> void:
 	var path := "%s/test.bmc" % directory
 	_write_bmc(path, 3)
 	var decoded: Dictionary = BuildingMeshChunkCodecScript.decode_file(path)
-	_assert(decoded.get("ok", false) == true, "prebuilt BMC1 chunk decodes")
+	_assert(decoded.get("ok", false) == true, "prebuilt BMC2 chunk decodes")
 	_assert(int(decoded.get("vertices", 0)) == 3, "prebuilt chunk preserves vertex count")
 	var arrays := BuildingMeshChunkCodecScript.arrays_for_mesh(decoded)
 	var decoded_positions: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	_assert(decoded_positions.size() == 3, "decoded positions are mesh-ready without triangulation")
+	_assert(decoded_positions[0].is_equal_approx(Vector3(5.0, 0.0, -7.0)), "BMC2 record offset restores chunk-local building position")
 
 func _test_atomic_viewport_staging_and_cache() -> void:
 	var directory := "user://building_atomic_%d" % Time.get_ticks_usec()
@@ -199,8 +200,11 @@ func _write_bmc(path: String, vertex_count: int) -> void:
 	_assert(file != null, "test BMC chunk is writable")
 	if file == null:
 		return
-	file.store_buffer("BMC1".to_ascii_buffer())
-	file.store_32(1)
+	file.store_buffer("BMC2".to_ascii_buffer())
+	file.store_32(2)
+	file.store_32(vertex_count)
+	file.store_float(5.0)
+	file.store_float(-7.0)
 	file.store_32(vertex_count)
 	var positions := [Vector3(0.0, 0.0, 0.0), Vector3(20.0, 0.0, 0.0), Vector3(0.0, 12.0, -20.0)]
 	for index in range(vertex_count):
