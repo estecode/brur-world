@@ -5,6 +5,7 @@ Dependencies:
 - Uses osm_source_cache.py to fan one authoritative OSM scan into route-specific caches.
 - Uses the owned offline builders for each runtime dataset.
 - Routing is published through build_routing_dataset.py so BRG1/BRS2/BRH1 stay source-aligned.
+- Builds the derived building mesh LOD pyramid from authoritative buildings.jsonl.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import json
 from pathlib import Path
 
 from build_background import build_background
+from build_building_mesh_pyramid import build_building_mesh_pyramid
 from build_building_tiles import build_building_tiles
 from build_city_light_density import build_city_light_density
 from build_features import build_buildings, build_pois
@@ -84,6 +86,9 @@ def main() -> None:
 
     _section("BUILD BUILDING TILES")
     build_building_tiles(args.output)
+
+    _section("BUILD BUILDING MESH LOD PYRAMID")
+    build_building_mesh_pyramid(args.output)
 
     _section("BUILD CITY-LIGHT POI DENSITY")
     build_city_light_density(args.output)
