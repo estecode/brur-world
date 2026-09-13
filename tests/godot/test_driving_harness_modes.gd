@@ -91,6 +91,24 @@ func _run() -> void:
 		_assert(bool(follower.call("has_route")), "AI mode switching preserves the route")
 		_assert(player.global_position.distance_to(position_before_mode) < 0.5, "AI mode switching does not reset or teleport the vehicle")
 
+	# Prove route completion behavior on a short production follower route without waiting for the long human-playtest loop.
+	var short_start: Vector3 = player.global_position
+	var short_route := PackedVector3Array([
+		short_start,
+		short_start + Vector3(8.0, 0.0, 0.0),
+		short_start + Vector3(16.0, 0.0, 0.0),
+	])
+	var short_limits := PackedFloat32Array([8.0, 8.0, 8.0])
+	follower.call("set_follow_enabled", false)
+	follower.call("set_route", short_route, short_limits)
+	player.call("set_motion_state", 0.0, PI / 2.0)
+	follower.call("set_follow_enabled", true)
+	for _frame in range(360):
+		await physics_frame
+	var end_distance: float = Vector2(player.global_position.x - short_route[2].x, player.global_position.z - short_route[2].z).length()
+	_assert(end_distance < 4.0, "GPS follower drives the route to its final point")
+	_assert(float(player.call("speed_mps")) < 1.5, "GPS follower brakes near the final route point")
+
 	clear_route.pressed.emit()
 	await process_frame
 	_assert(not bool(follower.call("has_route")), "Clear Route removes the route")
