@@ -1,13 +1,13 @@
 class_name DriveHudAdapter
 extends Node
 
-## Adapts public vehicle, routing-world, and navigation outputs into road-vehicle HUD view state.
+## Adapts public road-vehicle, routing-world, and navigation outputs into HUD view state.
 ##
 ## Dependencies:
-## - Reads player vehicle through GpsRouteLayer.get_player_vehicle().
+## - Reads the current player road vehicle through GpsRouteLayer.get_player_vehicle().
 ## - Reads explicit OSM road speed limits through RoadSpeedLimitQuery over BRG1/BRS2.
 ## - Reads remaining route ETA through GpsRouteLayer.current_route_eta_seconds().
-## - Pushes only display-ready state into DriveHudPresentation.
+## - Pushes only display-ready state into DriveHudPresentation; camera view does not own HUD visibility.
 
 const RoadSpeedLimitQueryScript = preload("res://scripts/road_speed_limit_query.gd")
 const GRAPH_PATH := "res://world_data/routing.brg"
