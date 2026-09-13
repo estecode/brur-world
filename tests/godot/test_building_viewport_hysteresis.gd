@@ -99,7 +99,10 @@ func _test_chunk_edge_hysteresis(directory: String, coordinates) -> void:
 		_assert(int(snapshot["request_generation"]) == generation, "chunk-edge jitter does not restart building staging")
 		_assert(layer.is_viewport_ready(), "chunk-edge jitter keeps the published viewport ready")
 
-	camera.focus.x = 6500.0
+	# Move the core into chunk x=2. This leaves the retained x=-1..1 viewport,
+	# forcing a new x=1..3 request while deliberately retaining x=1 overlap so
+	# resource identity across a genuine atomic viewport swap can be asserted.
+	camera.focus.x = 4250.0
 	layer._process(0.0)
 	var moved: Dictionary = layer.debug_snapshot()
 	_assert(String(moved["desired_signature"]) != signature, "leaving the retained margin requests a new viewport")
