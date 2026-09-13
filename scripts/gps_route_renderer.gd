@@ -116,10 +116,12 @@ func update_height(camera_distance: float, road_surface_height: float = 0.0) -> 
 	var close_drive_view := camera_distance < 100.0
 	if close_drive_view:
 		_set_route_height(road_surface_height + DRIVE_ROUTE_CLEARANCE_M)
+		_set_route_always_on_top(false)
 		_target_marker.position.y = _route_mesh_instance.position.y + 3.0
 		_target_marker.scale = Vector3.ONE * 0.04
 		_set_ribbon_width(14.0)
 		return
+	_set_route_always_on_top(true)
 	var spacing := clampf(camera_distance / 6000.0, 4.0, 240.0)
 	_set_route_height(road_surface_height + spacing)
 	_target_marker.position.y = _route_mesh_instance.position.y + maxf(90.0, spacing)
@@ -132,6 +134,10 @@ func update_height(camera_distance: float, road_surface_height: float = 0.0) -> 
 func _set_route_height(height_m: float) -> void:
 	_route_outline_instance.position.y = height_m
 	_route_mesh_instance.position.y = height_m
+
+func _set_route_always_on_top(always_on_top: bool) -> void:
+	_route_outline_material.no_depth_test = always_on_top
+	_route_material.no_depth_test = always_on_top
 
 func _set_ribbon_width(wanted_width: float) -> void:
 	if is_equal_approx(wanted_width, _ribbon_width_m): return
