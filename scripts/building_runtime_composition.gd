@@ -4,15 +4,15 @@ extends Node
 ##
 ## Dependencies:
 ## - Main supplies the shared projected-world origin through WorldCoordinates.
-## - CameraRig supplies focus and altitude.
-## - BuildingStreamLayer owns building streaming/rendering behavior.
+## - CameraRig supplies focus, altitude, and ground-view corners.
+## - BuildingStreamLayer consumes the derived prebuilt building mesh LOD directory.
 
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 
 @export var main_path: NodePath
 @export var camera_rig_path: NodePath
 @export var building_layer_path: NodePath
-@export var tile_data_dir: String = "res://world_data/building_tiles"
+@export var tile_data_dir: String = "res://world_data/building_mesh_lod"
 @export var building_tile_size_m: float = 2000.0
 
 func _ready() -> void:

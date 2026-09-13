@@ -40,9 +40,10 @@ jobs:
       - name: Run traffic signal compiler tests
         run: python -m unittest tests.test_traffic_signals
 
-      - name: Run building tile derivation tests
+      - name: Run building derived-data tests
         run: |
           python -m unittest tests.test_building_tiles
+          python -m unittest tests.test_building_mesh_pyramid
           python -m unittest tests.test_building_runtime_composition
           python -m unittest tests.test_build_sweden_building_tiles
 
