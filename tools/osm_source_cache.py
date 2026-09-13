@@ -10,12 +10,13 @@ Dependencies:
 from __future__ import annotations
 
 import argparse
+from collections import OrderedDict
+import hashlib
 import json
 import math
 import pickle
 import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import BinaryIO, Iterable, Iterator, TextIO
@@ -28,6 +29,9 @@ from world_common import ensure_pbf
 
 CACHE_FORMAT = "BOSC1"
 CACHE_DIR_NAME = "osm_source_cache"
+SPOOL_FORMAT = "BOSC-SPOOL1"
+SPOOL_DIR_NAME = "resume-spool"
+SPOOL_MARKER_NAME = "complete.json"
 ROUTE_VERSIONS = {
     "highways": 1,
     "traffic_signals": 1,
@@ -40,6 +44,7 @@ NODE_PROGRESS_INTERVAL = 5_000_000
 WAY_PROGRESS_INTERVAL = 250_000
 RELATION_PROGRESS_INTERVAL = 50_000
 NODE_BUCKETS = 64
+MAX_OPEN_NODE_BUCKETS = 8
 
 POI_KEYS = {
     "amenity", "shop", "tourism", "leisure", "office", "healthcare", "emergency",
@@ -131,6 +136,14 @@ def _atomic_json(path: Path, value: dict) -> None:
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
     temp.replace(path)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _pickle_append(handle: BinaryIO, value: object) -> None:
@@ -361,15 +374,20 @@ class _RouteWriter:
         self.relations_path = self.work_dir / "relations.xml"
         self.ways_file: TextIO = self.ways_path.open("w", encoding="utf-8")
         self.relations_file: TextIO = self.relations_path.open("w", encoding="utf-8")
-        self.bucket_handles: dict[int, BinaryIO] = {}
+        self.bucket_handles: OrderedDict[int, BinaryIO] = OrderedDict()
         self.counts = {"nodes": 0, "ways": 0, "relations": 0}
 
     def _bucket(self, node_id: int) -> BinaryIO:
         bucket = node_id % NODE_BUCKETS
         handle = self.bucket_handles.get(bucket)
-        if handle is None:
-            handle = (self.work_dir / f"nodes-{bucket:02d}.pkl").open("ab")
-            self.bucket_handles[bucket] = handle
+        if handle is not None:
+            self.bucket_handles.move_to_end(bucket)
+            return handle
+        if len(self.bucket_handles) >= MAX_OPEN_NODE_BUCKETS:
+            _old_bucket, old_handle = self.bucket_handles.popitem(last=False)
+            old_handle.close()
+        handle = (self.work_dir / f"nodes-{bucket:02d}.pkl").open("ab")
+        self.bucket_handles[bucket] = handle
         return handle
 
     def add_node(self, node_id: int, lon: float, lat: float, tags: dict[str, str] | None = None) -> None:
@@ -402,8 +420,10 @@ class _RouteWriter:
         self.counts["relations"] += 1
 
     def close_inputs(self) -> None:
-        self.ways_file.close()
-        self.relations_file.close()
+        if not self.ways_file.closed:
+            self.ways_file.close()
+        if not self.relations_file.closed:
+            self.relations_file.close()
         for handle in self.bucket_handles.values():
             handle.close()
         self.bucket_handles.clear()
@@ -489,6 +509,128 @@ def _known_totals(manifest: dict, source_identity: dict[str, object]) -> dict[st
     return result
 
 
+def _spool_routes(stale: set[str]) -> dict[str, int]:
+    return {route: ROUTE_VERSIONS[route] for route in sorted(stale)}
+
+
+def _spool_files(work_dir: Path) -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    for path in sorted(work_dir.glob("*.pkl")):
+        result[path.name] = {"size": path.stat().st_size, "sha256": _sha256(path)}
+    return result
+
+
+def _write_spool_marker(
+    work_dir: Path,
+    source_identity: dict[str, object],
+    stale: set[str],
+    counts: dict[str, int],
+) -> None:
+    _atomic_json(
+        work_dir / SPOOL_MARKER_NAME,
+        {
+            "format": SPOOL_FORMAT,
+            "source": source_identity,
+            "routes": _spool_routes(stale),
+            "source_scan": dict(counts),
+            "files": _spool_files(work_dir),
+        },
+    )
+
+
+def _load_completed_spool(
+    work_dir: Path,
+    source_identity: dict[str, object],
+    stale: set[str],
+) -> dict[str, int] | None:
+    marker = _load_manifest(work_dir / SPOOL_MARKER_NAME)
+    if marker.get("format") != SPOOL_FORMAT:
+        return None
+    if marker.get("source") != source_identity or marker.get("routes") != _spool_routes(stale):
+        return None
+    counts = marker.get("source_scan")
+    if not isinstance(counts, dict):
+        return None
+    clean_counts: dict[str, int] = {}
+    for key in ("nodes", "ways", "relations"):
+        value = counts.get(key)
+        if not isinstance(value, int) or value < 0:
+            return None
+        clean_counts[key] = value
+    expected_files = marker.get("files")
+    if not isinstance(expected_files, dict):
+        return None
+    actual_names = {path.name for path in work_dir.glob("*.pkl")}
+    if actual_names != set(expected_files):
+        return None
+    for filename, expected in expected_files.items():
+        if not isinstance(filename, str) or not isinstance(expected, dict):
+            return None
+        path = work_dir / filename
+        size = expected.get("size")
+        digest = expected.get("sha256")
+        if not path.is_file() or not isinstance(size, int) or size < 0 or not isinstance(digest, str):
+            return None
+        if path.stat().st_size != size or _sha256(path) != digest:
+            return None
+    return clean_counts
+
+
+def _spool_reference_sets(work_dir: Path, stale: set[str]) -> tuple[set[int], set[int]]:
+    signal_ids: set[int] = set()
+    if "traffic_signals" in stale:
+        for raw in _pickle_iter(work_dir / "traffic_signal_nodes.pkl"):
+            node_id, _lon, _lat, _tags = raw
+            signal_ids.add(int(node_id))
+    area_relation_way_ids: set[int] = set()
+    if "areas" in stale:
+        for raw in _pickle_iter(work_dir / "area_relations.pkl"):
+            _relation_id, members, _tags = raw
+            for member_type, member_ref, _role in members:
+                if member_type == "w":
+                    area_relation_way_ids.add(int(member_ref))
+    return signal_ids, area_relation_way_ids
+
+
+def _reset_route_work(work_dir: Path, stale: set[str]) -> None:
+    for route in stale:
+        route_dir = work_dir / f"route-{route}"
+        if route_dir.exists():
+            shutil.rmtree(route_dir)
+
+
+def _finalize_spool(work_dir: Path, cache_dir: Path, stale: set[str]) -> dict[str, dict[str, int]]:
+    _reset_route_work(work_dir, stale)
+    signal_ids, area_relation_way_ids = _spool_reference_sets(work_dir, stale)
+    writers = {
+        route: _RouteWriter(route, work_dir, cache_dir / f"{route}.osm")
+        for route in stale
+    }
+    try:
+        if "traffic_signals" in writers:
+            _load_standalone_nodes(work_dir / "traffic_signal_nodes.pkl", writers["traffic_signals"])
+        if "pois" in writers:
+            _load_standalone_nodes(work_dir / "poi_nodes.pkl", writers["pois"])
+        if "addresses" in writers:
+            _load_standalone_nodes(work_dir / "address_nodes.pkl", writers["addresses"])
+
+        ways_path = work_dir / "ways.pkl"
+        if ways_path.is_file():
+            for record in _pickle_iter(ways_path):
+                for route, writer in writers.items():
+                    if _select_way(route, record, signal_ids, area_relation_way_ids):
+                        writer.add_way(record)
+
+        if "areas" in writers:
+            for raw in _pickle_iter(work_dir / "area_relations.pkl"):
+                writers["areas"].add_relation(raw)
+
+        return {route: writer.publish() for route, writer in writers.items()}
+    finally:
+        for writer in writers.values():
+            writer.close_inputs()
+
+
 def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = ALL_ROUTES) -> dict[str, Path]:
     """Ensure requested route caches exist, rebuilding all stale routes in one source traversal."""
     ensure_pbf(source)
@@ -512,42 +654,26 @@ def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = A
     known_totals = _known_totals(manifest, source_identity)
     progress = _ProgressDisplay(source, source_identity, stale, known_totals)
     started = time.perf_counter()
-    with tempfile.TemporaryDirectory(prefix="brur-osm-source-", dir=cache_dir) as temp_name:
-        work_dir = Path(temp_name)
+    work_dir = cache_dir / SPOOL_DIR_NAME
+    scan_counts = _load_completed_spool(work_dir, source_identity, stale)
+    if scan_counts is None:
+        if work_dir.exists():
+            shutil.rmtree(work_dir)
+        work_dir.mkdir(parents=True, exist_ok=True)
         handler = SourceCacheHandler(work_dir, stale, known_totals, progress)
         progress.render(handler.counts, 0.001)
         try:
             handler.apply_file(str(source), locations=True)
         finally:
             handler.close()
-        progress.render(handler.counts, max(0.001, time.perf_counter() - handler.started))
+        scan_counts = dict(handler.counts)
+        progress.render(scan_counts, max(0.001, time.perf_counter() - handler.started))
+        _write_spool_marker(work_dir, source_identity, stale, scan_counts)
+        print(f"[osm-source] source scan complete; resumable spool: {work_dir}", flush=True)
+    else:
+        print(f"[osm-source] resume verified spool without source rescan: {work_dir}", flush=True)
 
-        writers = {
-            route: _RouteWriter(route, work_dir, cache_dir / f"{route}.osm")
-            for route in stale
-        }
-        if "traffic_signals" in writers:
-            _load_standalone_nodes(work_dir / "traffic_signal_nodes.pkl", writers["traffic_signals"])
-        if "pois" in writers:
-            _load_standalone_nodes(work_dir / "poi_nodes.pkl", writers["pois"])
-        if "addresses" in writers:
-            _load_standalone_nodes(work_dir / "address_nodes.pkl", writers["addresses"])
-
-        ways_path = work_dir / "ways.pkl"
-        if ways_path.is_file():
-            for raw in _pickle_iter(ways_path):
-                record = raw
-                for route, writer in writers.items():
-                    if _select_way(route, record, handler.signal_ids, handler.area_relation_way_ids):
-                        writer.add_way(record)
-
-        if "areas" in writers:
-            for raw in _pickle_iter(work_dir / "area_relations.pkl"):
-                writers["areas"].add_relation(raw)
-
-        route_counts: dict[str, dict[str, int]] = {}
-        for route, writer in writers.items():
-            route_counts[route] = writer.publish()
+    route_counts = _finalize_spool(work_dir, cache_dir, stale)
 
     previous_routes = manifest.get("routes") if same_source and isinstance(manifest.get("routes"), dict) else {}
     route_manifest = dict(previous_routes)
@@ -561,14 +687,16 @@ def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = A
     new_manifest = {
         "format": CACHE_FORMAT,
         "source": source_identity,
-        "source_scan": handler.counts,
+        "source_scan": scan_counts,
         "routes": route_manifest,
     }
     _atomic_json(manifest_path, new_manifest)
+    shutil.rmtree(work_dir)
+
     elapsed = time.perf_counter() - started
     print(
-        f"[osm-source] complete in {elapsed:.1f}s | nodes={handler.counts['nodes']:,} "
-        f"ways={handler.counts['ways']:,} relations={handler.counts['relations']:,}",
+        f"[osm-source] complete in {elapsed:.1f}s | nodes={scan_counts['nodes']:,} "
+        f"ways={scan_counts['ways']:,} relations={scan_counts['relations']:,}",
         flush=True,
     )
     for route in sorted(stale):
