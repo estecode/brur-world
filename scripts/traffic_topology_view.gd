@@ -53,6 +53,7 @@ func load_graph(path: String) -> bool:
 func has_edge(edge_id: int) -> bool: return edge_id >= 0 and edge_id < edges.size()
 func edge_length_m(edge_id: int) -> float: return float(edges[edge_id]["length_m"]) if has_edge(edge_id) else 0.0
 func edge_speed_mps(edge_id: int) -> float: return float(edges[edge_id]["speed_kmh"]) / 3.6 if has_edge(edge_id) else 0.0
+func edge_access_class(edge_id: int) -> int: return int(edges[edge_id]["access_class"]) if has_edge(edge_id) else 3
 func edge_heading_rad(edge_id: int) -> float:
 	if not has_edge(edge_id): return 0.0
 	var e := edges[edge_id]
