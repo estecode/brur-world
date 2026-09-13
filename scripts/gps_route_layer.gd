@@ -146,7 +146,7 @@ func _on_preference_selected(preference: String) -> void:
 func _on_remove_waypoint_requested(index: int) -> void:
 	if route_model.remove_waypoint(index): _refresh_waypoint_ui(); request_current_plan() if route_model.has_destination() else false
 func _on_clear_waypoints_requested() -> void:
-	if route_model.clear_waypoints(): _refresh_waypoint_ui(); request_current_plan() if route_model.has_destination() else false
+	route_model.clear_waypoints(); _refresh_waypoint_ui(); request_current_plan() if route_model.has_destination() else false
 func _on_follow_changed(enabled: bool) -> void:
 	if not set_follow_enabled(enabled) and route_ui != null: route_ui.call("set_follow_enabled", false)
 func _on_manual_vehicle_input() -> void:
