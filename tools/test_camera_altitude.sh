@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs deterministic camera altitude, adapter, and Drive render-origin contracts.
+# Runs deterministic camera altitude, adapter, Drive render-origin, and GPU precision contracts.
 # Dependencies: Godot 4 (GODOT_BIN can override the default executable lookup).
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -40,5 +40,6 @@ run_godot_contract() {
 
 run_godot_contract "tests/godot/test_camera_altitude.gd" "godot camera-altitude tests: OK"
 run_godot_contract "tests/godot/test_drive_render_origin.gd" "godot drive-render-origin tests: OK"
+run_godot_contract "tests/godot/test_drive_gpu_precision.gd" "godot drive-gpu-precision tests: OK"
 
-echo "camera altitude and Drive render-origin automated tests: OK"
+echo "camera altitude and Drive render precision automated tests: OK"
