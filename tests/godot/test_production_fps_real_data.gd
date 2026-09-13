@@ -31,6 +31,13 @@ var _frame_times: Array[float] = []
 var _cell_crossings := 0
 
 func _initialize() -> void:
+	# Hosted CI has no full Sweden runtime dataset. This mode still compiles the
+	# complete script and its production scene dependencies so local-only test
+	# changes cannot silently ship with a parse error.
+	if OS.has_environment("BRUR_PARSE_ONLY"):
+		print("production Drive FPS real-data test parse: OK")
+		quit(0)
+		return
 	if not FileAccess.file_exists("res://world_data/manifest.json"):
 		push_error("production Drive FPS real-data test failed: missing world_data manifest")
 		quit(1)
