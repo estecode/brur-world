@@ -114,8 +114,6 @@ func _run() -> void:
 	_assert(absf(building_leaf.position.x) <= MAX_LOCAL_AXIS_M and absf(building_leaf.position.z) <= MAX_LOCAL_AXIS_M, "building leaf stays inside the render-origin cell")
 	_assert(is_equal_approx(buildings.position.y, 0.06), "presentation rebasing preserves #206 building surface height")
 
-	# Re-running the composition must be idempotent; otherwise a per-frame origin
-	# sync would drift presentation nodes and recreate the visible instability.
 	composition.call("_sync_render_origin")
 	_assert(Vector2(road_leaf.position.x, road_leaf.position.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "repeated Drive sync does not double-subtract road origin")
 	_assert(Vector2(building_leaf.position.x, building_leaf.position.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "repeated Drive sync does not double-subtract building origin")
@@ -137,6 +135,10 @@ func _run() -> void:
 	composition.free()
 	route_renderer.free()
 	gps_layer.free()
+	world.free()
+	poi.free()
+	cloud.free()
+	buildings.free()
 	vehicle.free()
 	target.free()
 	rig.free()
