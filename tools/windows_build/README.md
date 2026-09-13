@@ -48,7 +48,7 @@ Safe Command owns only validation/launch. All revision resolution, isolated chec
 
 A revision that supports the build provides `tools/windows_build/target.sh`. The generic builder passes explicit environment paths for the isolated source checkout, authoritative local world data, temporary runtime-data output, binary output, build name and Godot binary. The target prepares only the runtime files it actually needs and exports the Windows EXE/PCK pair. It does not own ZIP packaging or build identity.
 
-The current target is the continuous world showcase introduced by #126. Future targets should change this small target boundary rather than duplicate revision resolution, packaging, manifest generation or Dropbox delivery logic.
+The normal target exports the selected revision's existing production `run/main_scene` from `project.godot`. The Windows tooling must not rewrite the project entrypoint to a harness or POC scene. Runtime-data preparation may reuse existing offline preparation helpers, but production/harness scene selection remains owned by the selected revision itself.
 
 ## Package contract
 
