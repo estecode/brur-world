@@ -5,7 +5,7 @@ extends SceneTree
 ## Dependencies:
 ## - drive_hud.gd / speed_limit_sign.gd own presentation only.
 ## - drive_hud_adapter.gd exposes the HUD whenever the player road vehicle exists, in Map or Drive view.
-## - overlay_layout.gd reserves the persistent bottom UI stack from debug windows.
+## - overlay_layout.gd applies the explicit HUD/control reservation only to the sun/time window.
 ## - road_speed_limit_query.gd reads BRG1/BRS2 without inventing fallback legal limits.
 ## - vehicle_route_follower.gd owns remaining route-time state used as optional ETA.
 
@@ -14,6 +14,7 @@ const DriveHudAdapterScript = preload("res://scripts/drive_hud_adapter.gd")
 const OverlayLayoutScript = preload("res://scripts/overlay_layout.gd")
 const RoadSpeedLimitQueryScript = preload("res://scripts/road_speed_limit_query.gd")
 const VehicleRouteFollowerScript = preload("res://scripts/vehicle_route_follower.gd")
+const BOTTOM_HUD_RESERVE := 168.0
 
 class FakeWorldCoordinates:
 	extends RefCounted
@@ -111,11 +112,10 @@ func _test_bottom_ui_non_overlap() -> void:
 	body.add_child(Label.new())
 	root.add_child(header)
 	root.add_child(body)
-	OverlayLayoutScript.apply_window(header, body, OverlayLayoutScript.Slot.BOTTOM_LEFT, 646.0)
+	OverlayLayoutScript.apply_window(header, body, OverlayLayoutScript.Slot.BOTTOM_LEFT, 646.0, BOTTOM_HUD_RESERVE)
 	await process_frame
-	_assert(header.get_global_rect().end.y <= hud_rect.position.y, "bottom-left overlay header is reserved above the road-vehicle HUD")
-	_assert(body.get_global_rect().end.y <= hud_rect.position.y, "bottom-left overlay body is reserved above the road-vehicle HUD")
-	_assert(is_equal_approx(float(OverlayLayoutScript.bottom_reserved_height()), 168.0), "bottom overlay layout reserves the complete map-controls + HUD stack")
+	_assert(header.get_global_rect().end.y <= hud_rect.position.y, "reserved bottom-left overlay header stays above the road-vehicle HUD")
+	_assert(body.get_global_rect().end.y <= hud_rect.position.y, "reserved bottom-left overlay body stays above the road-vehicle HUD")
 	header.queue_free()
 	body.queue_free()
 	hud.queue_free()
@@ -185,6 +185,8 @@ func _test_production_scene_structure() -> void:
 	var scene: Node = packed_scene.instantiate()
 	_assert(scene.get_node_or_null("DriveHud") != null, "production scene composes road-vehicle HUD presentation")
 	_assert(scene.get_node_or_null("DriveHudAdapter") != null, "production scene composes a separate HUD state adapter")
+	var sun_header: Button = scene.get_node_or_null("DebugOverlay/SunTimeHeader") as Button
+	_assert(sun_header != null and is_equal_approx(float(sun_header.get("bottom_reserve")), BOTTOM_HUD_RESERVE), "production sun/time window reserves the HUD and map-control stack")
 	scene.free()
 
 func _write_routing_fixture(graph_path: String, snap_path: String, speed_source: int) -> void:
