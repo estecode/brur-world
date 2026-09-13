@@ -25,6 +25,7 @@ Usage:
 Optional environment:
   BRUR_WINDOWS_WORLD_DATA=/path/to/world_data
   BRUR_WINDOWS_OUTPUT_DIR=/path/to/output
+  BRUR_WINDOWS_CACHE_DIR=/path/to/persistent/windows-build-cache
   GODOT_BIN=/path/to/godot
   PYTHON_BIN=python3
 EOF
@@ -84,7 +85,7 @@ BUILD_NAME="brur-${SHORT_SHA}-win64"
 BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/brur-windows-build.XXXXXX")"
 SOURCE_ROOT="$BUILD_ROOT/source"
 BINARY_DIR="$BUILD_ROOT/binary"
-RUNTIME_DATA="$BUILD_ROOT/runtime_data"
+RUNTIME_PACK_INFO="$BUILD_ROOT/runtime_pack_info.json"
 BUILD_INFO="$BUILD_ROOT/build_info.json"
 ZIP_PATH="$OUTPUT_DIR/$BUILD_NAME-client.zip"
 ADDED=0
@@ -100,7 +101,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-mkdir -p "$BINARY_DIR" "$RUNTIME_DATA"
+mkdir -p "$BINARY_DIR"
 git worktree add --quiet --detach "$SOURCE_ROOT" "$COMMIT"
 ADDED=1
 [[ "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" == "$COMMIT" ]] || { printf 'WINDOWS_BUILD=FAIL isolated checkout mismatch\n' >&2; exit 70; }
@@ -109,16 +110,17 @@ ADDED=1
 GODOT_VERSION="$($GODOT --version | head -n 1 | tr -d '\r')"
 export BRUR_WINDOWS_SOURCE_ROOT="$SOURCE_ROOT"
 export BRUR_WINDOWS_WORLD_DATA="$WORLD_DATA"
-export BRUR_WINDOWS_RUNTIME_DATA_OUT="$RUNTIME_DATA"
+export BRUR_WINDOWS_RUNTIME_PACK_INFO="$RUNTIME_PACK_INFO"
 export BRUR_WINDOWS_EXPORT_DIR="$BINARY_DIR"
 export BRUR_WINDOWS_BUILD_NAME="$BUILD_NAME"
 export GODOT_BIN="$GODOT"
 
 printf 'WINDOWS_BUILD=TARGET selector=%s:%s commit=%s\n' "$SELECTOR_KIND" "$SELECTOR_VALUE" "$SHORT_SHA"
-bash "$SOURCE_ROOT/tools/windows_build/target.sh"
+TIMEFORMAT='WINDOWS_TIMING stage=target_total seconds=%3R'
+time bash "$SOURCE_ROOT/tools/windows_build/target.sh"
 [[ -s "$BINARY_DIR/$BUILD_NAME.exe" ]] || { printf 'WINDOWS_BUILD=FAIL missing exported EXE\n' >&2; exit 1; }
 [[ -s "$BINARY_DIR/$BUILD_NAME.pck" ]] || { printf 'WINDOWS_BUILD=FAIL missing exported PCK\n' >&2; exit 1; }
-find "$RUNTIME_DATA" -type f -print -quit | grep -q . || { printf 'WINDOWS_BUILD=FAIL target produced no runtime data\n' >&2; exit 1; }
+[[ -s "$RUNTIME_PACK_INFO" ]] || { printf 'WINDOWS_BUILD=FAIL target produced no runtime pack info\n' >&2; exit 1; }
 
 "$PYTHON" - "$BUILD_INFO" <<PY
 import json, pathlib
@@ -135,7 +137,7 @@ payload = {
   "godot_version": "$GODOT_VERSION",
   "export_target": "Windows Desktop",
   "platform": "windows-x86_64",
-  "packaging_format_version": 1,
+  "packaging_format_version": 3,
   "client_ready": False,
 }
 pathlib.Path("$BUILD_INFO").write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -143,7 +145,8 @@ PY
 
 mkdir -p "$OUTPUT_DIR"
 printf 'WINDOWS_BUILD=PACKAGE runtime_source=%s\n' "$WORLD_DATA"
-"$PYTHON" "$SOURCE_ROOT/tools/windows_build/package.py" \
-  "$BINARY_DIR" "$RUNTIME_DATA" "$BUILD_INFO" "$WORLD_DATA/manifest.json" --output "$ZIP_PATH"
+TIMEFORMAT='WINDOWS_TIMING stage=client_package seconds=%3R'
+time "$PYTHON" "$SOURCE_ROOT/tools/windows_build/package.py" \
+  "$BINARY_DIR" "$RUNTIME_PACK_INFO" "$BUILD_INFO" "$WORLD_DATA/manifest.json" --output "$ZIP_PATH"
 [[ -s "$ZIP_PATH" ]] || { printf 'WINDOWS_BUILD=FAIL package not created\n' >&2; exit 1; }
 printf 'WINDOWS_BUILD=READY %s\n' "$ZIP_PATH"

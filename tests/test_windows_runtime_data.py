@@ -26,6 +26,9 @@ class WindowsRuntimeDataTests(unittest.TestCase):
             directory = source / name
             directory.mkdir()
             (directory / "0_0.bin").write_bytes(b"runtime")
+        obsolete = source / "building_tiles"
+        obsolete.mkdir()
+        (obsolete / "0_0.jsonl").write_bytes(b"obsolete-runtime")
         (source / "buildings.jsonl").write_bytes(b"rebuild-only")
         (source / "pois.jsonl").write_bytes(b"rebuild-only")
         (source / "search_index.jsonl").write_bytes(b"rebuild-only")
@@ -49,8 +52,20 @@ class WindowsRuntimeDataTests(unittest.TestCase):
             self.assertFalse((output / "pois.jsonl").exists())
             self.assertFalse((output / "search_index.jsonl").exists())
             self.assertFalse((output / "osm_source_cache").exists())
+            self.assertFalse((output / "building_tiles").exists())
             self.assertIn("manifest.json", copied)
-            self.assertIn("building_tiles/0_0.bin", copied)
+            self.assertIn("building_mesh_lod/0_0.bin", copied)
+
+    def test_selection_is_relative_and_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self._source_fixture(root)
+            first = [path.as_posix() for path in windows_runtime_data.selected_runtime_files(source)]
+            second = [path.as_posix() for path in windows_runtime_data.selected_runtime_files(source)]
+            self.assertEqual(first, sorted(first))
+            self.assertEqual(first, second)
+            self.assertIn("building_mesh_lod/0_0.bin", first)
+            self.assertNotIn("building_tiles/0_0.jsonl", first)
 
     def test_missing_required_file_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
