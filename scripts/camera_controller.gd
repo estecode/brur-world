@@ -6,6 +6,7 @@ extends Node3D
 ## - camera_altitude_model.gd owns deterministic map-altitude state and readout formatting.
 ## - Camera3D presents framing; an explicitly wired generic Node3D may be followed in Drive mode or by Map Follow car.
 ## - Drive render-origin conversion is presentation-only; logical/world coordinates remain owned by WorldCoordinates and the followed target.
+## - Building streaming may query a stable Drive ground radius that is independent of visual mode-transition interpolation.
 
 signal view_changed(focus_world: Vector3, distance_m: float, camera_world_position: Vector3)
 signal map_follow_changed(enabled: bool)
