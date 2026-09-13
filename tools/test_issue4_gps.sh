@@ -76,5 +76,6 @@ run_godot_contract tests/godot/test_gps_search_index.gd "godot gps search-index 
 run_godot_contract tests/godot/test_gps_search_route_adapter.gd "godot gps search-route adapter tests: OK"
 run_godot_contract tests/godot/test_gps_search_native_adapter.gd "godot gps native-search adapter tests: OK"
 run_godot_contract tests/godot/test_gps_failure_metrics.gd "godot gps failure-metrics tests: OK"
+run_godot_contract tests/godot/test_gps_route_autostart.gd "godot GPS route-autostart tests: OK"
 
 echo "automated GPS tests: OK"
