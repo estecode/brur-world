@@ -5,10 +5,12 @@ extends SceneTree
 ## Dependencies:
 ## - scripts/camera_altitude_model.gd for portable altitude behavior.
 ## - scripts/camera_controller.gd for thin Camera3D integration.
+## - scripts/building_lod_policy.gd for Drive-mode building presentation detail.
 ## - scenes/main.tscn for structural altitude-readout placement.
 
 const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.gd")
 const CameraControllerScript = preload("res://scripts/camera_controller.gd")
+const BuildingLodPolicyScript = preload("res://scripts/building_lod_policy.gd")
 const NORMAL_CLOUD_TOP_M: float = 12000.0
 
 func _init() -> void:
@@ -87,6 +89,20 @@ func _test_camera_adapter() -> void:
 	_assert(is_equal_approx(float(rig.call("get_altitude")), 1400000.0), "adapter applies model maximum")
 	_assert(camera.position.y > NORMAL_CLOUD_TOP_M, "full zoom-out camera can be above ordinary cloud layers")
 
+	var retained_map_altitude := float(rig.call("get_altitude"))
+	var target := Node3D.new()
+	root.add_child(target)
+	rig.call("set_follow_target", target)
+	rig.call("set_drive_mode", true)
+	var drive_altitude := float(rig.call("get_altitude"))
+	_assert(drive_altitude < BuildingLodPolicyScript.MEDIUM_ALTITUDE_M, "Drive exposes a near-ground effective presentation altitude")
+	_assert(BuildingLodPolicyScript.choose_lod(drive_altitude) == BuildingLodPolicyScript.LOD_FULL, "Drive from coarse Map altitude requests full building LOD")
+	_assert(camera.near >= 0.25, "Drive near plane stays away from zero for stable depth precision")
+	_assert(camera.far <= 5000.0, "Drive far plane is bounded to local chase-camera range")
+	rig.call("set_drive_mode", false)
+	_assert(is_equal_approx(float(rig.call("get_altitude")), retained_map_altitude), "leaving Drive restores the retained Map altitude")
+
+	target.free()
 	rig.queue_free()
 	print("godot camera-altitude tests: OK")
 	quit(0)
