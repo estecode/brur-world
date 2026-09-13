@@ -12,6 +12,9 @@ const SETTLE_TIMEOUT_S := 20.0
 const STABLE_S := 0.75
 const MEASURE_FRAMES := 360
 const CELL_CROSS_INTERVAL := 90
+const RENDER_CELL_GRID_M := 1024.0
+const CELL_BOUNDARY_OFFSET_M := 512.0
+const CELL_CROSS_DELTA_M := 2.0
 const MAX_AVG_FRAME_MS := 33.4
 const MAX_P95_FRAME_MS := 50.0
 const MAX_WORST_FRAME_MS := 250.0
@@ -30,6 +33,10 @@ var _measure_started_usec := 0
 var _frame_started_usec := 0
 var _frame_times: Array[float] = []
 var _cell_crossings := 0
+var _crossing_start_prepared := false
+var _crossing_low_x := 0.0
+var _crossing_high_x := 0.0
+var _expected_render_origin_x := 0.0
 
 func _initialize() -> void:
 	if OS.has_environment("BRUR_PARSE_ONLY"):
@@ -85,7 +92,10 @@ func _process(delta: float) -> bool:
 			else:
 				_stable_elapsed = 0.0
 			if _stable_elapsed >= STABLE_S:
-				_begin_measurement()
+				if not _crossing_start_prepared:
+					_prepare_render_cell_crossing()
+				else:
+					_begin_measurement()
 			elif _settle_elapsed >= SETTLE_TIMEOUT_S:
 				var snapshot: Dictionary = _building_layer.call("debug_snapshot")
 				var metrics: Dictionary = _building_layer.call("consume_perf_metrics")
@@ -102,6 +112,22 @@ func _process(delta: float) -> bool:
 			_frame_started_usec = Time.get_ticks_usec()
 	return false
 
+func _prepare_render_cell_crossing() -> void:
+	var render_origin: Vector3 = _camera_rig.call("get_render_origin_world")
+	var boundary_x := render_origin.x + CELL_BOUNDARY_OFFSET_M
+	_crossing_low_x = boundary_x - CELL_CROSS_DELTA_M
+	_crossing_high_x = boundary_x + CELL_CROSS_DELTA_M
+	_expected_render_origin_x = render_origin.x
+	var prepared_position := _player.global_position
+	prepared_position.x = _crossing_low_x
+	_player.call("set_world_position", prepared_position)
+	if _camera_rig.has_method("_apply_drive_camera"):
+		_camera_rig.call("_apply_drive_camera")
+	_crossing_start_prepared = true
+	_settle_elapsed = 0.0
+	_stable_elapsed = 0.0
+	print("PRODUCTION_DRIVE_FPS_REAL_DATA prepared cell boundary low_x=%.1f high_x=%.1f origin_x=%.1f" % [_crossing_low_x, _crossing_high_x, _expected_render_origin_x])
+
 func _begin_measurement() -> void:
 	_state = 2
 	_measure_started_usec = Time.get_ticks_usec()
@@ -114,11 +140,21 @@ func _begin_measurement() -> void:
 	])
 
 func _cross_render_cell() -> void:
-	var next_position := _player.global_position + Vector3(1100.0, 0.0, 0.0)
+	var before_origin: Vector3 = _camera_rig.call("get_render_origin_world")
+	var next_position := _player.global_position
+	if absf(next_position.x - _crossing_low_x) <= absf(next_position.x - _crossing_high_x):
+		next_position.x = _crossing_high_x
+	else:
+		next_position.x = _crossing_low_x
 	_player.call("set_world_position", next_position)
 	if _camera_rig.has_method("_apply_drive_camera"):
 		_camera_rig.call("_apply_drive_camera")
+	var after_origin: Vector3 = _camera_rig.call("get_render_origin_world")
+	if is_equal_approx(after_origin.x, before_origin.x):
+		_fail("render-cell crossing did not change render origin: before=%.1f after=%.1f player_x=%.1f" % [before_origin.x, after_origin.x, next_position.x])
+		return
 	_cell_crossings += 1
+	print("PRODUCTION_DRIVE_FPS_REAL_DATA cell_crossing=%d player_delta=%.1fm origin_x=%.1f->%.1f" % [_cell_crossings, CELL_CROSS_DELTA_M * 2.0, before_origin.x, after_origin.x])
 
 func _finish_measurement() -> void:
 	_frame_times.sort()
