@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Measures the remaining GPU-facing precision budget for real-size Drive road tiles and local ground coverage.
+## Measures GPU-facing Drive precision plus static-presentation resource churn across render-origin cells.
 ##
 ## Dependencies:
 ## - camera_controller.gd owns the Drive render-origin cell and camera near/far range.
@@ -39,10 +39,6 @@ func _run() -> void:
 
 	var render_origin: Vector3 = rig.call("get_render_origin_world")
 	var target_render: Vector3 = rig.call("world_to_render_position", TEST_WORLD_POSITION)
-
-	# BRT1 vertices are tile-local, up to roughly one 32 km tile away from their
-	# MeshInstance origin. Measure the actual float32 add that the GPU effectively
-	# performs after the node itself has been rebased into the Drive render cell.
 	var road_local_vertex := TEST_WORLD_POSITION - ROAD_TILE_ORIGIN
 	_assert(absf(road_local_vertex.x) < 32000.0 and absf(road_local_vertex.z) < 32000.0, "road fixture uses production-scale tile-local coordinates")
 	var rebased_tile_origin := ROAD_TILE_ORIGIN - render_origin
@@ -62,6 +58,17 @@ func _run() -> void:
 	])))
 	road_leaf.mesh = road_mesh
 	world.add_child(road_leaf)
+
+	var background_leaf := MeshInstance3D.new()
+	var background_mesh := ArrayMesh.new()
+	background_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _triangle_arrays(PackedVector3Array([
+		TEST_WORLD_POSITION + Vector3(-10.0, 0.0, -10.0),
+		TEST_WORLD_POSITION + Vector3(10.0, 0.0, -10.0),
+		TEST_WORLD_POSITION + Vector3(0.0, 0.0, 10.0),
+	])))
+	background_leaf.mesh = background_mesh
+	background_leaf.material_override = _transparent_material()
+	world.add_child(background_leaf)
 
 	var ground_leaf := MeshInstance3D.new()
 	ground_leaf.position = Vector3(TEST_WORLD_POSITION.x, -0.30, TEST_WORLD_POSITION.z)
@@ -90,17 +97,29 @@ func _run() -> void:
 	composition.call("_sync_render_origin")
 
 	var rendered_vertex := road_leaf.position + road_local_vertex
-	_assert(Vector2(rendered_vertex.x, rendered_vertex.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "production-scale road tile resolves to the correct render-local position")
+	_assert(Vector2(rendered_vertex.x, rendered_vertex.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "production-scale road tile resolves to correct render-local position")
 
-	_assert(ground_leaf.mesh is PlaneMesh and ground_leaf.mesh != sweden_plane, "Drive replaces the Sweden-scale ocean plane with a local patch")
+	_assert(ground_leaf.mesh is PlaneMesh and ground_leaf.mesh != sweden_plane, "Drive replaces Sweden-scale ocean plane with local patch")
 	var local_ground := ground_leaf.mesh as PlaneMesh
 	var required_radius := camera.far + MAX_RENDER_CELL_AXIS_M + float(rig.get("drive_max_distance_m")) + FRUSTUM_EDGE_MARGIN_M
-	_assert(local_ground.size.x * 0.5 >= required_radius and local_ground.size.y * 0.5 >= required_radius, "local ocean patch covers the full Drive far range at the edge of a render-origin cell")
+	_assert(local_ground.size.x * 0.5 >= required_radius and local_ground.size.y * 0.5 >= required_radius, "local ocean patch covers full Drive far range at render-cell edge")
 
 	var stable_ground_mesh := ground_leaf.mesh
+	var stable_background_mesh := background_leaf.mesh
 	for _frame in range(120):
-		composition.call("_sync_render_origin")
-	_assert(ground_leaf.mesh == stable_ground_mesh, "local ocean mesh resource is stable for 120 frame syncs inside one render cell")
+		composition.call("_sync_render_origin", false)
+	_assert(ground_leaf.mesh == stable_ground_mesh, "local ocean mesh resource is stable for 120 same-cell syncs")
+	_assert(background_leaf.mesh == stable_background_mesh, "localized BRM2 resource is stable for 120 same-cell syncs")
+
+	# A 1 km cell crossing previously rebuilt the entire BRM2 ArrayMesh. The
+	# resource identity must now remain stable so cell crossings cannot trigger a
+	# Sweden-scale CPU mesh copy on the frame thread.
+	target.position.x += 1100.0
+	rig.call("_apply_drive_camera")
+	var next_origin: Vector3 = rig.call("get_render_origin_world")
+	_assert(next_origin != render_origin, "precision fixture crosses a render-origin cell")
+	composition.call("_sync_render_origin", false)
+	_assert(background_leaf.mesh == stable_background_mesh, "cell crossing keeps exact BRM2 mesh resource")
 
 	composition.free()
 	gps_layer.route_renderer.free()
