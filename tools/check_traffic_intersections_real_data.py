@@ -39,13 +39,6 @@ def check(world_data: Path) -> dict:
         report.intersections,
         key=lambda item: (-len(item.movements), -len(item.approaches), item.junction_osm_node_id),
     )[:5]
-    if not report.intersections:
-        raise SystemExit("traffic intersection real-data check produced no intersections")
-    if report.movement_count <= 0 or report.conflict_count <= 0:
-        raise SystemExit("traffic intersection real-data check produced no movement/conflict model")
-    if not any(len(item.approaches) >= 3 and len(item.exits) >= 3 for item in report.intersections):
-        raise SystemExit("traffic intersection real-data check found no complex 3+ approach junction")
-
     result = {
         "source_signals": len(signal_dataset.get("signals", [])),
         "resolved_signals": resolved_signals,
@@ -57,10 +50,13 @@ def check(world_data: Path) -> dict:
         "derived_stops": derived_stops,
         "direction_sources": dict(sorted(direction_sources.items())),
         "relationship_sources": dict(sorted(relationship_sources.items())),
+        "max_approaches": max((len(item.approaches) for item in report.intersections), default=0),
+        "max_exits": max((len(item.exits) for item in report.intersections), default=0),
         "dense_examples": [
             {
                 "id": item.id,
                 "approaches": len(item.approaches),
+                "exits": len(item.exits),
                 "movements": len(item.movements),
                 "conflicts": len(item.conflicts),
             }
@@ -68,6 +64,13 @@ def check(world_data: Path) -> dict:
         ],
     }
     print("TRAFFIC_INTERSECTIONS_REAL_DATA=" + json.dumps(result, sort_keys=True, separators=(",", ":")))
+
+    if not report.intersections:
+        raise SystemExit("traffic intersection real-data check produced no intersections")
+    if report.movement_count <= 0 or report.conflict_count <= 0:
+        raise SystemExit("traffic intersection real-data check produced no movement/conflict model")
+    if not any(len(item.approaches) >= 3 and len(item.exits) >= 3 for item in report.intersections):
+        raise SystemExit("traffic intersection real-data check found no complex 3+ approach junction")
     return result
 
 
