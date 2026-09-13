@@ -26,12 +26,10 @@ git -C "$WORKTREE" commit -qm fixture
 
 cat > "$WORKTREE/tools/build_building_mesh_pyramid.py" <<'PY'
 #!/usr/bin/env python3
-import sys
 # The e2e test exercises orchestration, not the building compiler. Existing fixture data is always current.
 raise SystemExit(0)
 PY
 chmod +x "$WORKTREE/tools/build_building_mesh_pyramid.py"
-
 git -C "$WORKTREE" add tools/build_building_mesh_pyramid.py
 git -C "$WORKTREE" commit -qm fixture-builder
 
@@ -90,46 +88,58 @@ run_flow() {
   bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 235 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT"
 }
 
+fail_scenario() {
+  local scenario="$1" message="$2"
+  printf 'Drive Safe Check E2E failed scenario=%s: %s\n' "$scenario" "$message" >&2
+  printf '%s\n' '--- flow output ---' >&2
+  printf '%s\n' "${output:-<empty>}" >&2
+  printf '%s\n' '--- order log ---' >&2
+  cat "$ORDER_LOG" >&2 || true
+  exit 1
+}
+
 # Regression case: a clean Godot exit without the final measurement marker must fail closed.
 : > "$ORDER_LOG"
 set +e
 output="$(FAKE_DRIVE_MARKER=0 run_flow required 2>&1)"
 status=$?
 set -e
-[[ "$status" -ne 0 ]] || { printf 'expected missing Drive completion marker to fail the Safe Check\n' >&2; exit 1; }
-grep -q 'PR_CHECK=FAIL Godot test exited without required completion marker' <<<"$output" || {
-  printf 'missing-marker failure was not reported\n%s\n' "$output" >&2; exit 1;
-}
-if grep -q '^STATUS .*--state success' "$ORDER_LOG"; then
-  printf 'Safe Check recorded success before the Drive measurement completed\n' >&2; cat "$ORDER_LOG" >&2; exit 1
-fi
-if grep -q '^GODOT_VISUAL ' "$ORDER_LOG"; then
-  printf 'Safe Check launched visual Godot after an incomplete objective Drive test\n' >&2; cat "$ORDER_LOG" >&2; exit 1
-fi
+[[ "$status" -ne 0 ]] || fail_scenario missing-marker "flow unexpectedly succeeded"
+grep -q 'PR_CHECK=FAIL Godot test exited without required completion marker' <<<"$output" || fail_scenario missing-marker "required completion-marker failure was not reported"
+if grep -q '^STATUS .*--state success' "$ORDER_LOG"; then fail_scenario missing-marker "success was recorded before measurement completed"; fi
+if grep -q '^GODOT_VISUAL ' "$ORDER_LOG"; then fail_scenario missing-marker "visual Godot launched after incomplete objective test"; fi
 
 # CHECK THEN MERGE may launch the explicit human review only after all objective gates pass.
 : > "$ORDER_LOG"
+set +e
 output="$(FAKE_DRIVE_MARKER=1 run_flow required 2>&1)"
-grep -q 'production Drive FPS real-data test: OK' <<<"$output"
-grep -q 'PR_CHECK=STATUS success pr=235' <<<"$output"
-status_count="$(grep -c '^STATUS .*--state success .*--stage objective-checks-complete' "$ORDER_LOG")"
-[[ "$status_count" -eq 1 ]] || { printf 'expected exactly one objective success, got %s\n' "$status_count" >&2; cat "$ORDER_LOG" >&2; exit 1; }
-headless_count="$(grep -c '^GODOT_HEADLESS ' "$ORDER_LOG")"
-[[ "$headless_count" -eq 4 ]] || { printf 'expected four building/Drive headless steps, got %s\n' "$headless_count" >&2; cat "$ORDER_LOG" >&2; exit 1; }
-grep -q '^GODOT_HEADLESS res://tests/godot/test_production_fps_real_data.gd$' "$ORDER_LOG"
-grep -q '^GODOT_VISUAL ' "$ORDER_LOG"
+status=$?
+set -e
+[[ "$status" -eq 0 ]] || fail_scenario check-then-merge "flow exited $status"
+grep -q 'production Drive FPS real-data test: OK' <<<"$output" || fail_scenario check-then-merge "Drive completion marker missing"
+grep -q 'PR_CHECK=STATUS success pr=235' <<<"$output" || fail_scenario check-then-merge "objective success output missing"
+status_count="$(grep -c '^STATUS .*--state success .*--stage objective-checks-complete' "$ORDER_LOG" || true)"
+[[ "$status_count" -eq 1 ]] || fail_scenario check-then-merge "expected one objective success, got $status_count"
+headless_count="$(grep -c '^GODOT_HEADLESS ' "$ORDER_LOG" || true)"
+[[ "$headless_count" -eq 4 ]] || fail_scenario check-then-merge "expected four building/Drive headless steps, got $headless_count"
+grep -q '^GODOT_HEADLESS res://tests/godot/test_production_fps_real_data.gd$' "$ORDER_LOG" || fail_scenario check-then-merge "production Drive headless step missing"
+grep -q '^GODOT_VISUAL ' "$ORDER_LOG" || fail_scenario check-then-merge "required visual review did not launch"
 
 # MERGE means no subjective review remains: the same real-data gates must complete without opening Godot visually.
 : > "$ORDER_LOG"
+set +e
 output="$(FAKE_DRIVE_MARKER=1 run_flow none 2>&1)"
-grep -q 'production Drive FPS real-data test: OK' <<<"$output"
-grep -q 'PR_CHECK=SKIP_VISUAL_REVIEW pr=235 reason=no-subjective-check-remains' <<<"$output"
-grep -q 'PR_CHECK=STATUS success pr=235' <<<"$output"
-headless_count="$(grep -c '^GODOT_HEADLESS ' "$ORDER_LOG")"
-[[ "$headless_count" -eq 4 ]] || { printf 'expected four automatic MERGE headless steps, got %s\n' "$headless_count" >&2; cat "$ORDER_LOG" >&2; exit 1; }
-if grep -q '^GODOT_VISUAL ' "$ORDER_LOG"; then
-  printf 'MERGE Safe Check opened a redundant visual Godot session\n' >&2; cat "$ORDER_LOG" >&2; exit 1
-fi
+status=$?
+set -e
+[[ "$status" -eq 0 ]] || fail_scenario merge "flow exited $status"
+grep -q 'production Drive FPS real-data test: OK' <<<"$output" || fail_scenario merge "Drive completion marker missing"
+grep -q 'PR_CHECK=SKIP_VISUAL_REVIEW pr=235 reason=no-subjective-check-remains' <<<"$output" || fail_scenario merge "headless-only completion marker missing"
+grep -q 'PR_CHECK=STATUS success pr=235' <<<"$output" || fail_scenario merge "objective success output missing"
+status_count="$(grep -c '^STATUS .*--state success .*--stage objective-checks-complete' "$ORDER_LOG" || true)"
+[[ "$status_count" -eq 1 ]] || fail_scenario merge "expected one objective success, got $status_count"
+headless_count="$(grep -c '^GODOT_HEADLESS ' "$ORDER_LOG" || true)"
+[[ "$headless_count" -eq 4 ]] || fail_scenario merge "expected four automatic MERGE headless steps, got $headless_count"
+if grep -q '^GODOT_VISUAL ' "$ORDER_LOG"; then fail_scenario merge "redundant visual Godot session opened"; fi
 
 bash -n "$ROOT/tools/pr_check_local.sh"
 bash -n "$ROOT/tools/run_pr_owned_check.sh"
