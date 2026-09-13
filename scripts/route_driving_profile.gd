@@ -1,10 +1,10 @@
 class_name RouteDrivingProfile
 extends RefCounted
 
-## Holds immutable-style tuning values for one route-driving mode.
+## Holds immutable-style tuning values for one AI route-driving mode.
 ##
 ## Dependencies:
-## - Pure driving-policy data only; no SceneTree, vehicle, routing, GPS, or rendering dependency.
+## - Pure driving-policy data only; no SceneTree, vehicle, routing, GPS, traffic, or rendering dependency.
 
 var speed_limit_multiplier: float
 var max_lateral_accel_mps2: float
@@ -15,6 +15,8 @@ var minimum_throttle: float
 var minimum_brake: float
 var throttle_cap: float
 var brake_cap: float
+var intersection_speed_factor: float
+var intersection_gap_factor: float
 
 func _init(
 	new_speed_limit_multiplier: float,
@@ -25,7 +27,9 @@ func _init(
 	new_minimum_throttle: float,
 	new_minimum_brake: float,
 	new_throttle_cap: float,
-	new_brake_cap: float
+	new_brake_cap: float,
+	new_intersection_speed_factor: float,
+	new_intersection_gap_factor: float
 ) -> void:
 	speed_limit_multiplier = new_speed_limit_multiplier
 	max_lateral_accel_mps2 = new_max_lateral_accel_mps2
@@ -36,3 +40,5 @@ func _init(
 	minimum_brake = new_minimum_brake
 	throttle_cap = new_throttle_cap
 	brake_cap = new_brake_cap
+	intersection_speed_factor = new_intersection_speed_factor
+	intersection_gap_factor = new_intersection_gap_factor
