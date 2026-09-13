@@ -1,4 +1,4 @@
-[gd_scene load_steps=18 format=3]
+[gd_scene load_steps=20 format=3]
 
 [ext_resource path="res://scripts/main.gd" type="Script" id="1_main"]
 [ext_resource path="res://scripts/camera_controller.gd" type="Script" id="2_camera"]
@@ -17,6 +17,8 @@
 [ext_resource path="res://scripts/day_night_environment_adapter.gd" type="Script" id="15_day_night"]
 [ext_resource path="res://scripts/building_stream_layer.gd" type="Script" id="16_buildings"]
 [ext_resource path="res://scripts/building_runtime_composition.gd" type="Script" id="17_building_composition"]
+[ext_resource path="res://scripts/drive_hud.gd" type="Script" id="18_drive_hud"]
+[ext_resource path="res://scripts/drive_hud_adapter.gd" type="Script" id="19_drive_hud_adapter"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -65,6 +67,16 @@ script = ExtResource("6_search_ui")
 script = ExtResource("7_search_adapter")
 search_ui_path = NodePath("../GpsSearchUi")
 route_layer_path = NodePath("../GpsRouteLayer")
+
+[node name="DriveHud" type="CanvasLayer" parent="."]
+script = ExtResource("18_drive_hud")
+
+[node name="DriveHudAdapter" type="Node" parent="."]
+script = ExtResource("19_drive_hud_adapter")
+main_path = NodePath("..")
+route_layer_path = NodePath("../GpsRouteLayer")
+camera_rig_path = NodePath("../CameraRig")
+hud_path = NodePath("../DriveHud")
 
 [node name="MapControlsUi" type="CanvasLayer" parent="."]
 script = ExtResource("14_map_controls")
