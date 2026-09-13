@@ -108,9 +108,15 @@ jobs:
       - name: Validate persistent local PR-check status
         run: |
           bash -n tools/pr_check.sh
+          bash -n tools/pr_check_local.sh
           bash -n tools/pr_check_native_gps_policy.sh
           python tests/test_pr_check_status.py
           python tests/test_pr_check_native_gps.py
+
+      - name: Parse production Drive real-data FPS contract
+        env:
+          BRUR_PARSE_ONLY: "1"
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_production_fps_real_data.gd
 
       - name: Validate PR-owned local check hook
         run: |
