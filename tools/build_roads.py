@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build portable BRT1 road tiles from an OSM PBF source."""
+"""Build portable BRT1 road tiles from the shared OSM highway source route.
+
+Dependencies:
+- osm_route_source.py redirects authoritative Sweden PBF input through the reusable OSM source cache.
+- Reads cached highway OSM or small fixture OSM with pyosmium.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ from pathlib import Path
 
 import osmium
 
+from osm_route_source import resolve_route_source
 from world_common import TILE_SIZE, ensure_pbf, project
 
 ROAD_CLASS = {
@@ -104,15 +110,19 @@ class RoadHandler(osmium.SimpleHandler):
                 self.segments[lod] += 1
 
 
-def build_roads(pbf: Path, output: Path) -> dict:
-    ensure_pbf(pbf)
+def build_roads(source: Path, output: Path) -> dict:
+    source = Path(source)
+    output = Path(output)
+    ensure_pbf(source)
+    output.mkdir(parents=True, exist_ok=True)
+    source = resolve_route_source(source, output, "highways")
+
     handler = RoadHandler()
-    print(f"[roads] Reading {pbf} ...")
-    handler.apply_file(str(pbf), locations=True)
+    print(f"[roads] Reading {source} ...")
+    handler.apply_file(str(source), locations=True)
     if handler.ways == 0:
         raise SystemExit("No supported highway ways found")
 
-    output.mkdir(parents=True, exist_ok=True)
     for lod in range(3):
         lod_dir = output / f"lod{lod}"
         lod_dir.mkdir(parents=True, exist_ok=True)
@@ -154,10 +164,10 @@ def build_roads(pbf: Path, output: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("pbf", type=Path)
+    parser.add_argument("source", type=Path, help="Path to Sweden .osm.pbf, cached highway .osm, or a small .osm fixture")
     parser.add_argument("--output", type=Path, default=Path("world_data"))
     args = parser.parse_args()
-    build_roads(args.pbf, args.output)
+    build_roads(args.source, args.output)
 
 
 if __name__ == "__main__":
