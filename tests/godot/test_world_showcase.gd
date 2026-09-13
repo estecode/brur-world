@@ -175,8 +175,11 @@ func _write_bmc_chunk(root_dir: String, lod: int, chunk: Vector2i) -> void:
 	_assert(file != null, "showcase prebuilt chunk is writable")
 	if file == null:
 		return
-	file.store_buffer("BMC1".to_ascii_buffer())
-	file.store_32(1)
+	file.store_buffer("BMC2".to_ascii_buffer())
+	file.store_32(2)
+	file.store_32(3)
+	file.store_float(0.0)
+	file.store_float(0.0)
 	file.store_32(3)
 	for position in [Vector3(0.0, 0.0, 0.0), Vector3(100.0, 0.0, 0.0), Vector3(0.0, 20.0, -100.0)]:
 		file.store_float(position.x)
