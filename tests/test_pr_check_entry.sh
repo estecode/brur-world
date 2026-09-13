@@ -18,10 +18,19 @@ cat > "$FAKE_BIN/gh" <<'GH'
 #!/usr/bin/env bash
 set -euo pipefail
 case "${FAKE_PR_DECISION:-MERGE}" in
-  MERGE) recommendation=MERGE ;;
-  CHECK) recommendation='CHECK THEN MERGE' ;;
-  BLOCK) recommendation='DO NOT MERGE' ;;
-  *) printf 'unexpected FAKE_PR_DECISION=%s\n' "$FAKE_PR_DECISION" >&2; exit 2 ;;
+  MERGE)
+    recommendation=MERGE
+    ;;
+  CHECK)
+    recommendation='CHECK THEN MERGE'
+    ;;
+  BLOCK)
+    recommendation='DO NOT MERGE'
+    ;;
+  *)
+    printf 'unexpected FAKE_PR_DECISION=%s\n' "$FAKE_PR_DECISION" >&2
+    exit 2
+    ;;
 esac
 cat <<BODY
 ## Merge decision
