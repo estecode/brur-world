@@ -4,14 +4,15 @@ extends RefCounted
 ## Read-only traffic view over the authoritative BRG1 routing graph.
 ## Does not modify, duplicate, or preprocess road topology beyond compact lookup arrays.
 
-const HEADER_SIZE := 12
-const NODE_SIZE := 44
-const EDGE_SIZE := 32
 const MAGIC := "BRG1"
 
 var nodes: Array[Dictionary] = []
 var edges: Array[Dictionary] = []
 var outgoing_by_node: Dictionary = {}
+var world_origin := Vector2.ZERO
+
+func set_world_origin(origin: Vector2) -> void:
+	world_origin = origin
 
 func load_graph(path: String) -> bool:
 	nodes.clear(); edges.clear(); outgoing_by_node.clear()
@@ -57,14 +58,16 @@ func edge_heading_rad(edge_id: int) -> float:
 	var e := edges[edge_id]
 	var a := nodes[int(e["source_index"])]
 	var b := nodes[int(e["target_index"])]
-	return atan2(float(b["x"]) - float(a["x"]), float(b["y"]) - float(a["y"]))
+	return atan2(float(b["x"]) - float(a["x"]), -(float(b["y"]) - float(a["y"])))
 func edge_world_position(edge_id: int, fraction: float) -> Vector3:
 	if not has_edge(edge_id): return Vector3.INF
 	var e := edges[edge_id]
 	var a := nodes[int(e["source_index"])]
 	var b := nodes[int(e["target_index"])]
 	var t := clampf(fraction, 0.0, 1.0)
-	return Vector3(lerpf(float(a["x"]), float(b["x"]), t), 0.0, lerpf(float(a["y"]), float(b["y"]), t))
+	var absolute_x := lerpf(float(a["x"]), float(b["x"]), t)
+	var absolute_y := lerpf(float(a["y"]), float(b["y"]), t)
+	return Vector3(absolute_x - world_origin.x, 0.0, -(absolute_y - world_origin.y))
 func outgoing_edge_ids(edge_id: int) -> Array:
 	if not has_edge(edge_id): return []
 	var target := int(edges[edge_id]["target_index"])
@@ -76,8 +79,9 @@ func edge_progress_from_world(edge_id: int, position: Vector3, fallback_progress
 	var b := nodes[int(e["target_index"])]
 	var start := Vector2(float(a["x"]), float(a["y"]))
 	var finish := Vector2(float(b["x"]), float(b["y"]))
+	var absolute_position := Vector2(position.x + world_origin.x, -position.z + world_origin.y)
 	var delta := finish - start
 	var len_sq := delta.length_squared()
 	if len_sq <= 0.000001: return fallback_progress_m
-	var t := clampf((Vector2(position.x, position.z) - start).dot(delta) / len_sq, 0.0, 1.0)
+	var t := clampf((absolute_position - start).dot(delta) / len_sq, 0.0, 1.0)
 	return t * edge_length_m(edge_id)
