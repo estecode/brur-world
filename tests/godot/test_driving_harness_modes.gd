@@ -101,7 +101,7 @@ func _run() -> void:
 	var short_limits := PackedFloat32Array([8.0, 8.0, 8.0])
 	follower.call("set_follow_enabled", false)
 	follower.call("set_route", short_route, short_limits)
-	player.call("set_motion_state", 0.0, PI / 2.0)
+	player.call("set_motion_state", 0.0, -PI / 2.0)
 	follower.call("set_follow_enabled", true)
 	for _frame in range(360):
 		await physics_frame
