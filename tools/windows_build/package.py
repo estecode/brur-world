@@ -4,6 +4,7 @@
 Dependencies:
 - Reads an EXE/PCK pair produced by the selected revision's Windows target.
 - Reads runtime-pack identity/hashes produced by runtime_pack.py; it never rebuilds or rehashes world truth.
+- Reuses a cached client ZIP base whose single compressed member is the stable mountable runtime pack.
 - The target has already verified that mounting the runtime pack exposes res://world_data.
 - Uses only Python standard library modules.
 """
@@ -13,11 +14,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
+import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
 
-FORMAT_VERSION = 3
+FORMAT_VERSION = 4
+SHIPPING_CACHE_VERSION = 1
 RUNTIME_DELIVERY = "resource_pack:brur-world-data.zip=>res://world_data"
 
 
@@ -27,6 +33,43 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _stat_identity(path: Path) -> dict[str, int]:
+    stat = path.stat()
+    return {
+        "dev": int(stat.st_dev),
+        "ino": int(stat.st_ino),
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+        "ctime_ns": int(stat.st_ctime_ns),
+    }
+
+
+def _human_bytes(value: int) -> str:
+    amount = float(max(value, 0))
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if amount < 1024.0 or unit == "TB":
+            return f"{amount:.1f} {unit}"
+        amount /= 1024.0
+    return f"{amount:.1f} TB"
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+    os.replace(temp, path)
 
 
 def find_binary_pair(binary_dir: Path) -> tuple[Path, Path]:
@@ -75,6 +118,11 @@ def load_runtime_pack_info(path: Path) -> dict[str, Any]:
     with zipfile.ZipFile(pack_path, "r") as archive:
         if "world_data/windows_runtime_manifest.json" not in archive.namelist():
             raise SystemExit("runtime pack is missing its delivery manifest")
+        if any(
+            not entry.is_dir() and entry.compress_type != zipfile.ZIP_STORED
+            for entry in archive.infolist()
+        ):
+            raise SystemExit("runtime pack must keep entries stored for monolithic delivery compression")
 
     normalized_hashes: dict[str, str] = {}
     for relative_name, digest in runtime_files.items():
@@ -86,6 +134,124 @@ def load_runtime_pack_info(path: Path) -> dict[str, Any]:
     result["pack_path"] = str(pack_path)
     result["runtime_files"] = normalized_hashes
     return result
+
+
+def _shipping_base_path(runtime_pack: Path, fingerprint: str) -> Path:
+    return runtime_pack.parent / f"{fingerprint}.shipping-base-v{SHIPPING_CACHE_VERSION}.zip"
+
+
+def _shipping_metadata_path(shipping_base: Path) -> Path:
+    return shipping_base.with_suffix(shipping_base.suffix + ".json")
+
+
+def _shipping_base_valid(
+    shipping_base: Path,
+    runtime_pack: Path,
+    pack_filename: str,
+    fingerprint: str,
+) -> bool:
+    metadata = _read_json(_shipping_metadata_path(shipping_base))
+    if metadata.get("shipping_cache_version") != SHIPPING_CACHE_VERSION:
+        return False
+    if metadata.get("fingerprint") != fingerprint:
+        return False
+    if metadata.get("runtime_pack_identity") != _stat_identity(runtime_pack):
+        return False
+    if not shipping_base.is_file() or metadata.get("shipping_base_identity") != _stat_identity(shipping_base):
+        return False
+    try:
+        with zipfile.ZipFile(shipping_base, "r") as archive:
+            entries = [entry for entry in archive.infolist() if not entry.is_dir()]
+            if len(entries) != 1:
+                return False
+            member = entries[0]
+            return (
+                member.filename == f"BRUR/{pack_filename}"
+                and member.compress_type == zipfile.ZIP_DEFLATED
+                and member.file_size == runtime_pack.stat().st_size
+            )
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
+def _build_shipping_base(
+    shipping_base: Path,
+    runtime_pack: Path,
+    pack_filename: str,
+    fingerprint: str,
+) -> None:
+    shipping_base.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=shipping_base.name + ".",
+        suffix=".tmp",
+        dir=shipping_base.parent,
+    )
+    os.close(fd)
+    temp_path = Path(temp_name)
+    try:
+        print(
+            "WINDOWS BUILD — PACKING DELIVERY PAYLOAD",
+            flush=True,
+        )
+        print(
+            f"[windows-package] compressing reusable world pack as one {_human_bytes(runtime_pack.stat().st_size)} member",
+            flush=True,
+        )
+        started = time.monotonic()
+        with zipfile.ZipFile(
+            temp_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=6,
+            allowZip64=True,
+        ) as archive:
+            archive.write(runtime_pack, f"BRUR/{pack_filename}")
+        with zipfile.ZipFile(temp_path, "r") as archive:
+            member = archive.getinfo(f"BRUR/{pack_filename}")
+            if member.compress_type != zipfile.ZIP_DEFLATED:
+                raise SystemExit("shipping base did not compress the runtime pack")
+            if member.file_size != runtime_pack.stat().st_size:
+                raise SystemExit("shipping base runtime member size does not match source pack")
+        os.replace(temp_path, shipping_base)
+        elapsed = time.monotonic() - started
+        print(
+            f"[windows-package] delivery payload packed {_human_bytes(shipping_base.stat().st_size)} | {elapsed:.1f}s",
+            flush=True,
+        )
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    _write_json_atomic(
+        _shipping_metadata_path(shipping_base),
+        {
+            "shipping_cache_version": SHIPPING_CACHE_VERSION,
+            "fingerprint": fingerprint,
+            "runtime_pack_identity": _stat_identity(runtime_pack),
+            "shipping_base_identity": _stat_identity(shipping_base),
+        },
+    )
+
+
+def prepare_shipping_base(
+    runtime_pack: Path,
+    pack_filename: str,
+    fingerprint: str,
+) -> tuple[Path, bool]:
+    shipping_base = _shipping_base_path(runtime_pack, fingerprint)
+    cache_hit = _shipping_base_valid(shipping_base, runtime_pack, pack_filename, fingerprint)
+    if cache_hit:
+        print(
+            f"WINDOWS_SHIPPING_PAYLOAD=HIT fingerprint={fingerprint[:12]} size={_human_bytes(shipping_base.stat().st_size)}",
+            flush=True,
+        )
+        return shipping_base, True
+
+    _build_shipping_base(shipping_base, runtime_pack, pack_filename, fingerprint)
+    print(
+        f"WINDOWS_SHIPPING_PAYLOAD=MISS fingerprint={fingerprint[:12]} size={_human_bytes(shipping_base.stat().st_size)}",
+        flush=True,
+    )
+    return shipping_base, False
 
 
 def package_client(
@@ -120,12 +286,15 @@ def package_client(
     fingerprint = runtime_info["fingerprint"]
     output_zip.parent.mkdir(parents=True, exist_ok=True)
 
+    shipping_base, shipping_cache_hit = prepare_shipping_base(runtime_pack, pack_filename, fingerprint)
+
     final_build_info = dict(build_info)
     final_build_info["client_ready"] = True
     final_build_info["world_data_source_manifest_sha256"] = sha256(source_manifest)
     final_build_info["runtime_files"] = hashes
     final_build_info["runtime_pack_fingerprint"] = fingerprint
     final_build_info["runtime_pack_cache_hit"] = bool(runtime_info.get("cache_hit", False))
+    final_build_info["shipping_payload_cache_hit"] = shipping_cache_hit
     final_build_info["runtime_delivery"] = RUNTIME_DELIVERY
     final_build_info["packaging_format_version"] = FORMAT_VERSION
 
@@ -141,15 +310,15 @@ def package_client(
         "runtime_files": hashes,
         "runtime_pack_fingerprint": fingerprint,
         "runtime_delivery": RUNTIME_DELIVERY,
+        "shipping_payload_cache_hit": shipping_cache_hit,
         "packaging_format_version": FORMAT_VERSION,
     }
 
-    with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
+    output_zip.unlink(missing_ok=True)
+    shutil.copy2(shipping_base, output_zip)
+    with zipfile.ZipFile(output_zip, "a", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
         archive.write(exe, f"BRUR/{exe.name}")
         archive.write(pck, f"BRUR/{pck.name}")
-        # The runtime resource pack is already compressed and content-addressed. Store it
-        # verbatim so repeated client packaging does not recompress multi-GB stable data.
-        archive.write(runtime_pack, f"BRUR/{pack_filename}", compress_type=zipfile.ZIP_STORED)
         archive.writestr(
             "BRUR/build_info.json",
             json.dumps(final_build_info, indent=2, sort_keys=True),
@@ -175,13 +344,21 @@ def package_client(
             raise SystemExit(f"client ZIP validation failed; missing: {sorted(missing)}")
         if any(name.startswith("BRUR/runtime_data/") for name in names):
             raise SystemExit("client ZIP duplicated runtime data beside the resource pack")
-        runtime_member = archive.getinfo(f"BRUR/{pack_filename}")
-        if runtime_member.compress_type != zipfile.ZIP_STORED:
-            raise SystemExit("client ZIP recompressed the cached runtime resource pack")
+        runtime_members = [
+            entry for entry in archive.infolist() if entry.filename == f"BRUR/{pack_filename}"
+        ]
+        if len(runtime_members) != 1:
+            raise SystemExit("client ZIP must contain exactly one runtime resource pack")
+        runtime_member = runtime_members[0]
+        if runtime_member.compress_type != zipfile.ZIP_DEFLATED:
+            raise SystemExit("client ZIP did not use the cached monolithic compressed runtime payload")
+        if runtime_member.file_size != runtime_pack.stat().st_size:
+            raise SystemExit("client ZIP runtime payload size does not match cached runtime pack")
 
     print(
-        f"[windows-package] ready zip={output_zip} commit={commit[:12]} "
-        f"runtime_files={len(hashes)} delivery={RUNTIME_DELIVERY} fingerprint={fingerprint[:12]}"
+        f"[windows-package] ready zip={output_zip} size={_human_bytes(output_zip.stat().st_size)} "
+        f"commit={commit[:12]} runtime_files={len(hashes)} delivery={RUNTIME_DELIVERY} "
+        f"fingerprint={fingerprint[:12]} shipping_cache={'HIT' if shipping_cache_hit else 'MISS'}"
     )
     return bundle_info
 
