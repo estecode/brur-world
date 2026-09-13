@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
+import pickle
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from xml.etree import ElementTree
 
 import osmium
 
@@ -17,6 +20,7 @@ if str(TOOLS) not in sys.path:
 
 from osm_source_cache import (  # noqa: E402
     MAX_OPEN_NODE_BUCKETS,
+    NODE_RECORD,
     SPOOL_DIR_NAME,
     SPOOL_MARKER_NAME,
     SourceCacheHandler,
@@ -79,6 +83,44 @@ class OsmSourceCacheResumeTests(unittest.TestCase):
                 self.assertLessEqual(len(writer.bucket_handles), MAX_OPEN_NODE_BUCKETS)
         finally:
             writer.close_inputs()
+
+    def test_route_writer_uses_compact_binary_for_untagged_way_nodes(self) -> None:
+        work = self.root / "compact-work"
+        work.mkdir()
+        writer = _RouteWriter("areas", work, self.root / "areas.osm")
+        count = 4_096
+        try:
+            for node_id in range(count):
+                writer.add_node(node_id, 18.0 + node_id * 0.000001, 59.3)
+        finally:
+            writer.close_inputs()
+
+        route_dir = work / "route-areas"
+        compact_size = sum(path.stat().st_size for path in route_dir.glob("nodes-*.bin"))
+        self.assertEqual(compact_size, count * NODE_RECORD.size)
+        self.assertFalse(any(route_dir.glob("nodes-??.pkl")))
+
+        legacy = io.BytesIO()
+        for node_id in range(count):
+            pickle.dump((node_id, 18.0 + node_id * 0.000001, 59.3, {}), legacy, protocol=5)
+        self.assertLess(compact_size, len(legacy.getvalue()) * 0.6)
+
+    def test_tagged_node_overrides_duplicate_compact_node_on_publish(self) -> None:
+        work = self.root / "tagged-work"
+        work.mkdir()
+        destination = self.root / "pois.osm"
+        writer = _RouteWriter("pois", work, destination)
+        writer.add_node(7, 18.0, 59.3)
+        writer.add_node(7, 18.1, 59.4, {"amenity": "cafe"})
+        counts = writer.publish()
+
+        root = ElementTree.parse(destination).getroot()
+        nodes = root.findall("node")
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(nodes[0].attrib["id"], "7")
+        self.assertEqual(nodes[0].attrib["lon"], repr(18.1))
+        self.assertEqual(nodes[0].find("tag").attrib, {"k": "amenity", "v": "cafe"})
+        self.assertEqual(counts["nodes"], 1)
 
     def test_finalization_failure_resumes_completed_spool_without_source_scan(self) -> None:
         with mock.patch.object(_RouteWriter, "publish", side_effect=RuntimeError("synthetic finalization failure")):
