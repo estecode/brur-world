@@ -53,9 +53,8 @@ func set_presentation_enabled(enabled: bool) -> void:
 	if not enabled:
 		_hide_hover()
 		return
-	# POI presentation is optional and defaults OFF in production. While it is
-	# disabled, preserve already loaded data but do no tile/marker rebuild work;
-	# when re-enabled, catch presentation up once through the normal owner path.
+	# POI presentation is optional and defaults OFF in production. Preserve loaded
+	# data while disabled, then catch presentation up once through the normal owner.
 	if changed and is_inside_tree() and not manifest.is_empty():
 		_refresh(true)
 
@@ -234,56 +233,44 @@ func _update_marker_scale(distance: float, force: bool = false) -> void:
 	marker_instance.position.y = _marker_lift(distance)
 
 func _marker_lift(distance: float) -> float:
-	return clampf(distance * 0.012, 8.0, 120.0)
+	return clampf(distance / 6000.0, 2.0, 20.0) * 8.0
 
 func _poi_world_position(poi: Dictionary) -> Vector3:
-	var value: Variant = poi.get("world_position", Vector3.ZERO)
-	return value as Vector3 if typeof(value) == TYPE_VECTOR3 else Vector3.ZERO
-
-func _poi_color(poi: Dictionary) -> Color:
-	var category := String(poi.get("category", ""))
-	match category:
-		"hospital", "clinic", "pharmacy":
-			return Color(0.96, 0.32, 0.32, 1.0)
-		"school", "university", "college":
-			return Color(0.34, 0.58, 1.0, 1.0)
-		"restaurant", "cafe", "fast_food":
-			return Color(1.0, 0.62, 0.22, 1.0)
-		_:
-			return Color(0.92, 0.92, 0.92, 1.0)
-
-func _create_hover_ui() -> void:
-	hover_layer = CanvasLayer.new()
-	hover_layer.layer = 40
-	add_child(hover_layer)
-	hover_panel = PanelContainer.new()
-	hover_panel.visible = false
-	hover_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hover_layer.add_child(hover_panel)
-	hover_label = Label.new()
-	hover_panel.add_child(hover_label)
+	var cached: Variant = poi.get("world_position", Vector3.ZERO)
+	if typeof(cached) == TYPE_VECTOR3:
+		return cached as Vector3
+	return world_coordinates.call(
+		"absolute_to_world",
+		Vector2(float(poi.get("x", 0.0)), float(poi.get("y", 0.0)))
+	) as Vector3
 
 func _update_hover() -> void:
-	if not _presentation_enabled or marker_instance == null or active_pois.is_empty():
+	if not _presentation_enabled or active_pois.is_empty() or camera == null:
 		_hide_hover()
 		return
-	var mouse := get_viewport().get_mouse_position()
-	var best_distance := HOVER_RADIUS_PX
+
+	var mouse: Vector2 = get_viewport().get_mouse_position()
+	var best_distance: float = HOVER_RADIUS_PX
 	var best: Dictionary = {}
+	var lift: float = _marker_lift(float(camera_rig.call("get_distance")))
+
 	for poi in active_pois:
-		var world := _poi_world_position(poi)
-		if camera.is_position_behind(world):
+		var world_position: Vector3 = _poi_world_position(poi)
+		world_position.y = lift
+		if camera.is_position_behind(world_position):
 			continue
-		var screen := camera.unproject_position(world)
-		var distance := screen.distance_to(mouse)
-		if distance < best_distance:
-			best_distance = distance
+		var screen: Vector2 = camera.unproject_position(world_position)
+		var screen_distance: float = screen.distance_to(mouse)
+		if screen_distance < best_distance:
+			best_distance = screen_distance
 			best = poi
+
 	if best.is_empty():
 		_hide_hover()
 		return
+
 	hovered_poi = best
-	hover_label.text = String(best.get("name", best.get("category", "POI")))
+	hover_label.text = _hover_text(best)
 	hover_panel.position = mouse + Vector2(18.0, 18.0)
 	hover_panel.visible = true
 
@@ -291,3 +278,85 @@ func _hide_hover() -> void:
 	hovered_poi.clear()
 	if hover_panel != null:
 		hover_panel.visible = false
+
+func _create_hover_ui() -> void:
+	hover_layer = CanvasLayer.new()
+	hover_layer.layer = 50
+	add_child(hover_layer)
+
+	hover_panel = PanelContainer.new()
+	hover_panel.visible = false
+	hover_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hover_panel.custom_minimum_size = Vector2(260.0, 0.0)
+
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = Color(0.035, 0.045, 0.055, 0.94)
+	style.border_color = Color(0.80, 0.95, 1.0, 0.95)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(6)
+	style.content_margin_left = 12.0
+	style.content_margin_right = 12.0
+	style.content_margin_top = 9.0
+	style.content_margin_bottom = 9.0
+	hover_panel.add_theme_stylebox_override("panel", style)
+	hover_layer.add_child(hover_panel)
+
+	hover_label = Label.new()
+	hover_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hover_label.add_theme_font_size_override("font_size", 15)
+	hover_panel.add_child(hover_label)
+
+func _hover_text(poi: Dictionary) -> String:
+	var tags_value: Variant = poi.get("tags", {})
+	var tags: Dictionary = tags_value as Dictionary if typeof(tags_value) == TYPE_DICTIONARY else {}
+	var name: String = str(tags.get("name", "Unnamed POI"))
+	var category: String = _poi_category(tags)
+	var lines: PackedStringArray = PackedStringArray([name, category])
+	var useful_keys: Array[String] = [
+		"amenity", "shop", "tourism", "craft", "office", "healthcare",
+		"highway", "enforcement", "maxspeed", "surveillance", "camera:type",
+		"operator", "opening_hours", "addr:street", "addr:housenumber"
+	]
+	for key in useful_keys:
+		if tags.has(key):
+			lines.append("%s: %s" % [key, str(tags[key])])
+	lines.append("OSM %s %s" % [str(poi.get("osm_type", "?")), str(poi.get("osm_id", "?"))])
+	return "\n".join(lines)
+
+func _poi_category(tags: Dictionary) -> String:
+	if str(tags.get("shop", "")) == "hairdresser":
+		return "HAIRDRESSER"
+	if _is_camera(tags):
+		return "CAMERA"
+	for key in ["amenity", "shop", "tourism", "craft", "office", "healthcare", "leisure"]:
+		if tags.has(key):
+			return str(tags[key]).to_upper()
+	return "POI"
+
+func _poi_color(poi: Dictionary) -> Color:
+	var tags_value: Variant = poi.get("tags", {})
+	var tags: Dictionary = tags_value as Dictionary if typeof(tags_value) == TYPE_DICTIONARY else {}
+	if _is_camera(tags):
+		return Color(1.0, 0.22, 0.18)
+	if str(tags.get("shop", "")) == "hairdresser":
+		return Color(1.0, 0.25, 0.72)
+	var amenity: String = str(tags.get("amenity", ""))
+	if amenity in ["police", "fire_station"]:
+		return Color(0.25, 0.55, 1.0)
+	if amenity in ["hospital", "clinic", "doctors", "pharmacy"] or tags.has("healthcare"):
+		return Color(0.25, 1.0, 0.46)
+	if amenity in ["fuel", "charging_station"]:
+		return Color(1.0, 0.88, 0.18)
+	if amenity in ["restaurant", "cafe", "fast_food", "bar", "pub"]:
+		return Color(1.0, 0.60, 0.18)
+	return Color(0.88, 0.96, 1.0)
+
+func _is_camera(tags: Dictionary) -> bool:
+	if str(tags.get("highway", "")) == "speed_camera":
+		return true
+	if tags.has("enforcement") or tags.has("surveillance"):
+		return true
+	for key_value in tags.keys():
+		if str(key_value).begins_with("camera:"):
+			return true
+	return false
