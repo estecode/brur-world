@@ -6,7 +6,6 @@ extends Node
 ## Dependencies:
 ## - Consumes world-space route points, speed limits and explicit upcoming-intersection observations supplied by composition.
 ## - RouteDrivingPolicy owns speed/curve/intersection policy; the vehicle adapter owns dynamics.
-## - Installing a valid route immediately gives this follower GPS control; manual takeover remains available afterwards.
 ## - Emits reroute_requested on meaningful deviation; it does not calculate routes, traffic, or intersections itself.
 
 signal reroute_requested
@@ -48,8 +47,6 @@ func set_route(points: PackedVector3Array, speed_limits_mps: PackedFloat32Array 
 	_speed_limits_mps = speed_limits_mps
 	_target_index = _forward_target_index()
 	clear_upcoming_intersection()
-	if vehicle != null and has_route():
-		set_follow_enabled(true)
 
 func clear_route() -> void:
 	_points = PackedVector3Array()
