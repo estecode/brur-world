@@ -1,13 +1,17 @@
 extends SceneTree
 
-## Headless deterministic tests for Drive HUD formatting, layout, road-speed truth, and route ETA.
+## Headless deterministic tests for road-vehicle HUD formatting, visibility, layout, road-speed truth, and route ETA.
 ##
 ## Dependencies:
 ## - drive_hud.gd / speed_limit_sign.gd own presentation only.
+## - drive_hud_adapter.gd exposes the HUD whenever the player road vehicle exists, in Map or Drive view.
+## - overlay_layout.gd reserves the persistent bottom UI stack from debug windows.
 ## - road_speed_limit_query.gd reads BRG1/BRS2 without inventing fallback legal limits.
 ## - vehicle_route_follower.gd owns remaining route-time state used as optional ETA.
 
 const DriveHudScript = preload("res://scripts/drive_hud.gd")
+const DriveHudAdapterScript = preload("res://scripts/drive_hud_adapter.gd")
+const OverlayLayoutScript = preload("res://scripts/overlay_layout.gd")
 const RoadSpeedLimitQueryScript = preload("res://scripts/road_speed_limit_query.gd")
 const VehicleRouteFollowerScript = preload("res://scripts/vehicle_route_follower.gd")
 
@@ -26,12 +30,32 @@ class FakeVehicle:
 	func clear_control_inputs(_owner: int) -> bool: return true
 	func heading_rad() -> float: return _heading_rad
 	func speed_mps() -> float: return _speed_mps
+	func speed_kmh() -> float: return _speed_mps * 3.6
+
+class FakeHud:
+	extends CanvasLayer
+	var requested_visible := false
+	var last_state: Dictionary = {}
+	func set_vehicle_visible(enabled: bool) -> void:
+		requested_visible = enabled
+	func set_state(state: Dictionary) -> void:
+		last_state = state.duplicate(true)
+
+class FakeRouteLayer:
+	extends Node
+	var player: Node3D
+	func get_player_vehicle() -> Node3D:
+		return player
+	func current_route_eta_seconds() -> float:
+		return -1.0
 
 func _init() -> void:
 	call_deferred("_run")
 
 func _run() -> void:
 	await _test_presentation_contracts()
+	await _test_bottom_ui_non_overlap()
+	await _test_map_view_vehicle_visibility()
 	_test_explicit_speed_limit_query()
 	await _test_remaining_route_eta()
 	_test_production_scene_structure()
@@ -69,6 +93,60 @@ func _test_presentation_contracts() -> void:
 	hud.queue_free()
 	await process_frame
 
+func _test_bottom_ui_non_overlap() -> void:
+	root.size = Vector2i(757, 243)
+	var hud: CanvasLayer = DriveHudScript.new()
+	root.add_child(hud)
+	hud.call("set_vehicle_visible", true)
+	hud.call("set_state", {"current_speed_kmh": 130.0, "speed_limit_kmh": null, "eta_seconds": 338.0})
+	await process_frame
+	var hud_panel: Control = hud.call("panel_control") as Control
+	var hud_rect := hud_panel.get_global_rect()
+	var viewport_height := float(root.size.y)
+	var map_controls_rect := Rect2(14.0, viewport_height - 58.0, 666.0, 44.0)
+	_assert(not hud_rect.intersects(map_controls_rect), "road-vehicle HUD does not overlap the persistent bottom map controls")
+
+	var header := Button.new()
+	var body := VBoxContainer.new()
+	body.add_child(Label.new())
+	root.add_child(header)
+	root.add_child(body)
+	OverlayLayoutScript.apply_window(header, body, OverlayLayoutScript.Slot.BOTTOM_LEFT, 646.0)
+	await process_frame
+	_assert(header.get_global_rect().end.y < hud_rect.position.y, "bottom-left overlay header is reserved above the road-vehicle HUD")
+	_assert(body.get_global_rect().end.y < hud_rect.position.y, "bottom-left overlay body is reserved above the road-vehicle HUD")
+	_assert(is_equal_approx(float(OverlayLayoutScript.bottom_reserved_height()), 168.0), "bottom overlay layout reserves the complete map-controls + HUD stack")
+	header.queue_free()
+	body.queue_free()
+	hud.queue_free()
+	await process_frame
+
+func _test_map_view_vehicle_visibility() -> void:
+	var vehicle := FakeVehicle.new()
+	vehicle._speed_mps = 10.0
+	var route := FakeRouteLayer.new()
+	route.player = vehicle
+	var hud := FakeHud.new()
+	var adapter: Node = DriveHudAdapterScript.new()
+	root.add_child(vehicle)
+	root.add_child(route)
+	root.add_child(hud)
+	root.add_child(adapter)
+	adapter.set("_hud", hud)
+	adapter.set("_route_layer", route)
+	adapter.set("_setup_complete", true)
+	adapter.call("_process", 0.0)
+	_assert(hud.requested_visible, "HUD remains visible with the player road vehicle even when no Drive-view dependency is present")
+	_assert(is_equal_approx(float(hud.last_state.get("current_speed_kmh", -1.0)), 36.0), "Map-view HUD receives live vehicle speed from the same public vehicle output")
+	route.player = null
+	adapter.call("_process", 0.0)
+	_assert(not hud.requested_visible, "HUD hides when no road-drivable player vehicle exists")
+	adapter.queue_free()
+	hud.queue_free()
+	route.queue_free()
+	vehicle.queue_free()
+	await process_frame
+
 func _test_explicit_speed_limit_query() -> void:
 	var graph_explicit := "user://drive_hud_explicit.brg"
 	var snap_explicit := "user://drive_hud_explicit.brs"
@@ -103,9 +181,9 @@ func _test_remaining_route_eta() -> void:
 
 func _test_production_scene_structure() -> void:
 	var packed_scene: PackedScene = load("res://scenes/main.tscn") as PackedScene
-	_assert(packed_scene != null, "production scene parses with Drive HUD")
+	_assert(packed_scene != null, "production scene parses with road-vehicle HUD")
 	var scene: Node = packed_scene.instantiate()
-	_assert(scene.get_node_or_null("DriveHud") != null, "production scene composes Drive HUD presentation")
+	_assert(scene.get_node_or_null("DriveHud") != null, "production scene composes road-vehicle HUD presentation")
 	_assert(scene.get_node_or_null("DriveHudAdapter") != null, "production scene composes a separate HUD state adapter")
 	scene.free()
 
