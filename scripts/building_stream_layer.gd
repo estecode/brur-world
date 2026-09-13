@@ -7,7 +7,7 @@ class_name BuildingStreamLayer
 ## - building_lod_policy.gd selects altitude detail and spatial chunk scale.
 ## - building_mesh_chunk_codec.gd decodes prebuilt BMC1 render chunks without triangulation.
 ## - world_coordinates.gd is supplied explicitly by composition and remains the coordinate owner.
-## - Composition supplies a camera rig and the derived building_mesh_lod directory.
+## - Composition supplies a camera rig and the derived building_mesh_lod directory; Drive may expose a stable ground-streaming radius.
 
 const BuildingLodPolicyScript = preload("res://scripts/building_lod_policy.gd")
 const BuildingMeshChunkCodecScript = preload("res://scripts/building_mesh_chunk_codec.gd")
