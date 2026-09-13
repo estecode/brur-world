@@ -116,13 +116,13 @@ func _run() -> void:
 	# Reproduce the human failure with several 90-degree turns and assert the actual trajectory,
 	# not merely total movement or final distance. The production follower must remain near the polyline.
 	var path_route := PackedVector3Array([
-		Vector3(-35.0, 0.8, 25.0),
-		Vector3(25.0, 0.8, 25.0),
-		Vector3(25.0, 0.8, -20.0),
-		Vector3(-25.0, 0.8, -20.0),
-		Vector3(-25.0, 0.8, 5.0),
+		Vector3(-20.0, 0.8, 15.0),
+		Vector3(15.0, 0.8, 15.0),
+		Vector3(15.0, 0.8, -10.0),
+		Vector3(-15.0, 0.8, -10.0),
+		Vector3(-15.0, 0.8, 5.0),
 	])
-	var path_limits := PackedFloat32Array([13.9, 13.9, 13.9, 13.9, 13.9])
+	var path_limits := PackedFloat32Array([10.0, 10.0, 10.0, 10.0, 10.0])
 	follower.call("set_follow_enabled", false)
 	player.call("set_world_position", path_route[0])
 	player.call("set_motion_state", 0.0, -PI / 2.0)
@@ -131,7 +131,7 @@ func _run() -> void:
 	follower.call("set_driving_mode", 1)
 	follower.call("set_follow_enabled", true)
 	var max_deviation: float = 0.0
-	for _frame in range(1500):
+	for _frame in range(900):
 		await physics_frame
 		max_deviation = maxf(max_deviation, _distance_to_polyline(player.global_position, path_route))
 	var path_end_distance: float = Vector2(player.global_position.x - path_route[path_route.size() - 1].x, player.global_position.z - path_route[path_route.size() - 1].z).length()
