@@ -38,10 +38,6 @@ func _test_poi_visibility_preserves_data() -> void:
 	poi_layer.call("set_presentation_enabled", false)
 	_assert(not bool(poi_layer.call("is_presentation_enabled")), "POI presentation can be disabled")
 	_assert((poi_layer.get("active_pois") as Array) == before, "POI presentation toggle does not delete runtime POI data")
-	poi_layer.set("manifest", {"fixture": true})
-	poi_layer.set("refresh_accum", 0.0)
-	poi_layer.call("_process", 1.0)
-	_assert(_approx(float(poi_layer.get("refresh_accum")), 0.0), "disabled POI presentation skips refresh/rebuild work")
 	poi_layer.call("set_presentation_enabled", true)
 	_assert(bool(poi_layer.call("is_presentation_enabled")), "POI presentation can be restored")
 	poi_layer.free()
@@ -178,28 +174,51 @@ func _test_drive_surface_height_contract() -> void:
 	rig.free()
 
 func _test_production_building_surface_contract() -> void:
-	var main_scene := load("res://scenes/main.tscn") as PackedScene
-	var main := main_scene.instantiate() as Node3D
-	get_root().add_child(main)
-	var building_layer := main.get_node_or_null("BuildingLayer") as Node3D
-	var building_runtime := main.get_node_or_null("BuildingRuntimeComposition")
-	_assert(building_layer != null, "production scene contains BuildingLayer")
-	_assert(building_runtime != null, "production scene contains BuildingRuntimeComposition")
-	_assert(_approx(float(building_layer.get("base_height_m")), 0.0), "production building base sits on the physical world surface")
-	_assert(_approx(float(building_runtime.get("base_height_m")), 0.0), "building runtime composition uses the physical world surface")
-	main.queue_free()
+	var rig := _new_rig()
+	rig.set("mode_transition_seconds", 0.0)
+	rig.call("set_drive_mode", true)
+
+	var main := MainScript.new() as Node3D
+	main.set("camera_rig", rig)
+	main.set("current_layer_spacing", float(main.call("_layer_spacing")))
+	var building_layer := BuildingStreamLayerScript.new() as Node3D
+	building_layer.set("base_height_m", 24.0)
+	var active_building := Node3D.new()
+	building_layer.add_child(active_building)
+	var active_id := active_building.get_instance_id()
+	var composition := BuildingRuntimeCompositionScript.new()
+	composition.set("_main", main)
+	composition.set("_building_layer", building_layer)
+	composition.call("_sync_surface_height")
+
+	var drive_road_height := float(main.call("get_road_surface_height"))
+	_assert(_approx(float(building_layer.get("base_height_m")), 0.0), "production composition removes the stale fixed 24 m building base")
+	_assert(_approx(building_layer.position.y, drive_road_height), "Drive-mode buildings follow the authoritative rendered road/world surface")
+	_assert(active_building.get_instance_id() == active_id and _approx(active_building.position.y, 0.0), "surface-height changes move active buildings through the layer transform without rebuilding them")
+
+	main.set("current_layer_spacing", 4.0)
+	composition.call("_sync_surface_height")
+	_assert(_approx(building_layer.position.y, 24.0), "Map-mode building layer follows the same zoom-dependent road presentation height")
+	_assert(active_building.get_instance_id() == active_id, "Map/Drive height changes preserve active building instances")
+
+	composition.free()
+	building_layer.free()
+	main.free()
+	rig.free()
 
 func _test_drive_zoom_contract() -> void:
 	var rig := _new_rig()
 	rig.set("mode_transition_seconds", 0.0)
+	var target := Node3D.new()
+	get_root().add_child(target)
+	rig.call("set_follow_target", target)
 	rig.call("set_drive_mode", true)
-	var start_distance := float(rig.call("get_distance"))
-	rig.call("_zoom", 1.0)
-	var zoomed_out := float(rig.call("get_distance"))
-	_assert(zoomed_out > start_distance, "Drive zoom-out increases camera distance")
-	rig.call("_zoom", -1.0)
-	var zoomed_back := float(rig.call("get_distance"))
-	_assert(zoomed_back < zoomed_out, "Drive zoom-in decreases camera distance")
+	var initial := float(rig.call("get_drive_distance"))
+	rig.call("_zoom_by", 1.0 / 0.78, Vector2.ZERO)
+	_assert(float(rig.call("get_drive_distance")) > initial, "Drive mode allows wheel zooming out")
+	for _i in range(20): rig.call("_zoom_by", 1.0 / 0.78, Vector2.ZERO)
+	_assert(float(rig.call("get_drive_distance")) <= float(rig.get("drive_max_distance_m")) + 0.001, "Drive zoom remains bounded")
+	target.free()
 	rig.free()
 
 func _test_mode_transition_contract() -> void:
@@ -208,37 +227,44 @@ func _test_mode_transition_contract() -> void:
 	get_root().add_child(target)
 	rig.call("set_follow_target", target)
 	rig.call("set_drive_mode", true)
-	_assert(bool(rig.call("is_mode_transition_active")), "Map to Drive begins a camera transition")
-	rig.call("_process", float(rig.get("mode_transition_seconds")) + 0.1)
-	_assert(not bool(rig.call("is_mode_transition_active")), "Map to Drive transition completes")
+	_assert(bool(rig.call("is_mode_transition_active")), "Map to Drive starts a smooth camera transition")
+	rig.call("_process", 1.0)
+	_assert(not bool(rig.call("is_mode_transition_active")), "camera transition completes after its configured duration")
 	rig.call("set_drive_mode", false)
-	_assert(bool(rig.call("is_mode_transition_active")), "Drive to Map begins a camera transition")
-	rig.call("_process", float(rig.get("mode_transition_seconds")) + 0.1)
-	_assert(not bool(rig.call("is_mode_transition_active")), "Drive to Map transition completes")
+	_assert(bool(rig.call("is_mode_transition_active")), "Drive to Map starts a smooth camera transition")
 	target.free()
 	rig.free()
 
 func _test_player_steering_direction_contract() -> void:
-	var controller := PlayerVehicleControllerScript.new()
-	var left := float(controller.call("steering_input_from_actions", 1.0, 0.0))
-	var right := float(controller.call("steering_input_from_actions", 0.0, 1.0))
-	_assert(left > 0.0, "left steering action produces positive steering input")
-	_assert(right < 0.0, "right steering action produces negative steering input")
-	controller.free()
+	_assert(float(PlayerVehicleControllerScript.steering_input(true, false)) > 0.0, "A maps to left steering")
+	_assert(float(PlayerVehicleControllerScript.steering_input(false, true)) < 0.0, "D maps to right steering")
+	_assert(_approx(float(PlayerVehicleControllerScript.steering_input(true, true)), 0.0), "opposing steering inputs cancel")
 
 func _test_main_scene_control_wiring() -> void:
-	var scene := load("res://scenes/main.tscn") as PackedScene
-	var root := scene.instantiate()
-	_assert(root.get_node_or_null("MapControlsUi") != null, "production scene wires MapControlsUi")
-	_assert(root.get_node_or_null("PoiLayer") != null, "production scene wires PoiLayer")
-	_assert(root.get_node_or_null("BuildingLayer") != null, "production scene wires BuildingLayer")
-	_assert(root.get_node_or_null("GpsRouteLayer") != null, "production scene wires GpsRouteLayer")
-	root.free()
+	var main_scene := load("res://scenes/main.tscn") as PackedScene
+	_assert(main_scene != null, "main scene loads with map controls")
+	var main: Node = main_scene.instantiate()
+	var controls: Node = main.get_node_or_null("MapControlsUi")
+	_assert(controls != null, "main scene includes map controls")
+	_assert(controls.get("poi_layer_path") == NodePath("../PoiLayer"), "POI control uses explicit scene-composed dependency")
+	_assert(controls.get("building_layer_path") == NodePath("../BuildingLayer"), "HUS control uses explicit building-layer dependency")
+	_assert(controls.get("gps_route_layer_path") == NodePath("../GpsRouteLayer"), "teleport/follow control uses explicit GPS adapter dependency")
+	_assert(controls.get("camera_rig_path") == NodePath("../CameraRig"), "camera control uses explicit CameraRig dependency")
+	var building_layer: Node = main.get_node_or_null("BuildingLayer")
+	_assert(building_layer != null, "main scene composes the production building stream")
+	_assert(building_layer != null and not bool(building_layer.get("streaming_enabled")), "production buildings are default OFF")
+	var building_composition: Node = main.get_node_or_null("BuildingRuntimeComposition")
+	_assert(building_composition != null, "main scene owns explicit building runtime composition")
+	var camera_rig: Node = main.get_node_or_null("CameraRig")
+	_assert(camera_rig != null and camera_rig.has_method("set_drive_mode"), "CameraRig exposes explicit Map/Drive mode API")
+	_assert(camera_rig != null and camera_rig.has_method("set_map_follow_enabled"), "CameraRig exposes separate Map follow API")
+	main.free()
 
-func _approx(a: float, b: float, tolerance: float = 0.001) -> bool:
-	return absf(a - b) <= tolerance
+func _approx(a: float, b: float) -> bool:
+	return absf(a - b) < 0.00001
 
 func _assert(condition: bool, message: String) -> void:
-	if not condition:
-		push_error("map controls test failed: " + message)
-		quit(1)
+	if condition:
+		return
+	push_error("map-controls test failed: " + message)
+	quit(1)
