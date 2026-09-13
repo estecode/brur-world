@@ -1,0 +1,44 @@
+name: Driving recovery validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/route_driving_policy.gd"
+      - "scripts/vehicle_route_follower.gd"
+      - "scripts/vehicle.gd"
+      - "scripts/vehicle_dynamics.gd"
+      - "scripts/vehicle_state.gd"
+      - "tests/godot/test_vehicle_route_recovery.gd"
+      - ".github/workflows/driving-recovery-validation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  route-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4 headless runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT_VERSION="4.5.1-stable"
+          GODOT_ZIP="$RUNNER_TEMP/godot.zip"
+          GODOT_DIR="$RUNNER_TEMP/godot"
+          mkdir -p "$GODOT_DIR"
+          curl -fsSL \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" \
+            -o "$GODOT_ZIP"
+          unzip -q "$GODOT_ZIP" -d "$GODOT_DIR"
+          GODOT_BIN="$GODOT_DIR/Godot_v${GODOT_VERSION}_linux.x86_64"
+          chmod +x "$GODOT_BIN"
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+
+      - name: Verify post-slip route recovery
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_route_recovery.gd
