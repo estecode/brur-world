@@ -18,7 +18,7 @@ git -C "$WORKTREE" add fixture.txt
 git -C "$WORKTREE" commit -qm fixture
 WORKTREE_HEAD="$(git -C "$WORKTREE" rev-parse HEAD)"
 
-output="$(bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/true)"
+output="$(BRUR_PR_CHECK_MANUAL_REVIEW=none bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/true)"
 grep -q 'PR_CHECK=SKIP_PR_OWNED_OBJECTIVE_CHECKS pr=123 reason=no-hook' <<<"$output"
 
 cat > "$WORKTREE/tools/pr_check_local.sh" <<'HOOK'
@@ -30,7 +30,7 @@ printf 'HOOK_PYTHON=%s\n' "$PYTHON_BIN"
 printf 'HOOK_GODOT=%s\n' "$GODOT_BIN"
 HOOK
 
-output="$(bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/true)"
+output="$(BRUR_PR_CHECK_MANUAL_REVIEW=none bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/true)"
 grep -q 'PR_CHECK=RUN_PR_OWNED_OBJECTIVE_CHECKS pr=123 hook=tools/pr_check_local.sh' <<<"$output"
 grep -q 'HOOK_PR=123' <<<"$output"
 grep -Fq "HOOK_WORKTREE=$WORKTREE" <<<"$output"
@@ -41,7 +41,7 @@ cat > "$WORKTREE/tools/pr_check_local.sh" <<'HOOK'
 exit 23
 HOOK
 set +e
-bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/true >/dev/null 2>&1
+BRUR_PR_CHECK_MANUAL_REVIEW=none bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" /usr/bin/python3 /usr/bin/true >/dev/null 2>&1
 status=$?
 set -e
 [[ "$status" -eq 23 ]] || { printf 'expected objective hook failure 23, got %s\n' "$status" >&2; exit 1; }
@@ -84,7 +84,7 @@ printf 'HOOK_OBJECTIVE_DONE\n' >> "$ORDER_LOG"
 printf 'HOOK_VISUAL_RETURNED\n' >> "$ORDER_LOG"
 HOOK
 
-output="$(bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT" 2>&1)"
+output="$(BRUR_PR_CHECK_MANUAL_REVIEW=none bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT" 2>&1)"
 grep -q 'PR_CHECK=STATUS success pr=123' <<<"$output"
 grep -q 'PR_CHECK=VISUAL_REVIEW_WARNING Godot exited status=42 after objective success' <<<"$output"
 status_count="$(grep -c '^STATUS .*--state success .*--stage objective-checks-complete' "$ORDER_LOG")"
