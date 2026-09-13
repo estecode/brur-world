@@ -17,6 +17,7 @@ const ROAD_MAGIC: String = "BRT1"
 const MAP_MAGIC: String = "BRM2"
 const ROAD_MESH_CACHE_LIMIT: int = 512
 const DRIVE_LAYER_SPACING_M: float = 0.01
+const DRIVE_BACKGROUND_LAYER_SPACING_M: float = 0.05
 
 const MAP_LAND: int = 0
 const MAP_FARMLAND: int = 1
@@ -162,6 +163,22 @@ func _layer_spacing() -> float:
 	return clampf(camera_rig.get_distance() / 6000.0, 4.0, 240.0)
 
 func _background_height(kind: int) -> float:
+	# Drive keeps the physical road/player surface compact while pushing the
+	# decorative map stack below it at materially larger intervals. This avoids
+	# spending the chase-camera depth budget on centimetre-separated coplanar
+	# surfaces without making the vehicle or buildings float above the road.
+	if camera_rig != null and camera_rig.has_method("is_driving_view") and bool(camera_rig.call("is_driving_view")):
+		match kind:
+			MAP_LAND:
+				return -DRIVE_BACKGROUND_LAYER_SPACING_M * 5.0
+			MAP_WATER:
+				return -DRIVE_BACKGROUND_LAYER_SPACING_M * 4.0
+			MAP_FARMLAND:
+				return -DRIVE_BACKGROUND_LAYER_SPACING_M * 3.0
+			MAP_FOREST:
+				return -DRIVE_BACKGROUND_LAYER_SPACING_M * 2.0
+			MAP_URBAN:
+				return -DRIVE_BACKGROUND_LAYER_SPACING_M
 	# Heights preserve the existing world-space relationship with roads and city
 	# lights. Background visual precedence is handled by render priority instead
 	# of relying on depth-buffer precision between these nearly coplanar layers.
