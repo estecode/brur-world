@@ -9,3 +9,4 @@ __pycache__/
 bin/
 .poc_runtime/
 .safecommand/logs/
+safecommand-logs/
