@@ -95,8 +95,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			last_mouse = event.position
 	elif event is InputEventMouseMotion:
 		if dragging_pan and not _drive_mode:
-			var delta := event.position - last_mouse
-			var scale := maxf(1.0, get_altitude() * 0.0025) * mouse_pan_factor
+			var delta: Vector2 = event.position - last_mouse
+			var scale: float = maxf(1.0, get_altitude() * 0.0025) * mouse_pan_factor
 			focus += Vector3(-delta.x, 0.0, -delta.y) * scale
 			last_mouse = event.position
 			_apply_camera()
@@ -139,16 +139,16 @@ func _gameplay_blend() -> float:
 	return 1.0 - inverse_lerp(gameplay_blend_end_altitude_m, gameplay_blend_start_altitude_m, get_altitude())
 
 func _derived_distance() -> float:
-	var altitude := get_altitude()
-	var blend := _gameplay_blend()
+	var altitude: float = get_altitude()
+	var blend: float = _gameplay_blend()
 	return lerpf(altitude, maxf(gameplay_min_height_m, altitude * gameplay_distance_scale), blend)
 
 func _apply_camera() -> void:
 	if camera == null or altitude_model == null:
 		return
-	var altitude := altitude_model.get_altitude()
-	var distance := _derived_distance()
-	var blend := _gameplay_blend()
+	var altitude: float = float(altitude_model.get_altitude())
+	var distance: float = _derived_distance()
+	var blend: float = _gameplay_blend()
 	var t := clampf(inverse_lerp(tilt_start_altitude_m, tilt_end_altitude_m, altitude), 0.0, 1.0)
 	var map_pitch := deg_to_rad(lerpf(0.0, max_tilt_degrees, t))
 	var gameplay_pitch := deg_to_rad(gameplay_pitch_degrees)
