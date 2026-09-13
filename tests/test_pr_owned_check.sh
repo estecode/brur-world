@@ -141,6 +141,7 @@ cat > "$SELECTOR_GODOT" <<'GODOT'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'SELECTOR_GODOT %s\n' "$*" >> "$ORDER_LOG"
+exit 0
 GODOT
 chmod +x "$SELECTOR_GODOT"
 : > "$ORDER_LOG"
