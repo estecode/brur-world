@@ -11,6 +11,7 @@ class_name BuildingStreamLayer
 
 const BuildingLodPolicyScript = preload("res://scripts/building_lod_policy.gd")
 const BuildingMeshChunkCodecScript = preload("res://scripts/building_mesh_chunk_codec.gd")
+const CHUNK_KEY_META: StringName = &"brur_building_chunk_key"
 
 @export var view_margin_chunks: int = 1
 @export var max_view_chunks: int = 64
@@ -59,6 +60,7 @@ var _perf_cache_misses := 0
 var _perf_bytes_loaded := 0
 var _perf_chunks_loaded := 0
 var _perf_stale_stages := 0
+var _perf_mesh_reuses := 0
 var _last_stage_ms := 0.0
 var _last_prepare_ms := 0.0
 var _last_publish_ms := 0.0
@@ -341,10 +343,16 @@ func _prepare_hidden_step() -> void:
 		var entry: Dictionary = _prepare_queue.pop_front()
 		var positions: PackedVector3Array = entry.get("positions", PackedVector3Array())
 		if not positions.is_empty():
-			var mesh := ArrayMesh.new()
-			mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, BuildingMeshChunkCodecScript.arrays_for_mesh(entry))
+			var key := String(entry.get("key", ""))
+			var mesh := _active_mesh_for_key(key)
+			if mesh == null:
+				mesh = ArrayMesh.new()
+				mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, BuildingMeshChunkCodecScript.arrays_for_mesh(entry))
+			else:
+				_perf_mesh_reuses += 1
 			var instance := MeshInstance3D.new()
-			instance.name = "Chunk_%s" % String(entry.get("key", ""))
+			instance.name = "Chunk_%s" % key
+			instance.set_meta(CHUNK_KEY_META, key)
 			instance.mesh = mesh
 			instance.material_override = _material
 			instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if cast_shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -359,6 +367,17 @@ func _prepare_hidden_step() -> void:
 		# Publish on the next process tick so the last mesh-preparation frame and the
 		# atomic visibility swap can never combine into one main-thread spike.
 		_prepared_ready = true
+
+func _active_mesh_for_key(key: String) -> ArrayMesh:
+	if key.is_empty() or _active_group == null or not is_instance_valid(_active_group):
+		return null
+	for child_value in _active_group.get_children():
+		var instance := child_value as MeshInstance3D
+		if instance == null or String(instance.get_meta(CHUNK_KEY_META, "")) != key:
+			continue
+		if instance.mesh is ArrayMesh:
+			return instance.mesh as ArrayMesh
+	return null
 
 func _publish_prepared_viewport() -> void:
 	if not _prepared_ready or _prepared_group == null or not is_instance_valid(_prepared_group):
@@ -488,6 +507,7 @@ func debug_snapshot() -> Dictionary:
 		"last_stage_ms": _last_stage_ms,
 		"last_prepare_ms": _last_prepare_ms,
 		"last_publish_ms": _last_publish_ms,
+		"mesh_reuses": _perf_mesh_reuses,
 	}
 
 func consume_perf_metrics() -> Dictionary:
@@ -506,6 +526,7 @@ func consume_perf_metrics() -> Dictionary:
 		"building_bytes_loaded": _perf_bytes_loaded,
 		"building_chunks_loaded": _perf_chunks_loaded,
 		"building_stale_stages": _perf_stale_stages,
+		"building_mesh_reuses": _perf_mesh_reuses,
 		"building_active_chunks": _active_chunks,
 		"building_active_vertices": _active_vertices,
 		"building_cache_chunks": _cache.size(),
@@ -521,4 +542,5 @@ func consume_perf_metrics() -> Dictionary:
 	_perf_bytes_loaded = 0
 	_perf_chunks_loaded = 0
 	_perf_stale_stages = 0
+	_perf_mesh_reuses = 0
 	return result
