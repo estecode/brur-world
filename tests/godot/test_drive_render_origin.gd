@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Verifies Drive presentation rebasing keeps logical world state authoritative while rendering near zero.
+## Verifies Drive presentation rebasing keeps logical world state authoritative while rendering in a small stable local cell.
 ##
 ## Dependencies:
 ## - camera_controller.gd owns the presentation-only Drive render-origin conversion.
@@ -11,6 +11,8 @@ extends SceneTree
 const CameraControllerScript = preload("res://scripts/camera_controller.gd")
 const DriveRenderOriginCompositionScript = preload("res://scripts/drive_render_origin_composition.gd")
 const GpsRouteLayerScript = preload("res://scripts/gps_route_layer.gd")
+const TEST_WORLD_POSITION := Vector3(52277.0, 0.06, 825907.0)
+const MAX_LOCAL_AXIS_M := 512.01
 
 func _init() -> void:
 	call_deferred("_run")
@@ -26,28 +28,33 @@ func _run() -> void:
 	await process_frame
 
 	var target := Node3D.new()
-	target.position = Vector3(52277.0, 0.06, 825907.0)
+	target.position = TEST_WORLD_POSITION
 	root.add_child(target)
 	rig.call("set_follow_target", target)
 	rig.call("set_drive_mode", true)
 	await process_frame
 
 	var render_origin: Vector3 = rig.call("get_render_origin_world")
-	_assert(render_origin.distance_to(Vector3(52277.0, 0.0, 825907.0)) < 0.01, "Drive render origin follows logical target x/z")
-	_assert(Vector2(rig.global_position.x, rig.global_position.z).length() < 0.01, "Drive camera rig renders near local origin")
-	var reconstructed: Vector3 = rig.call("render_to_world_position", Vector3.ZERO)
-	_assert(reconstructed.distance_to(render_origin) < 0.01, "render-to-world conversion preserves logical origin")
+	var target_render: Vector3 = rig.call("world_to_render_position", target.global_position)
+	_assert(absf(target_render.x) <= MAX_LOCAL_AXIS_M and absf(target_render.z) <= MAX_LOCAL_AXIS_M, "Drive target stays inside the 1 km render-origin cell")
+	_assert(Vector2(rig.global_position.x, rig.global_position.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "Drive camera rig uses render-local target coordinates")
+	var reconstructed: Vector3 = rig.call("render_to_world_position", target_render)
+	_assert(reconstructed.distance_to(target.global_position) < 0.01, "render-to-world conversion reconstructs logical target")
 
 	var vehicle_scene := load("res://scenes/player_vehicle.tscn") as PackedScene
 	_assert(vehicle_scene != null, "player vehicle scene loads")
 	var vehicle := vehicle_scene.instantiate() as Node3D
 	root.add_child(vehicle)
-	vehicle.call("set_world_position", Vector3(52277.0, 0.06, 825907.0))
-	var logical_before := vehicle.global_position
+	vehicle.call("set_world_position", TEST_WORLD_POSITION)
+	vehicle.call("set_heading_rad", 0.73)
+	var logical_before := vehicle.global_transform
 	vehicle.call("set_render_origin_world", render_origin)
 	var visual_root := vehicle.get_node("VisualRoot") as Node3D
-	_assert(vehicle.global_position.distance_to(logical_before) < 0.001, "vehicle logical root is unchanged by render rebasing")
-	_assert(Vector2(visual_root.global_position.x, visual_root.global_position.z).length() < 0.01, "vehicle visual renders near local origin")
+	var expected_visual := vehicle.global_position - render_origin
+	_assert(vehicle.global_transform.is_equal_approx(logical_before), "vehicle logical transform is unchanged by render rebasing")
+	_assert(visual_root.top_level, "vehicle visual is detached from the large logical parent transform")
+	_assert(visual_root.global_position.distance_to(expected_visual) < 0.01, "vehicle visual uses render-local world position")
+	_assert(visual_root.global_basis.is_equal_approx(vehicle.global_basis), "vehicle visual preserves logical heading in render-local frame")
 
 	var world := Node3D.new()
 	var poi := Node3D.new()
@@ -75,7 +82,7 @@ func _run() -> void:
 	for presentation in [world, poi, cloud, buildings]:
 		_assert(Vector2(presentation.position.x, presentation.position.z).length() < 0.01, "Map presentation restores canonical world frame")
 	vehicle.call("set_render_origin_world", Vector3.ZERO)
-	_assert(Vector2(visual_root.global_position.x, visual_root.global_position.z).distance_to(Vector2(vehicle.global_position.x, vehicle.global_position.z)) < 0.01, "vehicle visual restores logical Map position")
+	_assert(visual_root.global_position.distance_to(vehicle.global_position) < 0.01, "vehicle visual restores logical Map position")
 
 	composition.free()
 	gps_layer.free()
