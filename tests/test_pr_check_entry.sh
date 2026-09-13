@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verifies current-main Safe Check bootstrap plus persistent mapped-checkout logging on success and failure.
+# Verifies current-main Safe Check bootstrap plus connector-visible mapped-checkout logging on success and failure.
 # Dependencies: bash, git, mktemp, tools/pr_check_entry.sh, tools/run_pr_owned_check.sh, and a fake gh PR metadata response.
 set -euo pipefail
 
@@ -68,12 +68,13 @@ if printf '%s\n' "$output" | grep -q 'LAUNCHER=OLD'; then
   printf 'stale mapped launcher was executed\n' >&2
   exit 1
 fi
-SUCCESS_LOG="$MAPPED/.safecommand/logs/pr-check-97.log"
+SUCCESS_LOG="$MAPPED/safecommand-logs/pr-check-97.log"
 [[ -f "$SUCCESS_LOG" ]]
 grep -q 'PR_CHECK=LOG_STARTED pr=97' "$SUCCESS_LOG"
 grep -q 'PR_CHECK=MANUAL_REVIEW none pr=97 source=pr-merge-decision' "$SUCCESS_LOG"
 grep -q 'LAUNCHER=NEW pr=97 manual=none' "$SUCCESS_LOG"
 grep -q 'PR_CHECK=LOG_FINISHED pr=97 exit=0' "$SUCCESS_LOG"
+[[ ! -e "$MAPPED/.safecommand/logs/pr-check-97.log" ]]
 
 rm "$SEED/tools/pr_check.sh"
 git -C "$SEED" add -u
@@ -119,10 +120,11 @@ env -u BRUR_PR_CHECK_LOG_PATH -u BRUR_PR_CHECK_MAPPED_ROOT \
 fallback_status=$?
 set -e
 [[ "$fallback_status" -eq 23 ]] || { printf 'expected fallback hook exit 23, got %s\n' "$fallback_status" >&2; exit 1; }
-FALLBACK_LOG="$MAPPED/.safecommand/logs/pr-check-98.log"
+FALLBACK_LOG="$MAPPED/safecommand-logs/pr-check-98.log"
 [[ -f "$FALLBACK_LOG" ]]
 grep -q 'PR_CHECK=LOG_FALLBACK .*reason=stale-mapped-entrypoint' "$FALLBACK_LOG"
 grep -q 'FALLBACK_HOOK_FAILURE pr=98' "$FALLBACK_LOG"
 grep -q 'PR_CHECK=LOG_FALLBACK_FINISHED pr=98 exit=23' "$FALLBACK_LOG"
+[[ ! -e "$MAPPED/.safecommand/logs/pr-check-98.log" ]]
 
 printf 'PR_CHECK_ENTRY_TEST=PASS\n'
