@@ -75,10 +75,18 @@ func _test_renderer_fixture() -> void:
 	var drive_route_height := float(renderer.call("route_height"))
 	_assert(drive_route_height > drive_road_height, "close-drive route stays above the road surface")
 	_assert(drive_route_height - drive_road_height <= 0.20, "close-drive route clearance stays visually attached to the road")
+	var route_mesh := renderer.get_node("GpsRoute") as MeshInstance3D
+	var route_outline := renderer.get_node("GpsRouteOutline") as MeshInstance3D
+	var route_material := route_mesh.material_override as StandardMaterial3D
+	var outline_material := route_outline.material_override as StandardMaterial3D
+	_assert(not route_material.no_depth_test, "close-drive route depth-tests so the player/world can occlude it")
+	_assert(not outline_material.no_depth_test, "close-drive route outline depth-tests with the core ribbon")
 
 	var map_road_height := 24.0
 	renderer.call("update_height", 6000.0, map_road_height)
 	_assert(_approx(float(renderer.call("route_height")), map_road_height + 4.0), "map route preserves one layer of clearance above the road")
+	_assert(route_material.no_depth_test, "map route preserves always-visible overlay behavior")
+	_assert(outline_material.no_depth_test, "map route outline preserves always-visible overlay behavior")
 
 	_assert(not bool(renderer.call("apply_response", {"success": false, "failure_reason": "unreachable"})), "failed route clears renderer")
 	_assert(int(renderer.call("rendered_point_count")) == 0, "failed route leaves no route geometry")
