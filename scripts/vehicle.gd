@@ -7,6 +7,7 @@ class_name Vehicle
 ## - Owns portable vehicle state and delegates deterministic motion/resource limits to VehicleDynamics.
 ## - Accepts generic controls from exactly one explicit control owner at a time.
 ## - Receives surface classification explicitly and applies portable VehicleSurfacePolicy modifiers during manual control.
+## - Accepts a presentation-only render origin for its VisualRoot without changing logical vehicle state.
 ## - Has no dependency on player input, GPS routing policy, world rendering, traffic AI, police AI, or camera code.
 
 const VehicleStateScript = preload("res://scripts/vehicle_state.gd")
@@ -126,6 +127,14 @@ func set_world_position(new_position: Vector3) -> void:
 	_state.z_m = new_position.z
 	_state_initialized = true
 	global_position = Vector3(new_position.x, new_position.y, new_position.z)
+
+func set_render_origin_world(render_origin: Vector3) -> void:
+	# Vehicle state and root transform stay in authoritative world coordinates.
+	# Only the dedicated visual child is translated into the Drive render frame.
+	var visual_root := get_node_or_null("VisualRoot") as Node3D
+	if visual_root == null:
+		return
+	visual_root.position = Vector3(-render_origin.x, 0.0, -render_origin.z)
 
 func set_heading_rad(new_heading_rad: float) -> void:
 	_state.heading_rad = wrapf(new_heading_rad, -PI, PI)
