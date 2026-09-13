@@ -16,6 +16,7 @@ import json
 import math
 import pickle
 import shutil
+import struct
 import sys
 import time
 from pathlib import Path
@@ -45,6 +46,7 @@ WAY_PROGRESS_INTERVAL = 250_000
 RELATION_PROGRESS_INTERVAL = 50_000
 NODE_BUCKETS = 64
 MAX_OPEN_NODE_BUCKETS = 8
+NODE_RECORD = struct.Struct("<qdd")
 
 POI_KEYS = {
     "amenity", "shop", "tourism", "leisure", "office", "healthcare", "emergency",
@@ -159,6 +161,17 @@ def _pickle_iter(path: Path) -> Iterator[object]:
                 yield pickle.load(handle)
             except EOFError:
                 break
+
+
+def _node_record_iter(path: Path) -> Iterator[tuple[int, float, float]]:
+    if not path.is_file():
+        return
+    with path.open("rb") as handle:
+        while raw := handle.read(NODE_RECORD.size):
+            if len(raw) != NODE_RECORD.size:
+                raise ValueError(f"Corrupt compact node spool record: {path}")
+            node_id, lon, lat = NODE_RECORD.unpack(raw)
+            yield int(node_id), float(lon), float(lat)
 
 
 def _valid_location(node: osmium.osm.NodeRef) -> tuple[float, float] | None:
@@ -375,25 +388,37 @@ class _RouteWriter:
         self.ways_file: TextIO = self.ways_path.open("w", encoding="utf-8")
         self.relations_file: TextIO = self.relations_path.open("w", encoding="utf-8")
         self.bucket_handles: OrderedDict[int, BinaryIO] = OrderedDict()
+        self.tagged_bucket_handles: OrderedDict[int, BinaryIO] = OrderedDict()
         self.counts = {"nodes": 0, "ways": 0, "relations": 0}
+
+    def _open_bucket(self, handles: OrderedDict[int, BinaryIO], bucket: int, suffix: str) -> BinaryIO:
+        handle = handles.get(bucket)
+        if handle is not None:
+            handles.move_to_end(bucket)
+            return handle
+        if len(handles) >= MAX_OPEN_NODE_BUCKETS:
+            _old_bucket, old_handle = handles.popitem(last=False)
+            old_handle.close()
+        handle = (self.work_dir / f"nodes-{bucket:02d}{suffix}").open("ab")
+        handles[bucket] = handle
+        return handle
 
     def _bucket(self, node_id: int) -> BinaryIO:
         bucket = node_id % NODE_BUCKETS
-        handle = self.bucket_handles.get(bucket)
-        if handle is not None:
-            self.bucket_handles.move_to_end(bucket)
-            return handle
-        if len(self.bucket_handles) >= MAX_OPEN_NODE_BUCKETS:
-            _old_bucket, old_handle = self.bucket_handles.popitem(last=False)
-            old_handle.close()
-        handle = (self.work_dir / f"nodes-{bucket:02d}.pkl").open("ab")
-        self.bucket_handles[bucket] = handle
-        return handle
+        return self._open_bucket(self.bucket_handles, bucket, ".bin")
+
+    def _tagged_bucket(self, node_id: int) -> BinaryIO:
+        bucket = node_id % NODE_BUCKETS
+        return self._open_bucket(self.tagged_bucket_handles, bucket, ".tags.pkl")
 
     def add_node(self, node_id: int, lon: float, lat: float, tags: dict[str, str] | None = None) -> None:
         if not math.isfinite(lon) or not math.isfinite(lat):
             return
-        _pickle_append(self._bucket(node_id), (node_id, lon, lat, tags or {}))
+        node_tags = tags or {}
+        if node_tags:
+            _pickle_append(self._tagged_bucket(node_id), (node_id, lon, lat, node_tags))
+        else:
+            self._bucket(node_id).write(NODE_RECORD.pack(node_id, lon, lat))
 
     def add_way(self, record: tuple[int, list[tuple[int, float, float]], dict[str, str]]) -> None:
         way_id, nodes, tags = record
@@ -424,9 +449,10 @@ class _RouteWriter:
             self.ways_file.close()
         if not self.relations_file.closed:
             self.relations_file.close()
-        for handle in self.bucket_handles.values():
-            handle.close()
-        self.bucket_handles.clear()
+        for handles in (self.bucket_handles, self.tagged_bucket_handles):
+            for handle in handles.values():
+                handle.close()
+            handles.clear()
 
     def publish(self) -> dict[str, int]:
         self.close_inputs()
@@ -435,15 +461,17 @@ class _RouteWriter:
             output.write('<?xml version="1.0" encoding="UTF-8"?>\n')
             output.write('<osm version="0.6" generator="brur-world-osm-source-cache">\n')
             for bucket in range(NODE_BUCKETS):
-                bucket_path = self.work_dir / f"nodes-{bucket:02d}.pkl"
-                if not bucket_path.is_file():
+                compact_path = self.work_dir / f"nodes-{bucket:02d}.bin"
+                tagged_path = self.work_dir / f"nodes-{bucket:02d}.tags.pkl"
+                if not compact_path.is_file() and not tagged_path.is_file():
                     continue
                 unique: dict[int, tuple[float, float, dict[str, str]]] = {}
-                for raw in _pickle_iter(bucket_path):
+                for node_id, lon, lat in _node_record_iter(compact_path):
+                    if node_id not in unique:
+                        unique[node_id] = (lon, lat, {})
+                for raw in _pickle_iter(tagged_path):
                     node_id, lon, lat, tags = raw
-                    current = unique.get(node_id)
-                    if current is None or tags:
-                        unique[node_id] = (lon, lat, tags)
+                    unique[int(node_id)] = (float(lon), float(lat), dict(tags))
                 for node_id, (lon, lat, tags) in unique.items():
                     output.write(
                         f"  <node id={quoteattr(str(node_id))} lon={quoteattr(repr(lon))} lat={quoteattr(repr(lat))}"
