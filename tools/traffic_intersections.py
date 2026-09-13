@@ -216,12 +216,14 @@ class _TopologyIndex:
         self.neighbors: dict[int, list[tuple[int, int]]] = {index: [] for index in range(len(graph.nodes))}
         self.incident_ways: dict[int, set[int]] = {index: set() for index in range(len(graph.nodes))}
         self.outgoing: dict[int, list] = {index: [] for index in range(len(graph.nodes))}
+        self.incoming: dict[int, list] = {index: [] for index in range(len(graph.nodes))}
         seen: set[tuple[int, int, int]] = set()
         for edge in graph.edges:
             self.incident_ways[edge.source_index].add(edge.way_id)
             self.incident_ways[edge.target_index].add(edge.way_id)
             if is_edge_allowed(edge, RoutingProfile.NORMAL):
                 self.outgoing[edge.source_index].append(edge)
+                self.incoming[edge.target_index].append(edge)
             key = (min(edge.source_index, edge.target_index), max(edge.source_index, edge.target_index), edge.way_id)
             if key not in seen:
                 self.neighbors[edge.source_index].append((edge.target_index, edge.way_id))
@@ -231,6 +233,8 @@ class _TopologyIndex:
             rows.sort(key=lambda row: (graph.nodes[row[0]].osm_id, row[1]))
         for rows in self.outgoing.values():
             rows.sort(key=lambda edge: (edge.way_id, graph.nodes[edge.target_index].osm_id, edge.segment_index))
+        for rows in self.incoming.values():
+            rows.sort(key=lambda edge: (edge.way_id, graph.nodes[edge.source_index].osm_id, edge.segment_index))
 
     def _is_branch_junction(self, node_index: int) -> bool:
         """Return whether routing topology actually branches at this node.
@@ -280,6 +284,16 @@ class _TopologyIndex:
         options.sort(key=lambda node: (-math.hypot(node.x - junction.x, node.y - junction.y), node.osm_id))
         return (options[0].x, options[0].y)
 
+    def incoming_branches(self, junction_index: int, way_ids: tuple[int, ...]) -> tuple[tuple[int, int], ...]:
+        allowed = set(way_ids)
+        rows: dict[tuple[int, int], tuple[int, int]] = {}
+        for edge in self.incoming[junction_index]:
+            if allowed and edge.way_id not in allowed:
+                continue
+            key = (edge.source_index, edge.way_id)
+            rows[key] = key
+        return tuple(sorted(rows.values(), key=lambda row: (self.graph.nodes[row[0]].osm_id, row[1])))
+
     def exits(self, junction_index: int) -> tuple[Exit, ...]:
         rows: dict[tuple[int, int], Exit] = {}
         for edge in self.outgoing[junction_index]:
@@ -293,12 +307,89 @@ def graph_node_id(graph: RoutingGraph, index: int) -> int:
     return graph.nodes[index].osm_id
 
 
-def _relationship_source(direction_source: str, way_ids: tuple[int, ...], approach_xy: tuple[float, float], junction_xy: tuple[float, float]) -> str:
+def _relationship_source(
+    direction_source: str,
+    way_ids: tuple[int, ...],
+    approach_xy: tuple[float, float],
+    junction_xy: tuple[float, float],
+) -> str:
     if direction_source in {"explicit", "legacy", "inferred"}:
         return "explicit" if direction_source in {"explicit", "legacy"} else "inferred"
     if len(way_ids) == 1 and math.hypot(approach_xy[0] - junction_xy[0], approach_xy[1] - junction_xy[1]) > 1.0:
         return "inferred"
     return "unresolved"
+
+
+def _append_distinct_approach(
+    approaches: list[Approach], candidate: Approach, junction_xy: tuple[float, float]
+) -> None:
+    candidate_dir = _unit_from_junction((candidate.x, candidate.y), junction_xy)
+    for current in approaches:
+        current_dir = _unit_from_junction((current.x, current.y), junction_xy)
+        if candidate_dir != (0.0, 0.0) and _same_direction(candidate_dir, current_dir):
+            return
+    approaches.append(candidate)
+
+
+def _signal_approach(
+    signal: dict,
+    signal_index: int,
+    junction_index: int,
+    topology: _TopologyIndex,
+    junction_xy: tuple[float, float],
+) -> Approach:
+    signal_osm = int(signal["osm_node_id"])
+    way_ids = tuple(sorted({int(item) for item in signal.get("highway_way_ids", [])}))
+    approach_xy = topology.outward_point(signal_index, junction_index, way_ids)
+    explicit = bool(signal.get("explicit_stop_line"))
+    explicit_xy = (float(signal["x"]), float(signal["y"])) if explicit else None
+    stop = derive_stop_position(approach_xy, junction_xy, explicit_xy=explicit_xy)
+    direction_source = str(signal.get("direction_source", "unknown"))
+    relationship_source = _relationship_source(direction_source, way_ids, approach_xy, junction_xy)
+    return Approach(
+        id=f"approach:{signal['id']}",
+        signal_id=str(signal["id"]),
+        signal_osm_node_id=signal_osm,
+        way_ids=way_ids,
+        x=float(approach_xy[0]),
+        y=float(approach_xy[1]),
+        direction_source=direction_source,
+        relationship_source=relationship_source,
+        stop=stop,
+        resolved=relationship_source != "unresolved",
+    )
+
+
+def _junction_signal_approaches(
+    signal: dict,
+    junction_index: int,
+    topology: _TopologyIndex,
+    junction_xy: tuple[float, float],
+) -> tuple[Approach, ...]:
+    signal_id = str(signal["id"])
+    signal_osm = int(signal["osm_node_id"])
+    way_ids = tuple(sorted({int(item) for item in signal.get("highway_way_ids", [])}))
+    direction_source = str(signal.get("direction_source", "unknown"))
+    rows: list[Approach] = []
+    for source_index, way_id in topology.incoming_branches(junction_index, way_ids):
+        source = topology.graph.nodes[source_index]
+        approach_xy = (source.x, source.y)
+        stop = derive_stop_position(approach_xy, junction_xy)
+        rows.append(
+            Approach(
+                id=f"approach:{signal_id}:w{way_id}:n{source.osm_id}",
+                signal_id=signal_id,
+                signal_osm_node_id=signal_osm,
+                way_ids=(way_id,),
+                x=float(source.x),
+                y=float(source.y),
+                direction_source=direction_source,
+                relationship_source="inferred",
+                stop=stop,
+                resolved=True,
+            )
+        )
+    return tuple(rows)
 
 
 def build_from_runtime_data(signal_dataset: dict, graph: RoutingGraph, *, max_hops: int = 16) -> BuildReport:
@@ -332,6 +423,8 @@ def build_from_runtime_data(signal_dataset: dict, graph: RoutingGraph, *, max_ho
         junction = graph.nodes[junction_index]
         junction_xy = (junction.x, junction.y)
         approaches: list[Approach] = []
+        central_signals: list[dict] = []
+
         for signal in sorted(group, key=lambda item: str(item.get("id", ""))):
             signal_osm = int(signal["osm_node_id"])
             signal_index = topology.node_by_osm.get(signal_osm)
@@ -339,30 +432,35 @@ def build_from_runtime_data(signal_dataset: dict, graph: RoutingGraph, *, max_ho
                 unresolved.append(str(signal.get("id", "")))
                 continue
             way_ids = tuple(sorted({int(item) for item in signal.get("highway_way_ids", [])}))
-            approach_xy = topology.outward_point(signal_index, junction_index, way_ids)
-            explicit = bool(signal.get("explicit_stop_line"))
-            explicit_xy = (float(signal["x"]), float(signal["y"])) if explicit else None
-            stop = derive_stop_position(approach_xy, junction_xy, explicit_xy=explicit_xy)
-            direction_source = str(signal.get("direction_source", "unknown"))
-            relationship_source = _relationship_source(direction_source, way_ids, approach_xy, junction_xy)
-            approaches.append(
-                Approach(
-                    id=f"approach:{signal['id']}",
-                    signal_id=str(signal["id"]),
-                    signal_osm_node_id=signal_osm,
-                    way_ids=way_ids,
-                    x=float(approach_xy[0]),
-                    y=float(approach_xy[1]),
-                    direction_source=direction_source,
-                    relationship_source=relationship_source,
-                    stop=stop,
-                    resolved=relationship_source != "unresolved",
-                )
+            if signal_index == junction_index and len(way_ids) >= 2:
+                central_signals.append(signal)
+                continue
+            _append_distinct_approach(
+                approaches,
+                _signal_approach(signal, signal_index, junction_index, topology, junction_xy),
+                junction_xy,
             )
+
+        for signal in central_signals:
+            derived = _junction_signal_approaches(signal, junction_index, topology, junction_xy)
+            if not derived:
+                unresolved.append(str(signal.get("id", "")))
+                continue
+            for candidate in derived:
+                _append_distinct_approach(approaches, candidate, junction_xy)
+
         exits = topology.exits(junction_index)
         if not approaches or not exits:
             unresolved.extend(item.signal_id for item in approaches)
             continue
-        intersections.append(build_intersection(f"junction-node:{junction.osm_id}", junction.osm_id, junction_xy, approaches, exits))
+        intersections.append(
+            build_intersection(
+                f"junction-node:{junction.osm_id}",
+                junction.osm_id,
+                junction_xy,
+                approaches,
+                exits,
+            )
+        )
 
     return BuildReport(tuple(intersections), tuple(sorted(set(unresolved))))
