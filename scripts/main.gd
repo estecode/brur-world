@@ -219,20 +219,14 @@ func _background_render_priority(kind: int) -> int:
 			return -1
 	return -5
 
-func _configure_background_material(mat: StandardMaterial3D, kind: int, ocean_base: bool, drive_mode: bool) -> void:
-	if drive_mode:
-		# Drive is a normal near-ground 3D scene. Background geometry must take
-		# part in the depth buffer so it cannot be composited over roads, vehicles
-		# or building bottoms after opaque geometry has already rendered.
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
-		mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
-		mat.render_priority = 0
-	else:
-		# Map mode intentionally composites overlapping BRM2 categories by stable
-		# render priority instead of relying on tiny depth differences at altitude.
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-		mat.render_priority = BACKGROUND_OCEAN_PRIORITY if ocean_base else _background_render_priority(kind)
+func _configure_background_material(mat: StandardMaterial3D, kind: int, ocean_base: bool, _drive_mode: bool) -> void:
+	# PR #155 established that overlapping BRM2/ocean surfaces must never decide
+	# visual precedence through the depth buffer. Drive keeps the larger physical
+	# separation introduced by #235, but uses the same deterministic compositor so
+	# camera movement cannot make ground classes fight or bleed into building bases.
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.render_priority = BACKGROUND_OCEAN_PRIORITY if ocean_base else _background_render_priority(kind)
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.albedo_color = _map_color(kind)
 	mat.roughness = 1.0 if ocean_base else 0.95
