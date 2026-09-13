@@ -2,7 +2,7 @@
 
 Dependencies:
 - Imports tools/windows_build/package.py directly.
-- Checks the selected-revision target invokes the existing showcase preparation CLI correctly.
+- Checks the selected-revision target prepares runtime data without overriding the production startup scene.
 - Uses temporary synthetic binaries/runtime data; it does not require Godot or real world data.
 """
 
@@ -105,12 +105,21 @@ class WindowsPackageTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 windows_package.package_client(binary, runtime, build_info, source_manifest, root / "client.zip")
 
-    def test_target_passes_required_output_flag_to_showcase_preparer(self) -> None:
+    def test_target_passes_required_output_flag_to_runtime_preparer(self) -> None:
         target = TARGET_PATH.read_text(encoding="utf-8")
         self.assertIn(
             '"$BRUR_WINDOWS_WORLD_DATA" --output "$BRUR_WINDOWS_RUNTIME_DATA_OUT"',
             target,
         )
+
+    def test_target_preserves_selected_revision_production_entrypoint(self) -> None:
+        target = TARGET_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("project.godot", "\n".join(
+            line for line in target.splitlines() if not line.startswith("#")
+        ))
+        self.assertNotIn("world_showcase.tscn", target)
+        self.assertNotIn("world_showcase_windows.tscn", target)
+        self.assertIn('--export-release "Windows Desktop"', target)
 
 
 if __name__ == "__main__":
