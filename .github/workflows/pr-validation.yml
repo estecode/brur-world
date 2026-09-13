@@ -150,6 +150,10 @@ jobs:
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_person_foundation.gd
 
+      - name: Run pedestrian population tests
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_pedestrian_population.gd
+
       - name: Run police observation store tests
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_police_observation_store.gd
