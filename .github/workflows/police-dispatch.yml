@@ -1,0 +1,37 @@
+name: Police dispatch validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  police-dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4 headless runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT_VERSION="4.5.1-stable"
+          GODOT_ZIP="$RUNNER_TEMP/godot.zip"
+          GODOT_DIR="$RUNNER_TEMP/godot"
+          mkdir -p "$GODOT_DIR"
+          curl -fsSL \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" \
+            -o "$GODOT_ZIP"
+          unzip -q "$GODOT_ZIP" -d "$GODOT_DIR"
+          GODOT_BIN="$GODOT_DIR/Godot_v${GODOT_VERSION}_linux.x86_64"
+          chmod +x "$GODOT_BIN"
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+
+      - name: Run finite police dispatch tests headless
+        run: bash tools/test_police_dispatch.sh
