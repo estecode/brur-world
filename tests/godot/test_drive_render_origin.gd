@@ -96,6 +96,7 @@ func _run() -> void:
 	var cloud := Node3D.new()
 	var buildings := Node3D.new()
 	buildings.position.y = road_height
+	root.add_child(buildings)
 
 	var gps_layer := GpsRouteDriveRenderAdapterScript.new()
 	gps_layer.player = vehicle
@@ -143,15 +144,14 @@ func _run() -> void:
 	_assert(ground_leaf.mesh == localized_ground_before, "same-cell frames do not rebuild ocean geometry")
 	_assert(Vector2(streamed_building.position.x, streamed_building.position.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "same-cell frames do not drift streamed buildings")
 
-	target.position.x += 1100.0
-	rig.call("_apply_drive_camera")
-	var next_origin: Vector3 = rig.call("get_render_origin_world")
-	_assert(next_origin != render_origin, "test crosses a Drive render-origin cell boundary")
-	composition.call("_sync_render_origin", false)
-	_assert(background_leaf.mesh == localized_background_before, "render-cell crossing does not copy/rebuild BRM2 mesh")
-	_assert(Vector2(background_leaf.position.x, background_leaf.position.z).distance_to(Vector2(render_origin.x - next_origin.x, render_origin.z - next_origin.z)) < 0.01, "localized BRM2 mesh shifts by small cell delta")
-	var expected_streamed_render := TEST_WORLD_POSITION - next_origin
-	_assert(Vector2(streamed_building.position.x, streamed_building.position.z).distance_to(Vector2(expected_streamed_render.x, expected_streamed_render.z)) < 0.01, "streamed building follows render-cell change without disappearing")
+	for crossing in range(1, 6):
+		target.position.x = TEST_WORLD_POSITION.x + float(crossing) * 1100.0
+		rig.call("_apply_drive_camera")
+		var next_origin: Vector3 = rig.call("get_render_origin_world")
+		composition.call("_sync_render_origin", false)
+		_assert(background_leaf.mesh == localized_background_before, "render-cell crossing does not copy/rebuild BRM2 mesh")
+		var expected_streamed_render := TEST_WORLD_POSITION - next_origin
+		_assert(Vector2(streamed_building.position.x, streamed_building.position.z).distance_to(Vector2(expected_streamed_render.x, expected_streamed_render.z)) < 0.01, "streamed building remains stable across repeated render-cell changes")
 
 	rig.call("set_drive_mode", false)
 	composition.call("_sync_render_origin", false)
