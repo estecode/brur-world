@@ -71,6 +71,14 @@ func _test_route_ribbon_contract(renderer: Node) -> void:
 	_assert(drive_outline_width > drive_width, "Drive view keeps a visible contrast outline around the route")
 	_assert(drive_target_scale < 0.1, "Drive view keeps the destination marker compact")
 
+	# Regression for the driving harness camera distance: a near-ground/follow camera around 115 m
+	# must not fall into kilometer-scale map presentation and obscure the driving scene.
+	renderer.call("update_height", 115.0, 0.19)
+	_assert(is_equal_approx(float(renderer.call("ribbon_width_m")), drive_width), "115 m near-ground view keeps bounded Drive ribbon width")
+	_assert(float(renderer.call("outline_width_m")) <= 25.0, "115 m near-ground outline stays proportionate to a local road")
+	_assert(float(renderer.call("target_scale")) < 0.1, "115 m near-ground destination marker stays compact")
+	_assert(float(renderer.call("route_height")) < 1.0, "115 m near-ground route stays close to the road surface")
+
 	renderer.call("update_height", 5700.0)
 	var map_width := float(renderer.call("ribbon_width_m"))
 	var map_outline_width := float(renderer.call("outline_width_m"))

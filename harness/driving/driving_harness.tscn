@@ -32,8 +32,8 @@ layer = 80
 [node name="Panel" type="PanelContainer" parent="Ui"]
 offset_left = 16.0
 offset_top = 16.0
-offset_right = 410.0
-offset_bottom = 224.0
+offset_right = 490.0
+offset_bottom = 390.0
 
 [node name="Margin" type="MarginContainer" parent="Ui/Panel"]
 theme_override_constants/margin_left = 12
@@ -45,23 +45,41 @@ theme_override_constants/margin_bottom = 10
 theme_override_constants/separation = 6
 
 [node name="Title" type="Label" parent="Ui/Panel/Margin/VBox"]
-text = "DRIVING HARNESS — connected streets + ring road"
+text = "DRIVING HARNESS — manual + GPS AI driver"
 
 [node name="Help" type="Label" parent="Ui/Panel/Margin/VBox"]
-text = "W/S accelerate/reverse · A/D steer · Space brake"
+text = "Set Route starts GPS driving immediately. Manual: W/S accelerate/reverse · A/D steer · Space brake\nSwitch Manual/GPS and AI modes freely without resetting the vehicle."
+
+[node name="SetRoute" type="Button" parent="Ui/Panel/Margin/VBox"]
+text = "Set Route + Start GPS Drive"
+
+[node name="ClearRoute" type="Button" parent="Ui/Panel/Margin/VBox"]
+text = "Clear Route"
+
+[node name="ControlLabel" type="Label" parent="Ui/Panel/Margin/VBox"]
+text = "Control owner"
+
+[node name="ControlMode" type="OptionButton" parent="Ui/Panel/Margin/VBox"]
+
+[node name="ModeLabel" type="Label" parent="Ui/Panel/Margin/VBox"]
+text = "AI driving policy (GPS Drive only)"
+
+[node name="DrivingMode" type="OptionButton" parent="Ui/Panel/Margin/VBox"]
+
+[node name="IntersectionLabel" type="Label" parent="Ui/Panel/Margin/VBox"]
+text = "Cross-traffic gap at test intersection"
+
+[node name="IntersectionGap" type="OptionButton" parent="Ui/Panel/Margin/VBox"]
 
 [node name="Speed" type="Label" parent="Ui/Panel/Margin/VBox"]
-text = "Speed: 0.0 km/h"
+text = "Speed: 0.0 km/h   Road limit: 50 km/h"
 
 [node name="Status" type="Label" parent="Ui/Panel/Margin/VBox"]
-text = "Control: MANUAL   Route: VISIBLE / MANUAL   Camera: FOLLOW"
-
-[node name="FollowRoute" type="CheckButton" parent="Ui/Panel/Margin/VBox"]
-text = "Follow route"
+text = "Control: MANUAL   Route: NONE   AI: inactive   Intersection: 8.0 s gap   Camera: FOLLOW"
 
 [node name="FollowCar" type="CheckButton" parent="Ui/Panel/Margin/VBox"]
 text = "Follow car"
 button_pressed = true
 
 [node name="Reset" type="Button" parent="Ui/Panel/Margin/VBox"]
-text = "Reset car"
+text = "Reset car (keep route/control mode)"

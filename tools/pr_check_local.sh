@@ -27,8 +27,12 @@ CITY_LIGHT_SCOPE="$(scope_decision city-lights)"
 WORLD_SHOWCASE_SCOPE="$(scope_decision world-showcase)"
 BUILDING_TILE_SCOPE="$(scope_decision building-tiles)"
 TRAFFIC_INTERSECTION_SCOPE="skip"
+DRIVING_VISUAL_SCOPE="skip"
 if printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(traffic_intersections\.py|check_traffic_intersections_real_data\.py|test_traffic_intersections\.py)$'; then
   TRAFFIC_INTERSECTION_SCOPE="required"
+fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(harness/driving/|scripts/(route_driving_policy|vehicle_route_follower|vehicle_dynamics|player_vehicle|player_vehicle_controller)\.gd$|scenes/player_vehicle\.tscn$)'; then
+  DRIVING_VISUAL_SCOPE="required"
 fi
 
 if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" ]]; then
@@ -48,6 +52,9 @@ if [[ "$BUILDING_TILE_SCOPE" == "skip" ]]; then
 fi
 if [[ "$TRAFFIC_INTERSECTION_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_TRAFFIC_INTERSECTIONS pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
+fi
+if [[ "$DRIVING_VISUAL_SCOPE" == "skip" ]]; then
+  printf 'PR_CHECK=SKIP_DRIVING_VISUAL_REVIEW pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
 fi
 
 if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$TRAFFIC_INTERSECTION_SCOPE" == "skip" ]]; then
@@ -222,12 +229,17 @@ PY
   run_godot_test res://tests/godot/test_world_showcase.gd
 fi
 
-if [[ "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" ]]; then
+if [[ "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$DRIVING_VISUAL_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "$BRUR_PR_CHECK_PR"
   exit 0
 fi
 
 printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
+if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then
+  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION use Follow route and compare Driving policy Normal, Aggressive and Maniac on the same loop; confirm they feel clearly distinct and ordered in assertiveness; close Godot when finished\n'
+  "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"
+  exit 0
+fi
 if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
   printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION confirm HUS starts OFF; turn HUS ON and zoom/pan across Stockholm: each settled viewport must appear coherently in one swap with no block-by-block reveal, remain playable, and reuse nearby views quickly; turn HUS OFF and verify buildings disappear; close Godot when finished\n'
 else
