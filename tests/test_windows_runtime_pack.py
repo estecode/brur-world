@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import struct
 import tempfile
 import unittest
 import zipfile
@@ -39,6 +40,23 @@ class WindowsRuntimePackTests(unittest.TestCase):
         obsolete.mkdir()
         (obsolete / "0_0.jsonl").write_text("obsolete\n", encoding="utf-8")
         return source
+
+    def _bmc2_fixture(self, path: Path) -> bytes:
+        vertices = [
+            (0.0, 9.0, 0.0, 0.0, 1.0, 0.0, 140, 142, 144, 255),
+            (10.0, 9.0, 0.0, 0.0, 1.0, 0.0, 140, 142, 144, 255),
+            (0.0, 9.0, 10.0, 0.0, 1.0, 0.0, 140, 142, 144, 255),
+            (0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 90, 92, 95, 255),
+            (0.0, 0.0, 10.0, -1.0, 0.0, 0.0, 90, 92, 95, 255),
+            (0.0, 9.0, 10.0, -1.0, 0.0, 0.0, 110, 112, 115, 255),
+        ]
+        payload = bytearray(runtime_pack.BMC_HEADER.pack(runtime_pack.BMC2_MAGIC, runtime_pack.BMC2_VERSION, len(vertices)))
+        payload += runtime_pack.BMC2_RECORD.pack(123.0, -456.0, len(vertices))
+        for vertex in vertices:
+            payload += runtime_pack.BMC2_VERTEX.pack(*vertex)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        return bytes(payload)
 
     def test_second_unchanged_build_reuses_hashes_and_pack(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -127,9 +145,45 @@ class WindowsRuntimePackTests(unittest.TestCase):
                 self.assertIn("world_data/building_mesh_lod/0_0.bin", names)
                 self.assertNotIn("world_data/building_tiles/0_0.jsonl", names)
                 manifest = json.loads(archive.read("world_data/windows_runtime_manifest.json"))
-            self.assertEqual(report["pack_format_version"], 1)
+            self.assertEqual(report["pack_format_version"], 3)
             self.assertEqual(manifest["fingerprint"], report["fingerprint"])
             self.assertEqual(manifest["sha256"], report["runtime_files"])
+            self.assertEqual(
+                manifest["transforms"]["building_mesh_lod"],
+                "BMC2=>BMC3:q0.1m:norm8:palette3",
+            )
+
+    def test_bmc2_building_chunk_is_compacted_inside_windows_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self._source_fixture(root)
+            source_chunk = source / "building_mesh_lod" / "lod3" / "1_2.bmc"
+            original = self._bmc2_fixture(source_chunk)
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                report = runtime_pack.prepare_cached_runtime_pack(source, root / "cache")
+
+            with zipfile.ZipFile(report["pack_path"]) as archive:
+                compact = archive.read("world_data/building_mesh_lod/lod3/1_2.bmc")
+            magic, version, vertex_count = runtime_pack.BMC_HEADER.unpack_from(compact, 0)
+            self.assertEqual(magic, runtime_pack.BMC3_MAGIC)
+            self.assertEqual(version, runtime_pack.BMC3_VERSION)
+            self.assertEqual(vertex_count, 6)
+            self.assertLess(len(compact), len(original) * 0.6)
+            self.assertIn("WINDOWS_RUNTIME_TRANSFORM category=building_mesh_lod", output.getvalue())
+            self.assertIn("raw_fallback_records=0", output.getvalue())
+
+    def test_bmc3_transcode_falls_back_per_record_when_quantized_range_is_exceeded(self) -> None:
+        payload = bytearray(runtime_pack.BMC_HEADER.pack(runtime_pack.BMC2_MAGIC, runtime_pack.BMC2_VERSION, 1))
+        payload += runtime_pack.BMC2_RECORD.pack(0.0, 0.0, 1)
+        payload += runtime_pack.BMC2_VERTEX.pack(5000.0, 0.0, 0.0, 1.0, 0.0, 0.0, 100, 100, 100, 255)
+        compact, compact_records, raw_records = runtime_pack._compact_bmc2(bytes(payload))
+        self.assertEqual(compact[:4], runtime_pack.BMC3_MAGIC)
+        self.assertEqual(compact_records, 0)
+        self.assertEqual(raw_records, 1)
+        _x, _z, _count, mode, _palette = runtime_pack.BMC3_RECORD.unpack_from(compact, runtime_pack.BMC_HEADER.size)
+        self.assertEqual(mode, runtime_pack.BMC3_MODE_RAW)
 
     def test_obsolete_stored_pack_cache_is_removed_before_build(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
