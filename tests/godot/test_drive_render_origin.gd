@@ -6,11 +6,11 @@ extends SceneTree
 ## - camera_controller.gd owns the presentation-only Drive render-origin conversion.
 ## - drive_render_origin_composition.gd rebases presentation roots only.
 ## - player_vehicle.tscn uses Vehicle's VisualRoot adapter without moving logical vehicle state.
-## - gps_route_layer.gd supplies the production player accessor used by composition.
+## - gps_route_drive_render_adapter.gd rebases route presentation and converts Drive picking back to logical world coordinates.
 
 const CameraControllerScript = preload("res://scripts/camera_controller.gd")
 const DriveRenderOriginCompositionScript = preload("res://scripts/drive_render_origin_composition.gd")
-const GpsRouteLayerScript = preload("res://scripts/gps_route_layer.gd")
+const GpsRouteDriveRenderAdapterScript = preload("res://scripts/gps_route_drive_render_adapter.gd")
 const TEST_WORLD_POSITION := Vector3(52277.0, 0.06, 825907.0)
 const MAX_LOCAL_AXIS_M := 512.01
 
@@ -61,8 +61,25 @@ func _run() -> void:
 	var cloud := Node3D.new()
 	var buildings := Node3D.new()
 	buildings.position.y = 0.06
-	var gps_layer := GpsRouteLayerScript.new()
+	var gps_layer := GpsRouteDriveRenderAdapterScript.new()
 	gps_layer.player = vehicle
+	gps_layer.set("_camera_rig", rig)
+	gps_layer.set("_camera", camera)
+	var route_renderer := Node3D.new()
+	gps_layer.route_renderer = route_renderer
+	gps_layer.call("set_render_origin_world", render_origin)
+	_assert(route_renderer.position.distance_to(Vector3(-render_origin.x, 0.0, -render_origin.z)) < 0.01, "GPS route renderer uses inverse Drive render origin")
+
+	var viewport_center := root.get_viewport().get_visible_rect().size * 0.5
+	var ray_origin := camera.project_ray_origin(viewport_center)
+	var ray_direction := camera.project_ray_normal(viewport_center)
+	if ray_direction.y < -0.000001:
+		var t := -ray_origin.y / ray_direction.y
+		if t > 0.0:
+			var expected_world_hit: Vector3 = rig.call("render_to_world_position", ray_origin + ray_direction * t)
+			var adapter_world_hit: Vector3 = gps_layer.call("_screen_to_ground", viewport_center)
+			_assert(adapter_world_hit.distance_to(expected_world_hit) < 0.01, "Drive GPS picking converts render hit back to logical world coordinates")
+
 	var composition := DriveRenderOriginCompositionScript.new()
 	composition.set("_camera_rig", rig)
 	composition.set("_world", world)
@@ -81,10 +98,12 @@ func _run() -> void:
 	_assert((rig.call("get_render_origin_world") as Vector3).is_zero_approx(), "Map mode restores zero render origin")
 	for presentation in [world, poi, cloud, buildings]:
 		_assert(Vector2(presentation.position.x, presentation.position.z).length() < 0.01, "Map presentation restores canonical world frame")
+	_assert(route_renderer.position.is_zero_approx(), "Map GPS route renderer restores canonical world frame")
 	vehicle.call("set_render_origin_world", Vector3.ZERO)
 	_assert(visual_root.global_position.distance_to(vehicle.global_position) < 0.01, "vehicle visual restores logical Map position")
 
 	composition.free()
+	route_renderer.free()
 	gps_layer.free()
 	vehicle.free()
 	target.free()
