@@ -76,6 +76,41 @@ exit 42
 GODOT
 chmod +x "$FAKE_GODOT"
 
+# Reproduce an old PR hook that ignores the authoritative manual-review contract
+# and claims no subjective review remains. The current-main runner must override
+# that stale decision and launch production Main itself, never the editor.
+mkdir -p "$WORKTREE/scenes"
+touch "$WORKTREE/scenes/main.tscn"
+cat > "$WORKTREE/tools/pr_check_local.sh" <<'HOOK'
+set -euo pipefail
+printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "$BRUR_PR_CHECK_PR"
+HOOK
+: > "$ORDER_LOG"
+output="$(BRUR_PR_CHECK_MANUAL_REVIEW=required bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT" 2>&1)"
+grep -q 'PR_CHECK=SKIP_VISUAL_REVIEW pr=123 reason=no-subjective-check-remains' <<<"$output"
+grep -q 'PR_CHECK=FORCE_VISUAL_REVIEW pr=123 reason=authoritative-manual-review-not-launched-by-pr-hook' <<<"$output"
+grep -q 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=manual-review-contract-fallback' <<<"$output"
+grep -q 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=editor' <<<"$output"
+visual_count="$(grep -c '^GODOT_VISUAL ' "$ORDER_LOG")"
+[[ "$visual_count" -eq 1 ]] || { printf 'expected exactly one forced production visual launch, got %s\n' "$visual_count" >&2; cat "$ORDER_LOG" >&2; exit 1; }
+grep -Fq "$WORKTREE/scenes/main.tscn" "$ORDER_LOG"
+if grep -q -- '--editor' "$ORDER_LOG"; then
+  printf 'forced review must never open the Godot editor\n' >&2
+  cat "$ORDER_LOG" >&2
+  exit 1
+fi
+status_line="$(grep -n '^STATUS ' "$ORDER_LOG" | head -n 1 | cut -d: -f1)"
+visual_line="$(grep -n '^GODOT_VISUAL ' "$ORDER_LOG" | head -n 1 | cut -d: -f1)"
+[[ "$status_line" -lt "$visual_line" ]] || { printf 'forced review must persist machine success before visual Godot starts\n' >&2; cat "$ORDER_LOG" >&2; exit 1; }
+
+# A required review must also survive an exact PR revision with no PR-owned hook.
+rm "$WORKTREE/tools/pr_check_local.sh"
+: > "$ORDER_LOG"
+output="$(BRUR_PR_CHECK_MANUAL_REVIEW=required bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT" 2>&1)"
+grep -q 'PR_CHECK=SKIP_PR_OWNED_OBJECTIVE_CHECKS pr=123 reason=no-hook' <<<"$output"
+grep -q 'PR_CHECK=FORCE_VISUAL_REVIEW pr=123 reason=authoritative-manual-review-not-launched-by-pr-hook' <<<"$output"
+[[ "$(grep -c '^GODOT_VISUAL ' "$ORDER_LOG")" -eq 1 ]]
+
 cat > "$WORKTREE/tools/pr_check_local.sh" <<'HOOK'
 set -euo pipefail
 "$GODOT_BIN" --headless --path "$BRUR_PR_CHECK_WORKTREE" --script res://tests/fake.gd
@@ -84,6 +119,7 @@ printf 'HOOK_OBJECTIVE_DONE\n' >> "$ORDER_LOG"
 printf 'HOOK_VISUAL_RETURNED\n' >> "$ORDER_LOG"
 HOOK
 
+: > "$ORDER_LOG"
 output="$(BRUR_PR_CHECK_MANUAL_REVIEW=none bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT" 2>&1)"
 grep -q 'PR_CHECK=STATUS success pr=123' <<<"$output"
 grep -q 'PR_CHECK=VISUAL_REVIEW_WARNING Godot exited status=42 after objective success' <<<"$output"
