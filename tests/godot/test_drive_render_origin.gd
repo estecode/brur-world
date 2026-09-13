@@ -119,8 +119,6 @@ func _run() -> void:
 	_assert(Vector2(cloud.position.x, cloud.position.z).distance_to(expected_offset) < 0.01, "cloud root uses inverse Drive render origin")
 	_assert(Vector2(road_leaf.position.x, road_leaf.position.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "road leaf is render-local")
 
-	# Production building publication creates an empty viewport group first and
-	# appends MeshInstance3D chunks into that already-entered group over later frames.
 	var streamed_group := Node3D.new()
 	buildings.add_child(streamed_group)
 	var streamed_building := MeshInstance3D.new()
@@ -145,9 +143,6 @@ func _run() -> void:
 	_assert(ground_leaf.mesh == localized_ground_before, "same-cell frames do not rebuild ocean geometry")
 	_assert(Vector2(streamed_building.position.x, streamed_building.position.z).distance_to(Vector2(target_render.x, target_render.z)) < 0.01, "same-cell frames do not drift streamed buildings")
 
-	# The previous revision copied the whole Sweden BRM2 mesh at every 1 km cell
-	# crossing. That can create multi-frame hitches. Keep the exact localized mesh
-	# resource and change only the node's small cell delta instead.
 	target.position.x += 1100.0
 	rig.call("_apply_drive_camera")
 	var next_origin: Vector3 = rig.call("get_render_origin_world")
