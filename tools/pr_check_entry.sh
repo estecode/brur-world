@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Boots the PR-check launcher from current origin/main without mutating the mapped checkout.
-# Dependencies: git, a mapped brur-world checkout, ignored local world_data/.venv, and tools/pr_check.sh on origin/main.
+# Dependencies: git, gh, a mapped brur-world checkout, ignored local world_data/.venv, and tools/pr_check.sh on origin/main.
 set -euo pipefail
 
 PR="${1:-}"
@@ -18,6 +18,7 @@ printf 'PR_CHECK=LOG path=%s\n' "$LOG_PATH"
 printf 'PR_CHECK=LOG_STARTED pr=%s started_at=%s\n' "$PR" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 [[ -d "$ROOT/world_data" ]] || { printf 'PR_CHECK=FAIL missing %s/world_data\n' "$ROOT" >&2; exit 66; }
+command -v gh >/dev/null 2>&1 || { printf 'PR_CHECK=FAIL GitHub CLI (gh) is required\n' >&2; exit 69; }
 
 LAUNCHER_TMP="$(mktemp -d "${TMPDIR:-/tmp}/brur-world-pr-check-main.XXXXXX")"
 ADDED=0
@@ -51,6 +52,46 @@ ADDED=1
   printf 'PR_CHECK=FAIL current origin/main has no tools/pr_check.sh\n' >&2
   exit 66
 }
+[[ -f "$LAUNCHER_TMP/tools/pr_merge_decision.py" ]] || {
+  printf 'PR_CHECK=FAIL current origin/main has no tools/pr_merge_decision.py\n' >&2
+  exit 66
+}
+
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  META_PYTHON="$ROOT/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  META_PYTHON="$(command -v python3)"
+else
+  printf 'PR_CHECK=FAIL Python 3 not found\n' >&2
+  exit 69
+fi
+
+if ! PR_BODY="$(gh pr view "$PR" --repo estecode/brur-world --json body --jq .body)"; then
+  printf 'PR_CHECK=FAIL unable to read PR merge decision\n' >&2
+  exit 69
+fi
+if ! MERGE_DECISION="$(printf '%s' "$PR_BODY" | "$META_PYTHON" "$LAUNCHER_TMP/tools/pr_merge_decision.py")"; then
+  printf 'PR_CHECK=FAIL unable to parse authoritative PR merge decision\n' >&2
+  exit 70
+fi
+case "$MERGE_DECISION" in
+  check)
+    export BRUR_PR_CHECK_MANUAL_REVIEW=required
+    printf 'PR_CHECK=MANUAL_REVIEW required pr=%s source=pr-merge-decision\n' "$PR"
+    ;;
+  merge)
+    export BRUR_PR_CHECK_MANUAL_REVIEW=none
+    printf 'PR_CHECK=MANUAL_REVIEW none pr=%s source=pr-merge-decision\n' "$PR"
+    ;;
+  block)
+    printf 'PR_CHECK=FAIL PR merge decision is DO NOT MERGE; fix the blocker before running a human Safe Check\n' >&2
+    exit 78
+    ;;
+  *)
+    printf 'PR_CHECK=FAIL invalid parsed merge decision: %s\n' "$MERGE_DECISION" >&2
+    exit 70
+    ;;
+esac
 
 rm -rf "$LAUNCHER_TMP/world_data"
 ln -s "$ROOT/world_data" "$LAUNCHER_TMP/world_data"
