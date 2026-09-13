@@ -1,10 +1,10 @@
 extends Node3D
 class_name PoliceVehicleVisual
 
-## Presents the Swedish police-car emergency-light layout and deterministic flash pattern.
+## Presents the Swedish police-car profile, emergency-light layout and deterministic flash pattern.
 ##
 ## Dependencies:
-## - Presentation-only child of Vehicle; receives light state explicitly from the Vehicle adapter.
+## - Presentation-only child of Vehicle; receives profile/light state explicitly from the Vehicle adapter.
 ## - Does not depend on police AI, routing, traffic, input, or vehicle dynamics.
 
 const FLASH_STEP_S: float = 0.12
@@ -19,20 +19,32 @@ const FLASH_PATTERN: Array[Vector2i] = [
 	Vector2i(0, 0),
 ]
 
+var _profile_active: bool = false
 var _enabled: bool = false
 var _elapsed_s: float = 0.0
 var _phase_index: int = 0
 
 func _ready() -> void:
+	_apply_profile_visibility()
 	_apply_phase()
 
 func _process(delta: float) -> void:
 	advance_pattern(delta)
 
+func set_police_profile_active(active: bool) -> void:
+	_profile_active = active
+	if not active:
+		_enabled = false
+		_elapsed_s = 0.0
+		_phase_index = 0
+	_apply_profile_visibility()
+	_apply_phase()
+
+func police_profile_active() -> bool:
+	return _profile_active
+
 func set_emergency_lights_active(active: bool) -> void:
-	if _enabled == active:
-		return
-	_enabled = active
+	_enabled = active and _profile_active
 	_elapsed_s = 0.0
 	_phase_index = 0
 	_apply_phase()
@@ -52,8 +64,19 @@ func advance_pattern(delta: float) -> void:
 		_phase_index = (_phase_index + 1) % FLASH_PATTERN.size()
 	_apply_phase()
 
+func _apply_profile_visibility() -> void:
+	var civilian_body := get_node_or_null("../Body") as GeometryInstance3D
+	if civilian_body != null:
+		civilian_body.visible = not _profile_active
+	var livery := get_node_or_null("Livery") as Node3D
+	if livery != null:
+		livery.visible = _profile_active
+	var housing := get_node_or_null("LightBarHousing") as Node3D
+	if housing != null:
+		housing.visible = _profile_active
+
 func _apply_phase() -> void:
-	var phase := FLASH_PATTERN[_phase_index] if _enabled else Vector2i.ZERO
+	var phase := FLASH_PATTERN[_phase_index] if _enabled and _profile_active else Vector2i.ZERO
 	_set_group_visible("Left", phase.x == 1)
 	_set_group_visible("Right", phase.y == 1)
 
