@@ -84,6 +84,7 @@ chmod +x "$FAKE_GODOT"
 
 run_flow() {
   BRUR_PR_CHECK_CHANGED_FILES='scripts/camera_controller.gd' \
+  BRUR_PR_CHECK_MANUAL_REVIEW=required \
   FAKE_DRIVE_MARKER="${FAKE_DRIVE_MARKER:-0}" \
   bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 235 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT"
 }
