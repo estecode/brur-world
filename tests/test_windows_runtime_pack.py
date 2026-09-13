@@ -115,7 +115,7 @@ class WindowsRuntimePackTests(unittest.TestCase):
             with zipfile.ZipFile(pack) as archive:
                 self.assertIn("world_data/windows_runtime_manifest.json", archive.namelist())
 
-    def test_pack_contains_current_runtime_selection_only(self) -> None:
+    def test_pack_contains_current_runtime_selection_as_stored_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = self._source_fixture(root)
@@ -124,7 +124,14 @@ class WindowsRuntimePackTests(unittest.TestCase):
                 names = set(archive.namelist())
                 self.assertIn("world_data/building_mesh_lod/0_0.bin", names)
                 self.assertNotIn("world_data/building_tiles/0_0.jsonl", names)
+                self.assertTrue(
+                    all(
+                        entry.is_dir() or entry.compress_type == zipfile.ZIP_STORED
+                        for entry in archive.infolist()
+                    )
+                )
                 manifest = json.loads(archive.read("world_data/windows_runtime_manifest.json"))
+            self.assertEqual(report["pack_format_version"], 2)
             self.assertEqual(manifest["fingerprint"], report["fingerprint"])
             self.assertEqual(manifest["sha256"], report["runtime_files"])
 
