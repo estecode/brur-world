@@ -111,9 +111,31 @@ When the next step is agent-owned, do not hand control back merely by describing
 
 If execution genuinely cannot continue without a new user message, say so explicitly and state the exact message or action required. Never rely on a hidden convention such as the project leader knowing to type `fortsätt`. This rule does not imply background execution: if work cannot continue after the current response without an automation or a new message, do not claim or imply that it will.
 
+#### Human-check resolution continuation
+
+When the project leader resolves the final required human check for a tracked PR, for example with `test ok #191`, that message transfers control back to the agent. The agent must immediately continue through all remaining agent-owned steps in the same active turn: synchronize the current PR and `main`, repair stale PR metadata or merge-decision text, perform the smallest required merge-safety refresh/revalidation, update `BRUR — Needs You` if applicable, and merge automatically when the resulting decision is `MERGE`.
+
+Do not stop after stating that these steps remain or that you will continue with them. A stale PR body, stale merge-decision block, missing issue comment, branch refresh, routine merge operation, or other administrative cleanup is agent-owned work and is never by itself a valid handoff to the project leader.
+
+Example:
+
+```text
+test ok #191
+→ verify exact current PR head and current main
+→ confirm required statuses/checks and integration relevance
+→ update the PR merge-decision block to MERGE when justified
+→ clear the corresponding Needs You entry if one exists
+→ merge
+→ report completion
+```
+
+Do not stop between these steps unless a new genuine human-only blocker appears.
+
 #### Response termination gate
 
 Before ending a response for unresolved tracked work, explicitly determine whether the next action is agent-owned. If it is agent-owned, the response must not end while the required tools are available and no genuine human-only blocker exists. Execute the next action instead.
+
+Writing "I will continue", "I'll fix that next", "I will investigate", or equivalent never satisfies this gate. If the next action is agent-owned, perform it before responding.
 
 A response for unresolved tracked work may end only when at least one of these conditions is true:
 
