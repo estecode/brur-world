@@ -35,6 +35,7 @@ const DRIVE_RENDER_ORIGIN_GRID_M: float = 1024.0
 @export var drive_fov: float = 58.0
 @export var drive_near_m: float = 0.5
 @export var drive_far_m: float = 5000.0
+@export var drive_building_stream_radius_m: float = 2500.0
 @export var mode_transition_seconds: float = 1.0
 @export_range(0.05, 0.95, 0.01) var drive_transition_approach_fraction: float = 0.4
 @export var drive_transition_entry_distance_m: float = 140.0
@@ -352,7 +353,10 @@ func get_ground_view_corners() -> PackedVector3Array:
 
 func get_streaming_ground_radius_m() -> float:
 	if _drive_mode:
-		return maxf(camera.near + 100.0, drive_far_m) + maxf(0.0, _drive_distance_current_m)
+		# The camera far plane is a clipping contract, not a full-detail building
+		# residency contract. Keep nearby Drive buildings deterministic and bounded;
+		# the BuildingStreamLayer adds its normal chunk margin around this radius.
+		return maxf(0.0, drive_building_stream_radius_m)
 	var radius_m := 0.0
 	for point in get_ground_view_corners():
 		radius_m = maxf(radius_m, Vector2(point.x - focus.x, point.z - focus.z).length())
