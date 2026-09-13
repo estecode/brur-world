@@ -54,6 +54,12 @@ func clear_route() -> void:
 func has_route() -> bool:
 	return _points.size() >= 2
 
+func set_driving_mode(mode: int) -> bool:
+	return _policy.set_mode(mode)
+
+func driving_mode() -> int:
+	return _policy.mode()
+
 func set_follow_enabled(new_enabled: bool) -> bool:
 	if new_enabled and not has_route():
 		return false
@@ -102,7 +108,8 @@ func _drive_route() -> void:
 			vehicle.call("set_control_inputs", GPS_OWNER, arrival_controls.x, arrival_controls.y, steer)
 			return
 
-	var target_speed: float = _policy.target_speed_mps(_points, _target_index, _speed_limits_mps, speed_mps)
+	var vehicle_max_speed_mps: float = maxf(float(vehicle.get("max_speed_mps")), 0.0)
+	var target_speed: float = _policy.target_speed_mps(_points, _target_index, _speed_limits_mps, speed_mps, vehicle_max_speed_mps)
 	var controls: Vector2 = _policy.controls_for_speed(speed_mps, target_speed)
 	if absf(heading_error) > deg_to_rad(70.0):
 		controls.x = 0.0

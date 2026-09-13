@@ -44,6 +44,16 @@ func _run() -> void:
 		player.global_position + Vector3(0.0, 0.0, -100.0),
 	])
 	route_follower.call("set_route", route, PackedFloat32Array([13.9, 13.9]))
+	var before_mode_switch = player.call("state_snapshot")
+	_assert(int(route_follower.call("driving_mode")) == RouteDrivingPolicyScript.Mode.NORMAL, "route follower defaults to Normal policy")
+	_assert(bool(route_follower.call("set_driving_mode", RouteDrivingPolicyScript.Mode.AGGRESSIVE)), "driving mode changes at runtime")
+	_assert(int(route_follower.call("driving_mode")) == RouteDrivingPolicyScript.Mode.AGGRESSIVE, "route follower exposes the active policy mode")
+	_assert(bool(route_follower.call("has_route")), "changing driving mode preserves the active route")
+	_assert(int(player.call("control_owner")) == GPS_OWNER, "changing driving mode does not change control ownership")
+	_assert(_same_state(before_mode_switch, player.call("state_snapshot")), "changing driving mode does not mutate vehicle state")
+	_assert(not bool(route_follower.call("set_driving_mode", 999)), "invalid driving modes fail closed")
+	_assert(int(route_follower.call("driving_mode")) == RouteDrivingPolicyScript.Mode.AGGRESSIVE, "invalid mode does not replace the active profile")
+
 	_assert(bool(route_follower.call("set_follow_enabled", true)), "GPS follow can take ownership for an active route")
 	_assert(int(player.call("control_owner")) == GPS_OWNER, "GPS owns controls while follow is on")
 	route_follower.call("_physics_process", 1.0 / 60.0)
@@ -96,13 +106,30 @@ func _test_route_policy() -> void:
 	var straight := PackedVector3Array([Vector3.ZERO, Vector3(0.0, 0.0, -40.0), Vector3(0.0, 0.0, -80.0)])
 	var curve := PackedVector3Array([Vector3.ZERO, Vector3(0.0, 0.0, -20.0), Vector3(20.0, 0.0, -20.0)])
 	var limits := PackedFloat32Array([22.2, 22.2, 22.2])
-	var straight_speed: float = policy.target_speed_mps(straight, 1, limits, 15.0)
-	var curve_speed: float = policy.target_speed_mps(curve, 1, limits, 15.0)
+	var straight_speed: float = policy.target_speed_mps(straight, 1, limits, 15.0, 60.0)
+	var curve_speed: float = policy.target_speed_mps(curve, 1, limits, 15.0, 60.0)
 	_assert(curve_speed < straight_speed, "driver slows before a sharp curve")
+	_assert(straight_speed <= 22.2 + 0.001, "Normal remains speed-limit oriented")
 	var low_limits := PackedFloat32Array([22.2, 8.3, 8.3])
-	_assert(policy.target_speed_mps(straight, 1, low_limits, 15.0) < straight_speed, "driver anticipates a lower upcoming speed limit")
-	var braking: Vector2 = policy.controls_for_speed(20.0, 8.0)
-	_assert(braking.x == 0.0 and braking.y > 0.0, "driver brakes progressively above target speed")
+	_assert(policy.target_speed_mps(straight, 1, low_limits, 15.0, 60.0) < straight_speed, "driver anticipates a lower upcoming speed limit")
+
+	var mode_speeds: Array[float] = []
+	var throttles: Array[float] = []
+	var brakes: Array[float] = []
+	for mode in [RouteDrivingPolicyScript.Mode.NORMAL, RouteDrivingPolicyScript.Mode.AGGRESSIVE, RouteDrivingPolicyScript.Mode.MANIAC]:
+		_assert(policy.set_mode(mode), "known driving policy mode is accepted")
+		var first_curve_speed: float = policy.target_speed_mps(curve, 1, limits, 15.0, 60.0)
+		var second_curve_speed: float = policy.target_speed_mps(curve, 1, limits, 15.0, 60.0)
+		_assert(_approx(first_curve_speed, second_curve_speed), "curve/lookahead output stays deterministic in every mode")
+		mode_speeds.append(policy.target_speed_mps(straight, 1, limits, 10.0, 60.0))
+		throttles.append(policy.controls_for_speed(10.0, 22.0).x)
+		brakes.append(policy.controls_for_speed(25.0, 10.0).y)
+		_assert(policy.target_speed_mps(straight, 1, PackedFloat32Array([50.0, 50.0, 50.0]), 20.0, 24.0) <= 24.0 + 0.001, "vehicle max speed hard-caps every policy mode")
+		var bounded_controls: Vector2 = policy.controls_for_speed(0.0, 100.0)
+		_assert(bounded_controls.x <= 1.0 and bounded_controls.y <= 1.0, "policy controls never exceed dynamics input limits")
+	_assert(mode_speeds[0] < mode_speeds[1] and mode_speeds[1] < mode_speeds[2], "Normal Aggressive and Maniac produce ordered distinct target speeds")
+	_assert(throttles[0] < throttles[1] and throttles[1] < throttles[2], "modes consume increasingly more available acceleration")
+	_assert(brakes[0] < brakes[1] and brakes[1] < brakes[2], "modes consume increasingly more available braking")
 
 func _same_state(a, b) -> bool:
 	return _approx(a.x_m, b.x_m) and _approx(a.z_m, b.z_m) and _approx(a.heading_rad, b.heading_rad) and _approx(a.speed_mps, b.speed_mps)
