@@ -2,7 +2,8 @@
 """Build and publish the version-bound routing runtime dataset.
 
 Dependencies:
-- build_routing.py produces BRG1 graph and BRH1 route geometry from one OSM source.
+- build_routing.py produces BRG1 graph and BRH1 route geometry from the shared highway source route.
+- osm_route_source.py redirects authoritative Sweden PBF input through the reusable OSM source cache.
 - gps_snap_index.py produces BRS2 snapping data from that exact BRG1 graph.
 - routing_graph_view.py validates/reads the staged BRG1 graph without loading Sweden eagerly.
 """
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from build_routing import build_routing
 from gps_snap_index import build_snap_index
+from osm_route_source import resolve_route_source
 from routing_graph_view import RoutingGraphView
 
 
@@ -42,6 +44,7 @@ def build_routing_dataset(source: Path, output: Path) -> dict:
     source = Path(source)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
+    source = resolve_route_source(source, output, "highways")
 
     staging = output / ".routing_dataset.tmp"
     if staging.exists():
@@ -89,7 +92,7 @@ def build_routing_dataset(source: Path, output: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("source", type=Path, help="Path to Sweden .osm.pbf or a small .osm fixture")
+    parser.add_argument("source", type=Path, help="Path to Sweden .osm.pbf, cached highway .osm, or a small .osm fixture")
     parser.add_argument("--output", type=Path, default=Path("world_data"))
     args = parser.parse_args()
     build_routing_dataset(args.source, args.output)
