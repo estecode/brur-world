@@ -120,6 +120,10 @@ func set_follow_enabled(enabled: bool) -> bool:
 	_set_status("GPS follow ON — press W/A/S/D or Space to take manual control" if enabled else "GPS follow OFF — manual driving")
 	return true
 func is_follow_enabled() -> bool: return _follow_enabled
+func current_route_eta_seconds() -> float:
+	if _route_follower == null or not _route_follower.has_method("remaining_route_time_s"):
+		return -1.0
+	return float(_route_follower.call("remaining_route_time_s"))
 func _request_current_plan() -> void: request_current_plan()
 
 func _create_modules() -> void:
@@ -142,7 +146,7 @@ func _on_preference_selected(preference: String) -> void:
 func _on_remove_waypoint_requested(index: int) -> void:
 	if route_model.remove_waypoint(index): _refresh_waypoint_ui(); request_current_plan() if route_model.has_destination() else false
 func _on_clear_waypoints_requested() -> void:
-	route_model.clear_waypoints(); _refresh_waypoint_ui(); request_current_plan() if route_model.has_destination() else false
+	if route_model.clear_waypoints(): _refresh_waypoint_ui(); request_current_plan() if route_model.has_destination() else false
 func _on_follow_changed(enabled: bool) -> void:
 	if not set_follow_enabled(enabled) and route_ui != null: route_ui.call("set_follow_enabled", false)
 func _on_manual_vehicle_input() -> void:
