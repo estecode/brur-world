@@ -8,12 +8,14 @@ class_name Vehicle
 ## - Accepts generic controls from exactly one explicit control owner at a time.
 ## - Receives surface classification explicitly and applies portable VehicleSurfacePolicy modifiers during manual control.
 ## - Accepts a presentation-only render origin for its VisualRoot without changing logical vehicle state.
+## - Exposes emergency light/siren state without depending on police AI decisions.
 ## - Has no dependency on player input, GPS routing policy, world rendering, traffic AI, police AI, or camera code.
 
 const VehicleStateScript = preload("res://scripts/vehicle_state.gd")
 const VehicleDynamicsScript = preload("res://scripts/vehicle_dynamics.gd")
 const VehicleSurfacePolicyScript = preload("res://scripts/vehicle_surface_policy.gd")
 const STANDARD_CAR_ACCELERATION_MPS2: float = (100.0 / 3.6) / 8.0
+const POLICE_V90_D5_ACCELERATION_MPS2: float = (100.0 / 3.6) / 7.5
 
 enum Kind {
 	CAR,
@@ -34,6 +36,7 @@ enum ControlOwner {
 
 @export var kind: Kind = Kind.CAR
 @export var vehicle_id: StringName = &""
+@export var vehicle_profile_id: StringName = &"standard_car"
 @export var length_m: float = 4.5
 @export var width_m: float = 1.8
 @export var height_m: float = 1.5
@@ -52,8 +55,8 @@ enum ControlOwner {
 @export var energy_capacity: float = 50.0
 @export var active: bool = true
 
-var emergency_lights_active: bool = false
-
+var _emergency_lights_active: bool = false
+var _siren_active: bool = false
 var _state = VehicleStateScript.new()
 var _dynamics = VehicleDynamicsScript.new()
 var _surface_policy = VehicleSurfacePolicyScript.new()
@@ -92,6 +95,9 @@ func configure(new_kind: Kind) -> void:
 	kind = new_kind
 	_apply_default_profile()
 	_reset_resource_state()
+	if not is_emergency_vehicle():
+		set_emergency_lights_active(false)
+		set_siren_active(false)
 
 func set_surface_kind(surface_kind: StringName) -> void:
 	_surface_kind = surface_kind
@@ -181,6 +187,9 @@ func energy_remaining() -> float:
 func tire_condition() -> float:
 	return _state.tire_condition
 
+func profile_id() -> StringName:
+	return vehicle_profile_id
+
 func state_snapshot():
 	_ensure_state_from_transform()
 	_ensure_resource_state()
@@ -188,6 +197,27 @@ func state_snapshot():
 
 func is_emergency_vehicle() -> bool:
 	return kind in [Kind.POLICE_CAR, Kind.FIRE_ENGINE, Kind.AMBULANCE]
+
+func set_emergency_lights_active(enabled: bool) -> bool:
+	if enabled and kind != Kind.POLICE_CAR:
+		return false
+	_emergency_lights_active = enabled
+	var visual := get_node_or_null("VisualRoot/PoliceEmergencyVisual")
+	if visual != null and visual.has_method("set_emergency_lights_active"):
+		visual.call("set_emergency_lights_active", enabled)
+	return true
+
+func emergency_lights_active() -> bool:
+	return _emergency_lights_active
+
+func set_siren_active(enabled: bool) -> bool:
+	if enabled and not is_emergency_vehicle():
+		return false
+	_siren_active = enabled
+	return true
+
+func siren_active() -> bool:
+	return _siren_active
 
 func _ensure_state_from_transform() -> void:
 	if _state_initialized:
@@ -238,25 +268,29 @@ func _reset_resource_state() -> void:
 func _apply_default_profile() -> void:
 	match kind:
 		Kind.CAR:
-			_set_profile(4.5, 1.8, 1.5, 1550.0, 36.1, STANDARD_CAR_ACCELERATION_MPS2, 7.0, 1.00, "petrol", 50.0)
+			_set_profile(&"standard_car", 4.5, 1.8, 1.5, 1550.0, 36.1, STANDARD_CAR_ACCELERATION_MPS2, 7.0, 1.00, "petrol", 50.0)
 		Kind.POLICE_CAR:
-			_set_profile(4.8, 1.9, 1.5, 1800.0, 55.6, 4.5, 9.0, 1.08, "petrol", 65.0)
+			# Volvo V90 Cross Country D5 AWD: 4939 x 1879 x 1543 mm, 0-100 in 7.5 s,
+			# 230 km/h and diesel. 1950 kg is a documented gameplay approximation for
+			# police equipment above the civilian 1834-1882 kg manufacturer range.
+			_set_profile(&"se_police_volvo_v90_cc_d5_2017", 4.939, 1.879, 1.543, 1950.0, 230.0 / 3.6, POLICE_V90_D5_ACCELERATION_MPS2, 8.0, 1.08, "diesel", 60.0)
 		Kind.FIRE_ENGINE:
-			_set_profile(8.5, 2.5, 3.2, 12000.0, 27.8, 1.5, 6.0, 0.82, "diesel", 300.0)
+			_set_profile(&"fire_engine", 8.5, 2.5, 3.2, 12000.0, 27.8, 1.5, 6.0, 0.82, "diesel", 300.0)
 		Kind.AMBULANCE:
-			_set_profile(6.0, 2.1, 2.7, 3500.0, 44.4, 2.8, 7.5, 0.90, "diesel", 90.0)
+			_set_profile(&"ambulance", 6.0, 2.1, 2.7, 3500.0, 44.4, 2.8, 7.5, 0.90, "diesel", 90.0)
 		Kind.TRUCK:
-			_set_profile(12.0, 2.5, 3.8, 18000.0, 25.0, 1.0, 5.0, 0.75, "diesel", 400.0)
+			_set_profile(&"truck", 12.0, 2.5, 3.8, 18000.0, 25.0, 1.0, 5.0, 0.75, "diesel", 400.0)
 		Kind.MOTORCYCLE:
-			_set_profile(2.2, 0.8, 1.3, 220.0, 50.0, 5.0, 9.0, 1.05, "petrol", 18.0)
+			_set_profile(&"motorcycle", 2.2, 0.8, 1.3, 220.0, 50.0, 5.0, 9.0, 1.05, "petrol", 18.0)
 		Kind.MOPED:
-			_set_profile(1.9, 0.7, 1.2, 120.0, 12.5, 2.5, 6.0, 0.85, "petrol", 6.0)
+			_set_profile(&"moped", 1.9, 0.7, 1.2, 120.0, 12.5, 2.5, 6.0, 0.85, "petrol", 6.0)
 		Kind.BICYCLE:
-			_set_profile(1.8, 0.65, 1.2, 100.0, 12.0, 1.5, 4.0, 0.90, "none", 0.0)
+			_set_profile(&"bicycle", 1.8, 0.65, 1.2, 100.0, 12.0, 1.5, 4.0, 0.90, "none", 0.0)
 		Kind.E_SCOOTER:
-			_set_profile(1.2, 0.55, 1.2, 25.0, 7.0, 2.0, 4.0, 0.75, "electric", 0.50)
+			_set_profile(&"e_scooter", 1.2, 0.55, 1.2, 25.0, 7.0, 2.0, 4.0, 0.75, "electric", 0.50)
 
 func _set_profile(
+	new_profile_id: StringName,
 	new_length_m: float,
 	new_width_m: float,
 	new_height_m: float,
@@ -268,6 +302,7 @@ func _set_profile(
 	new_energy_type: String,
 	new_energy_capacity: float
 ) -> void:
+	vehicle_profile_id = new_profile_id
 	length_m = new_length_m
 	width_m = new_width_m
 	height_m = new_height_m

@@ -1,6 +1,7 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource type="Script" path="res://scripts/vehicle.gd" id="1_vehicle"]
+[ext_resource type="Script" path="res://scripts/police_vehicle_visual.gd" id="2_police_visual"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_body"]
 size = Vector3(1.8, 1.2, 4.5)
@@ -8,6 +9,38 @@ size = Vector3(1.8, 1.2, 4.5)
 [sub_resource type="StandardMaterial3D" id="Material_body"]
 albedo_color = Color(0.85, 0.15, 0.12, 1)
 roughness = 0.8
+
+[sub_resource type="BoxMesh" id="BoxMesh_police_body"]
+size = Vector3(1.879, 1.2, 4.939)
+
+[sub_resource type="StandardMaterial3D" id="Material_police_white"]
+albedo_color = Color(0.92, 0.94, 0.95, 1)
+roughness = 0.72
+
+[sub_resource type="BoxMesh" id="BoxMesh_police_stripe"]
+size = Vector3(1.91, 0.32, 3.45)
+
+[sub_resource type="StandardMaterial3D" id="Material_police_blue"]
+albedo_color = Color(0.04, 0.18, 0.48, 1)
+roughness = 0.66
+
+[sub_resource type="BoxMesh" id="BoxMesh_lightbar"]
+size = Vector3(1.36, 0.08, 0.22)
+
+[sub_resource type="StandardMaterial3D" id="Material_lightbar"]
+albedo_color = Color(0.08, 0.09, 0.11, 1)
+metallic = 0.45
+roughness = 0.42
+
+[sub_resource type="BoxMesh" id="BoxMesh_blue_module"]
+size = Vector3(0.34, 0.09, 0.24)
+
+[sub_resource type="StandardMaterial3D" id="Material_blue_emissive"]
+albedo_color = Color(0.02, 0.18, 1, 1)
+emission_enabled = true
+emission = Color(0.01, 0.12, 1, 1)
+emission_energy_multiplier = 8.0
+roughness = 0.2
 
 [node name="Vehicle" type="Node3D"]
 script = ExtResource("1_vehicle")
@@ -18,3 +51,49 @@ script = ExtResource("1_vehicle")
 position = Vector3(0, 0.6, 0)
 mesh = SubResource("BoxMesh_body")
 material_override = SubResource("Material_body")
+
+[node name="PoliceEmergencyVisual" type="Node3D" parent="VisualRoot"]
+script = ExtResource("2_police_visual")
+
+[node name="Livery" type="Node3D" parent="VisualRoot/PoliceEmergencyVisual"]
+
+[node name="Body" type="MeshInstance3D" parent="VisualRoot/PoliceEmergencyVisual/Livery"]
+position = Vector3(0, 0.6, 0)
+mesh = SubResource("BoxMesh_police_body")
+material_override = SubResource("Material_police_white")
+
+[node name="BlueSideBand" type="MeshInstance3D" parent="VisualRoot/PoliceEmergencyVisual/Livery"]
+position = Vector3(0, 0.61, 0)
+mesh = SubResource("BoxMesh_police_stripe")
+material_override = SubResource("Material_police_blue")
+
+[node name="LightBarHousing" type="MeshInstance3D" parent="VisualRoot/PoliceEmergencyVisual"]
+position = Vector3(0, 1.26, -0.12)
+mesh = SubResource("BoxMesh_lightbar")
+material_override = SubResource("Material_lightbar")
+
+[node name="Left" type="Node3D" parent="VisualRoot/PoliceEmergencyVisual"]
+
+[node name="RoofFrontLeft" type="MeshInstance3D" parent="VisualRoot/PoliceEmergencyVisual/Left"]
+position = Vector3(-0.42, 1.31, -0.12)
+mesh = SubResource("BoxMesh_blue_module")
+material_override = SubResource("Material_blue_emissive")
+
+[node name="GrilleLeft" type="MeshInstance3D" parent="VisualRoot/PoliceEmergencyVisual/Left"]
+position = Vector3(-0.34, 0.53, -2.49)
+scale = Vector3(0.55, 0.55, 0.55)
+mesh = SubResource("BoxMesh_blue_module")
+material_override = SubResource("Material_blue_emissive")
+
+[node name="Right" type="Node3D" parent="VisualRoot/PoliceEmergencyVisual"]
+
+[node name="RoofFrontRight" type="MeshInstance3D" parent="VisualRoot/PoliceEmergencyVisual/Right"]
+position = Vector3(0.42, 1.31, -0.12)
+mesh = SubResource("BoxMesh_blue_module")
+material_override = SubResource("Material_blue_emissive")
+
+[node name="GrilleRight" type="MeshInstance3D" parent="VisualRoot/PoliceEmergencyVisual/Right"]
+position = Vector3(0.34, 0.53, -2.49)
+scale = Vector3(0.55, 0.55, 0.55)
+mesh = SubResource("BoxMesh_blue_module")
+material_override = SubResource("Material_blue_emissive")
