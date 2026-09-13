@@ -29,6 +29,15 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _human_bytes(value: int) -> str:
+    amount = float(max(value, 0))
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if amount < 1024.0 or unit == "TB":
+            return f"{amount:.1f} {unit}"
+        amount /= 1024.0
+    return f"{amount:.1f} TB"
+
+
 def find_binary_pair(binary_dir: Path) -> tuple[Path, Path]:
     exes = sorted(binary_dir.glob("*.exe"))
     if len(exes) != 1:
@@ -147,8 +156,6 @@ def package_client(
     with zipfile.ZipFile(output_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
         archive.write(exe, f"BRUR/{exe.name}")
         archive.write(pck, f"BRUR/{pck.name}")
-        # The runtime resource pack is already compressed and content-addressed. Store it
-        # verbatim so repeated client packaging does not recompress multi-GB stable data.
         archive.write(runtime_pack, f"BRUR/{pack_filename}", compress_type=zipfile.ZIP_STORED)
         archive.writestr(
             "BRUR/build_info.json",
@@ -180,8 +187,8 @@ def package_client(
             raise SystemExit("client ZIP recompressed the cached runtime resource pack")
 
     print(
-        f"[windows-package] ready zip={output_zip} commit={commit[:12]} "
-        f"runtime_files={len(hashes)} delivery={RUNTIME_DELIVERY} fingerprint={fingerprint[:12]}"
+        f"[windows-package] ready zip={output_zip} size={_human_bytes(output_zip.stat().st_size)} "
+        f"commit={commit[:12]} runtime_files={len(hashes)} delivery={RUNTIME_DELIVERY} fingerprint={fingerprint[:12]}"
     )
     return bundle_info
 

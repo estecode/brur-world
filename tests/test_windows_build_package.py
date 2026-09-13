@@ -147,6 +147,7 @@ class WindowsPackageTests(unittest.TestCase):
         self.assertNotIn("runtime_hashes", source)
         self.assertIn("compress_type=zipfile.ZIP_STORED", source)
         self.assertIn('archive.write(runtime_pack, f"BRUR/{pack_filename}"', source)
+        self.assertNotIn("shipping-base", source)
 
     def test_missing_matching_pck_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
