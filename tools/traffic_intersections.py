@@ -245,7 +245,6 @@ class _TopologyIndex:
         start = self.node_by_osm.get(signal_osm)
         if start is None:
             return None
-        allowed = set(way_ids)
         if self._is_branch_junction(start):
             return start
         frontier = deque([(start, 0)])
@@ -255,9 +254,7 @@ class _TopologyIndex:
             node_index, hops = frontier.popleft()
             if hops >= max_hops:
                 continue
-            for neighbor, way_id in self.neighbors[node_index]:
-                if allowed and way_id not in allowed:
-                    continue
+            for neighbor, _way_id in self.neighbors[node_index]:
                 if neighbor in visited:
                     continue
                 visited.add(neighbor)
