@@ -3,7 +3,7 @@ extends SceneTree
 ## Measures production Drive frame pacing with real local world data, buildings enabled, and render-cell crossings.
 ##
 ## Dependencies:
-## - Uses the production main scene, GPS/player composition, CameraRig, BuildingStreamLayer, and Drive render-origin adapter.
+## - Uses the production main scene, MapControlsUi, GPS/player composition, CameraRig, BuildingStreamLayer, and Drive render-origin adapter.
 ## - Requires the real world_data linked/prepared by the local PR check; owns no alternate world implementation.
 
 const MainScene = preload("res://scenes/main.tscn")
@@ -20,6 +20,7 @@ var _main: Node3D
 var _camera_rig: Node
 var _building_layer: Node
 var _gps_layer: Node
+var _map_controls: Node
 var _player: Node3D
 var _setup_elapsed := 0.0
 var _settle_elapsed := 0.0
@@ -48,12 +49,12 @@ func _initialize() -> void:
 	_camera_rig = _main.get_node_or_null("CameraRig")
 	_building_layer = _main.get_node_or_null("BuildingLayer")
 	_gps_layer = _main.get_node_or_null("GpsRouteLayer")
-	if _camera_rig == null or _building_layer == null or _gps_layer == null:
+	_map_controls = _main.get_node_or_null("MapControlsUi")
+	if _camera_rig == null or _building_layer == null or _gps_layer == null or _map_controls == null:
 		push_error("production Drive FPS real-data test failed: production scene dependencies missing")
 		quit(1)
 		return
-	_building_layer.call("set_streaming_enabled", true)
-	print("PRODUCTION_DRIVE_FPS_REAL_DATA waiting for production player prepare_budget_ms=", _building_layer.get("prepare_budget_ms"))
+	print("PRODUCTION_DRIVE_FPS_REAL_DATA waiting for production player")
 
 func _process(delta: float) -> bool:
 	if _main == null:
@@ -63,10 +64,16 @@ func _process(delta: float) -> bool:
 			_setup_elapsed += delta
 			_player = _gps_layer.call("get_player_vehicle") as Node3D
 			if _player != null:
+				# Exercise the same public production UI path a player uses for HUS. Enabling
+				# earlier races MapControlsUi._ready(), whose intentional default is OFF.
+				_map_controls.call("set_buildings_visible", true)
+				if not bool(_building_layer.call("is_streaming_enabled")):
+					_fail("production HUS control did not enable building streaming")
+					return false
 				_camera_rig.call("set_follow_target", _player)
 				_camera_rig.call("set_drive_mode", true)
 				_state = 1
-				print("PRODUCTION_DRIVE_FPS_REAL_DATA Drive enabled player=", _player.global_position)
+				print("PRODUCTION_DRIVE_FPS_REAL_DATA Drive enabled player=", _player.global_position, " prepare_budget_ms=", _building_layer.get("prepare_budget_ms"))
 			elif _setup_elapsed >= SETUP_TIMEOUT_S:
 				_fail("production player did not become ready within %.1fs" % SETUP_TIMEOUT_S)
 		1:
