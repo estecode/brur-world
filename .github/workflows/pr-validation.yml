@@ -76,6 +76,9 @@ jobs:
           chmod +x "$GODOT_BIN"
           echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
 
+      - name: Parse driving harness
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_driving_harness_parse.gd
+
       - name: Validate playtest launcher
         run: bash tests/test_playtest_launcher.sh
 
