@@ -3,7 +3,7 @@ extends SceneTree
 ## Measures Drive frame pacing while guarding against repeated static rebasing and unbounded building coverage.
 ##
 ## Dependencies:
-## - camera_controller.gd supplies production Drive framing/render-origin behavior.
+## - camera_controller.gd supplies production Drive framing/render-origin behavior and stable streaming radius.
 ## - building_stream_layer.gd and building_lod_policy.gd supply production viewport/LOD selection.
 ## - drive_render_origin_composition.gd supplies production presentation work and counters.
 ## - world_coordinates.gd remains the coordinate conversion owner.
