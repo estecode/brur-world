@@ -30,6 +30,7 @@ var _poi_layer: Node3D = null
 var _cloud_field: Node3D = null
 var _building_layer: Node3D = null
 var _gps_route_layer: Node = null
+var _last_static_origin := Vector3(INF, INF, INF)
 
 func _ready() -> void:
 	_camera_rig = get_node_or_null(camera_rig_path)
@@ -46,32 +47,57 @@ func _ready() -> void:
 		push_error("Drive render-origin composition dependencies do not expose required APIs")
 		set_process(false)
 		return
-	_sync_render_origin()
+	# Streaming publishes road tiles directly under World and complete building
+	# viewport groups directly under BuildingLayer. Rebase only those new branches
+	# when they arrive instead of recursively walking the whole static scene every frame.
+	_world.child_entered_tree.connect(_on_world_child_entered)
+	_building_layer.child_entered_tree.connect(_on_building_child_entered)
+	_sync_render_origin(true)
 
 func _process(_delta: float) -> void:
-	_sync_render_origin()
+	_sync_render_origin(false)
 
-func _sync_render_origin() -> void:
+func _sync_render_origin(force_static: bool = true) -> void:
 	if _camera_rig == null:
 		return
 	var origin: Vector3 = _camera_rig.call("get_render_origin_world")
-	# Road/building transforms and background mesh vertices must all be local.
-	# Merely putting a huge inverse offset on a parent keeps precision loss in the
-	# GPU transform path. Transparent BRM2/ocean geometry is therefore rebuilt
-	# from its canonical mesh into the current render cell when that cell changes.
-	_set_horizontal_offset(_world, Vector3.ZERO)
-	_rebase_world_children(_world, origin)
-	_set_horizontal_offset(_building_layer, Vector3.ZERO)
-	_rebase_building_meshes(_building_layer, origin)
+	var static_origin_changed := force_static or origin != _last_static_origin
+	if static_origin_changed:
+		# Static presentation only changes when the 1 km render cell changes. Newly
+		# streamed branches are handled by child_entered_tree callbacks below.
+		_set_horizontal_offset(_world, Vector3.ZERO)
+		_rebase_world_children(_world, origin)
+		_set_horizontal_offset(_building_layer, Vector3.ZERO)
+		_rebase_building_meshes(_building_layer, origin)
+		var offset := Vector3(-origin.x, 0.0, -origin.z)
+		_set_horizontal_offset(_poi_layer, offset)
+		_set_horizontal_offset(_cloud_field, offset)
+		if _gps_route_layer.has_method("set_render_origin_world"):
+			_gps_route_layer.call("set_render_origin_world", origin)
+		_last_static_origin = origin
 
-	var offset := Vector3(-origin.x, 0.0, -origin.z)
-	_set_horizontal_offset(_poi_layer, offset)
-	_set_horizontal_offset(_cloud_field, offset)
+	# Vehicle logical state moves every frame while VisualRoot is top-level, so its
+	# small presentation transform must follow every frame even inside one cell.
 	var player: Node = _gps_route_layer.call("get_player_vehicle")
 	if player != null and player.has_method("set_render_origin_world"):
 		player.call("set_render_origin_world", origin)
-	if _gps_route_layer.has_method("set_render_origin_world"):
-		_gps_route_layer.call("set_render_origin_world", origin)
+
+func _on_world_child_entered(node: Node) -> void:
+	var child := node as Node3D
+	if child == null or _camera_rig == null:
+		return
+	var origin: Vector3 = _camera_rig.call("get_render_origin_world")
+	if _is_decorative_background(child):
+		_rebase_background_mesh(child as MeshInstance3D, origin)
+	else:
+		_rebase_node(child, origin)
+
+func _on_building_child_entered(node: Node) -> void:
+	var child := node as Node3D
+	if child == null or _camera_rig == null:
+		return
+	var origin: Vector3 = _camera_rig.call("get_render_origin_world")
+	_rebase_building_branch(child, origin)
 
 func _rebase_world_children(root: Node3D, origin: Vector3) -> void:
 	if root == null:
@@ -108,11 +134,7 @@ func _rebase_background_mesh(instance: MeshInstance3D, origin: Vector3) -> void:
 		instance.remove_meta(LOCALIZED_ORIGIN_META)
 		return
 
-	# Keep decorative transparent surfaces materially below the physical Drive
-	# surface. This is deliberately a presentation-only safety margin; road,
-	# building and vehicle logical heights remain unchanged.
 	instance.position.y = minf(instance.position.y, DRIVE_DECORATIVE_MAX_Y_M)
-
 	var previous_origin := Vector2(INF, INF)
 	if instance.has_meta(LOCALIZED_ORIGIN_META):
 		previous_origin = instance.get_meta(LOCALIZED_ORIGIN_META)
@@ -120,11 +142,6 @@ func _rebase_background_mesh(instance: MeshInstance3D, origin: Vector3) -> void:
 	if previous_origin == next_origin:
 		return
 
-	# The ocean base is a Sweden-scale PlaneMesh. In Drive only a bounded local
-	# patch around the camera is required, so never send the country-scale plane
-	# vertices through the Drive render path. Derive its radius from the camera's
-	# full far range plus worst-case render-cell/chase offsets and a safety margin.
-	# A stable cell keeps the exact same mesh resource across frames.
 	if logical_mesh is PlaneMesh:
 		var local_plane := PlaneMesh.new()
 		var far_m := 5000.0
