@@ -183,6 +183,7 @@ func _lookahead_point(distance_m: float) -> Vector3:
 		index += 1
 		cursor = segment_end
 		segment_end = _points[index]
+	return _points[_points.size() - 1]
 
 func _route_distance_to_index(route_point_index: int) -> float:
 	if route_point_index < _target_index or route_point_index >= _points.size():
