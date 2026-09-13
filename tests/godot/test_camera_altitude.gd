@@ -118,8 +118,13 @@ func _test_camera_adapter() -> void:
 	_assert(land_height - ocean_height >= 0.04, "Drive ocean base sits below the complete decorative background stack")
 	_assert(road_height - ocean_height >= 0.30, "Drive ocean base cannot fight the road/player/building surface")
 	var drive_ground_material := ground.material_override as StandardMaterial3D
-	_assert(drive_ground_material.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED, "Drive background is opaque instead of using transparent compositing")
-	_assert(drive_ground_material.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY, "Drive background writes depth so it cannot bleed over foreground geometry")
+	_assert(drive_ground_material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA, "Drive keeps deterministic transparent background compositing")
+	_assert(drive_ground_material.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED, "Drive background classes cannot write competing depth")
+	_assert(drive_ground_material.render_priority == -6, "Drive ocean base keeps the lowest deterministic background priority")
+	var drive_urban_material := main.call("_background_material", 3, false) as StandardMaterial3D
+	_assert(drive_urban_material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA, "Drive BRM2 categories use the same compositor contract as Map")
+	_assert(drive_urban_material.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED, "Drive BRM2 categories do not compete through the depth buffer")
+	_assert(drive_urban_material.render_priority == -1, "Drive BRM2 priority ordering stays deterministic")
 
 	rig.call("set_drive_mode", false)
 	main.call("_update_depth_layout", true)
@@ -128,6 +133,7 @@ func _test_camera_adapter() -> void:
 	var map_ground_material := ground.material_override as StandardMaterial3D
 	_assert(map_ground_material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA, "Map mode retains priority-based background compositing")
 	_assert(map_ground_material.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_DISABLED, "Map mode retains the established non-depth background compositor")
+	_assert(map_ground_material.render_priority == -6, "Map mode preserves ocean-first deterministic ordering")
 	main.free()
 
 	target.free()
