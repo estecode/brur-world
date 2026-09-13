@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Stages only production runtime world data for the self-contained Windows export.
+"""Selects the production runtime world-data subset used by Windows packaging.
 
 Dependencies:
 - Reads already-built authoritative world_data from the mapped checkout.
-- Copies only runtime representations consumed by production; it never rebuilds source truth.
-- Excludes OSM source caches and heavy rebuild-only JSONL intermediates.
+- Selects only runtime representations consumed by production; it never rebuilds source truth.
+- Excludes OSM source caches and heavy rebuild-only intermediates.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ REQUIRED_DIRS = (
     "lod1",
     "lod2",
     "poi_tiles",
-    "building_tiles",
+    "building_mesh_lod",
 )
 
 DELIVERY_MANIFEST = "windows_runtime_manifest.json"
@@ -50,44 +50,57 @@ def _require_nonempty_dir(path: Path) -> None:
         raise SystemExit(f"missing or empty production runtime directory: {path}")
 
 
-def prepare_runtime_data(source: Path, output: Path) -> list[str]:
+def selected_runtime_files(source: Path) -> list[Path]:
+    """Return the exact production runtime files relative to ``source``."""
     source = source.resolve()
-    output = output.resolve()
-
     for name in REQUIRED_FILES:
         _require_nonempty_file(source / name)
     for name in REQUIRED_DIRS:
         _require_nonempty_dir(source / name)
+
+    selected: list[Path] = [Path(name) for name in REQUIRED_FILES]
+    for name in OPTIONAL_FILES:
+        candidate = source / name
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            selected.append(Path(name))
+    for name in REQUIRED_DIRS:
+        selected.extend(
+            path.relative_to(source)
+            for path in sorted((source / name).rglob("*"))
+            if path.is_file()
+        )
+
+    selected = sorted(set(selected), key=lambda path: path.as_posix())
+    forbidden_names = {"buildings.jsonl", "search_index.jsonl", "pois.jsonl"}
+    if any(path.name in forbidden_names for path in selected):
+        raise SystemExit("rebuild-only JSONL source selected for Windows runtime data")
+    if any(path.parts and path.parts[0] == "osm_source_cache" for path in selected):
+        raise SystemExit("OSM source cache selected for Windows runtime data")
+    if any(path.parts and path.parts[0] == "building_tiles" for path in selected):
+        raise SystemExit("obsolete building_tiles selected instead of building_mesh_lod")
+    return selected
+
+
+def prepare_runtime_data(source: Path, output: Path) -> list[str]:
+    """Compatibility helper that materializes the selected subset into ``output``."""
+    source = source.resolve()
+    output = output.resolve()
+    selected = selected_runtime_files(source)
 
     if output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True)
 
     copied: list[str] = []
-    for name in REQUIRED_FILES:
-        shutil.copy2(source / name, output / name)
-        copied.append(name)
-    for name in OPTIONAL_FILES:
-        candidate = source / name
-        if candidate.is_file() and candidate.stat().st_size > 0:
-            shutil.copy2(candidate, output / name)
-            copied.append(name)
-    for name in REQUIRED_DIRS:
-        shutil.copytree(source / name, output / name)
-        copied.extend(
-            path.relative_to(output).as_posix()
-            for path in sorted((output / name).rglob("*"))
-            if path.is_file()
-        )
-
-    if any(path.name in {"buildings.jsonl", "search_index.jsonl", "pois.jsonl"} for path in output.rglob("*")):
-        raise SystemExit("rebuild-only JSONL source leaked into Windows runtime data")
-    if (output / "osm_source_cache").exists():
-        raise SystemExit("OSM source cache leaked into Windows runtime data")
+    for relative in selected:
+        destination = output / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / relative, destination)
+        copied.append(relative.as_posix())
 
     payload = {
-        "schema_version": 1,
-        "files": sorted(copied),
+        "schema_version": 2,
+        "files": copied,
     }
     (output / DELIVERY_MANIFEST).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     copied.append(DELIVERY_MANIFEST)
