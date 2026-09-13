@@ -69,6 +69,8 @@ class WindowsRuntimePackTests(unittest.TestCase):
             cold = cold_output.getvalue()
             self.assertIn("WINDOWS BUILD — PACKING + SHIPPING", cold)
             self.assertIn("[runtime-pack] checking", cold)
+            self.assertIn("WINDOWS_RUNTIME_RAW_TOTAL=", cold)
+            self.assertIn("WINDOWS_RUNTIME_RAW category=building_mesh_lod", cold)
             self.assertIn("[runtime-pack] hashing", cold)
             self.assertIn("[runtime-pack] packing", cold)
             self.assertIn("[runtime-pack] verifying", cold)
@@ -115,7 +117,7 @@ class WindowsRuntimePackTests(unittest.TestCase):
             with zipfile.ZipFile(pack) as archive:
                 self.assertIn("world_data/windows_runtime_manifest.json", archive.namelist())
 
-    def test_pack_contains_current_runtime_selection_as_stored_entries(self) -> None:
+    def test_pack_contains_current_runtime_selection_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = self._source_fixture(root)
@@ -124,16 +126,36 @@ class WindowsRuntimePackTests(unittest.TestCase):
                 names = set(archive.namelist())
                 self.assertIn("world_data/building_mesh_lod/0_0.bin", names)
                 self.assertNotIn("world_data/building_tiles/0_0.jsonl", names)
-                self.assertTrue(
-                    all(
-                        entry.is_dir() or entry.compress_type == zipfile.ZIP_STORED
-                        for entry in archive.infolist()
-                    )
-                )
                 manifest = json.loads(archive.read("world_data/windows_runtime_manifest.json"))
-            self.assertEqual(report["pack_format_version"], 2)
+            self.assertEqual(report["pack_format_version"], 1)
             self.assertEqual(manifest["fingerprint"], report["fingerprint"])
             self.assertEqual(manifest["sha256"], report["runtime_files"])
+
+    def test_obsolete_stored_pack_cache_is_removed_before_build(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self._source_fixture(root)
+            cache = root / "cache"
+            pack_dir = cache / "runtime-packs"
+            pack_dir.mkdir(parents=True)
+            fingerprint = "a" * 64
+            obsolete_pack = pack_dir / f"{fingerprint}.zip"
+            obsolete_pack.write_bytes(b"obsolete raw pack")
+            (pack_dir / f"{fingerprint}.zip.json").write_text(
+                json.dumps({"pack_format_version": 2, "fingerprint": fingerprint}),
+                encoding="utf-8",
+            )
+            shipping = pack_dir / f"{fingerprint}.shipping-base-v1.zip"
+            shipping.write_bytes(b"obsolete shipping base")
+            (pack_dir / f"{fingerprint}.shipping-base-v1.zip.json").write_text("{}", encoding="utf-8")
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                runtime_pack.prepare_cached_runtime_pack(source, cache)
+
+            self.assertFalse(obsolete_pack.exists())
+            self.assertFalse(shipping.exists())
+            self.assertIn("WINDOWS_RUNTIME_CACHE_CLEANUP", output.getvalue())
 
 
 if __name__ == "__main__":
