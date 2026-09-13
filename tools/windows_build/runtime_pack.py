@@ -5,6 +5,7 @@ Dependencies:
 - Uses prepare_runtime_data.py as the single Windows runtime-selection contract.
 - Reads authoritative generated world_data without rebuilding it.
 - Stores only local verification metadata/hashes and derived compressed ZIP resource packs in a cache.
+- Transcodes BMC2 building chunks to compact BMC3 only inside the derived Windows pack.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import argparse
 import hashlib
 import json
 import os
+import struct
 import sys
 import tempfile
 import time
@@ -27,11 +29,24 @@ if str(WINDOWS_BUILD_DIR) not in sys.path:
 
 from prepare_runtime_data import DELIVERY_MANIFEST, selected_runtime_files  # noqa: E402
 
-PACK_FORMAT_VERSION = 1
+PACK_FORMAT_VERSION = 3
 STATE_SCHEMA_VERSION = 1
 PACK_FILENAME = "brur-world-data.zip"
 HASH_STATE_FILENAME = "runtime_file_hashes.json"
 PROGRESS_INTERVAL_SECONDS = 2.0
+
+BMC2_MAGIC = b"BMC2"
+BMC3_MAGIC = b"BMC3"
+BMC2_VERSION = 2
+BMC3_VERSION = 3
+BMC_HEADER = struct.Struct("<4sII")
+BMC2_RECORD = struct.Struct("<ffI")
+BMC2_VERTEX = struct.Struct("<ffffffBBBB")
+BMC3_RECORD = struct.Struct("<ffIB3x12s")
+BMC3_VERTEX = struct.Struct("<hhhbbB")
+BMC3_SCALE_M = 0.1
+BMC3_MODE_COMPACT = 0
+BMC3_MODE_RAW = 1
 
 
 def sha256(path: Path) -> str:
@@ -127,6 +142,87 @@ def _cleanup_obsolete_pack_cache(cache_dir: Path) -> None:
             f"WINDOWS_RUNTIME_CACHE_CLEANUP removed={removed} freed={_human_bytes(freed)} obsolete_format_only=true",
             flush=True,
         )
+
+
+def _quantize_i16(value: float) -> int | None:
+    quantized = round(value / BMC3_SCALE_M)
+    if quantized < -32768 or quantized > 32767:
+        return None
+    return int(quantized)
+
+
+def _quantize_normal(value: float) -> int:
+    return max(-127, min(127, round(value * 127.0)))
+
+
+def _compact_bmc2(payload: bytes) -> tuple[bytes, int, int]:
+    """Convert one BMC2 chunk to BMC3; oversized/irregular records stay raw inside BMC3."""
+    if len(payload) < BMC_HEADER.size:
+        raise ValueError("short BMC2 header")
+    magic, version, vertex_count = BMC_HEADER.unpack_from(payload, 0)
+    if magic != BMC2_MAGIC or version != BMC2_VERSION:
+        return payload, 0, 0
+
+    output = bytearray(BMC_HEADER.pack(BMC3_MAGIC, BMC3_VERSION, vertex_count))
+    offset = BMC_HEADER.size
+    compact_records = 0
+    raw_records = 0
+    decoded_vertices = 0
+    while offset < len(payload):
+        if offset + BMC2_RECORD.size > len(payload):
+            raise ValueError("truncated BMC2 record header")
+        record_x, record_z, record_vertices = BMC2_RECORD.unpack_from(payload, offset)
+        offset += BMC2_RECORD.size
+        blob_size = record_vertices * BMC2_VERTEX.size
+        if offset + blob_size > len(payload):
+            raise ValueError("truncated BMC2 vertex payload")
+        raw_blob = payload[offset : offset + blob_size]
+        offset += blob_size
+        decoded_vertices += record_vertices
+
+        colors: list[bytes] = []
+        compact_vertices = bytearray()
+        compact_ok = True
+        for index in range(record_vertices):
+            vertex_offset = index * BMC2_VERTEX.size
+            x, y, z, nx, ny, nz, r, g, b, a = BMC2_VERTEX.unpack_from(raw_blob, vertex_offset)
+            color = bytes((r, g, b, a))
+            if color not in colors:
+                colors.append(color)
+            if len(colors) > 3:
+                compact_ok = False
+                break
+            qx = _quantize_i16(x)
+            qy = _quantize_i16(y)
+            qz = _quantize_i16(z)
+            if qx is None or qy is None or qz is None:
+                compact_ok = False
+                break
+            color_index = colors.index(color)
+            roof = 1 if ny > 0.5 else 0
+            meta = color_index | (roof << 2)
+            compact_vertices += BMC3_VERTEX.pack(
+                qx,
+                qy,
+                qz,
+                _quantize_normal(nx),
+                _quantize_normal(nz),
+                meta,
+            )
+
+        palette = b"".join(colors[:3]).ljust(12, b"\0")
+        if compact_ok:
+            output += BMC3_RECORD.pack(record_x, record_z, record_vertices, BMC3_MODE_COMPACT, palette)
+            output += compact_vertices
+            compact_records += 1
+        else:
+            output += BMC3_RECORD.pack(record_x, record_z, record_vertices, BMC3_MODE_RAW, b"\0" * 12)
+            output += raw_blob
+            raw_records += 1
+
+    if offset != len(payload) or decoded_vertices != vertex_count:
+        raise ValueError("BMC2 vertex count mismatch")
+    return bytes(output), compact_records, raw_records
 
 
 class _Progress:
@@ -285,6 +381,10 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
     fd, temp_name = tempfile.mkstemp(prefix=pack_path.name + ".", suffix=".tmp", dir=pack_path.parent)
     os.close(fd)
     temp_path = Path(temp_name)
+    transformed_source_bytes = 0
+    transformed_output_bytes = 0
+    compact_records = 0
+    raw_records = 0
     try:
         total_bytes = sum((source / relative_name).stat().st_size for relative_name in hashes)
         packed_bytes = 0
@@ -298,7 +398,17 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
         ) as archive:
             for number, relative_name in enumerate(sorted(hashes), 1):
                 path = source / relative_name
-                archive.write(path, f"world_data/{relative_name}")
+                archive_name = f"world_data/{relative_name}"
+                if relative_name.startswith("building_mesh_lod/") and path.suffix == ".bmc":
+                    original = path.read_bytes()
+                    compact, record_count, fallback_count = _compact_bmc2(original)
+                    archive.writestr(archive_name, compact)
+                    transformed_source_bytes += len(original)
+                    transformed_output_bytes += len(compact)
+                    compact_records += record_count
+                    raw_records += fallback_count
+                else:
+                    archive.write(path, archive_name)
                 packed_bytes += path.stat().st_size
                 progress.update(number, packed_bytes)
             archive.writestr(
@@ -310,12 +420,23 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
                         "fingerprint": fingerprint,
                         "files": sorted(hashes),
                         "sha256": hashes,
+                        "transforms": {
+                            "building_mesh_lod": "BMC2=>BMC3:q0.1m:norm8:palette3",
+                        },
                     },
                     indent=2,
                     sort_keys=True,
                 ),
             )
         progress.update(len(hashes), packed_bytes, force=True)
+        if transformed_source_bytes:
+            reduction = 100.0 * (1.0 - transformed_output_bytes / transformed_source_bytes)
+            print(
+                "WINDOWS_RUNTIME_TRANSFORM category=building_mesh_lod "
+                f"source={_human_bytes(transformed_source_bytes)} compact={_human_bytes(transformed_output_bytes)} "
+                f"reduction={reduction:.1f}% compact_records={compact_records} raw_fallback_records={raw_records}",
+                flush=True,
+            )
         _verify_built_pack(temp_path)
         os.replace(temp_path, pack_path)
     finally:
@@ -352,7 +473,7 @@ def prepare_cached_runtime_pack(source: Path, cache_dir: Path) -> dict[str, Any]
         print("[runtime-pack] reusable world pack unchanged — skipping packing", flush=True)
     else:
         print("WINDOWS BUILD — PACKING + SHIPPING", flush=True)
-        print("[runtime-pack] building reusable compressed world pack", flush=True)
+        print("[runtime-pack] building reusable compressed world pack with compact building chunks", flush=True)
         _build_pack(source, pack_path, fingerprint, hashes)
     pack_seconds = time.monotonic() - pack_started
 
