@@ -81,6 +81,20 @@ class TrafficIntersectionTests(unittest.TestCase):
         self.assertGreaterEqual(len(intersection.movements), 2)
         self.assertEqual(intersection, build_from_runtime_data(dataset, graph).intersections[0])
 
+    def test_way_id_split_is_not_mistaken_for_physical_junction(self) -> None:
+        graph, _ = build_graph([
+            WayInput(101, [1, 2], [(18.0, 59.0), (18.0001, 59.0)], {"highway": "primary"}),
+            WayInput(102, [2, 3], [(18.0001, 59.0), (18.0002, 59.0)], {"highway": "primary"}),
+            WayInput(103, [4, 3, 5], [(18.0002, 58.9999), (18.0002, 59.0), (18.0002, 59.0001)], {"highway": "secondary"}),
+        ])
+        signal = next(node for node in graph.nodes if node.osm_id == 2)
+        dataset = {"format": "BTS1", "signals": [{"id": "n2", "osm_node_id": 2, "x": signal.x, "y": signal.y, "highway_way_ids": [101, 102], "direction_source": "explicit", "explicit_stop_line": False}]}
+        report = build_from_runtime_data(dataset, graph)
+        self.assertEqual(report.unresolved_signal_ids, ())
+        self.assertEqual(len(report.intersections), 1)
+        self.assertEqual(report.intersections[0].junction_osm_node_id, 3)
+        self.assertGreaterEqual(len(report.intersections[0].exits), 3)
+
     def test_unknown_single_way_relationship_is_inferred_without_rewriting_source(self) -> None:
         graph, _ = build_graph([
             WayInput(101, [1, 2, 3], [(18.0, 59.0), (18.0001, 59.0), (18.0002, 59.0)], {"highway": "primary"}),
