@@ -11,6 +11,7 @@ signal view_changed(focus_world: Vector3, distance_m: float, camera_world_positi
 signal map_follow_changed(enabled: bool)
 
 const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.gd")
+const DRIVE_RENDER_ORIGIN_GRID_M: float = 1024.0
 
 @export var min_altitude_m: float = 50.0
 @export var max_altitude_m: float = 1400000.0
@@ -186,7 +187,14 @@ func get_render_origin_world() -> Vector3:
 	if not _drive_mode or not _has_follow_target():
 		return Vector3.ZERO
 	var target := _follow_target.global_position
-	return Vector3(target.x, 0.0, target.z)
+	# Keep a stable local cell while driving instead of translating every static
+	# presentation root every frame. The target stays within 512 m of the render
+	# origin, while the cell changes only after crossing a 1 km boundary.
+	return Vector3(
+		roundf(target.x / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M,
+		0.0,
+		roundf(target.z / DRIVE_RENDER_ORIGIN_GRID_M) * DRIVE_RENDER_ORIGIN_GRID_M
+	)
 
 func world_to_render_position(world_position: Vector3) -> Vector3:
 	return world_position - get_render_origin_world()
