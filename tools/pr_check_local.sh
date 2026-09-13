@@ -196,6 +196,8 @@ if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
   run_godot_test res://tests/godot/test_building_mesh_real_data.gd
   printf 'PR_CHECK=CHECK_MAP_CONTROLS_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
   run_godot_test res://tests/godot/test_map_controls.gd
+  printf 'PR_CHECK=CHECK_PRODUCTION_DRIVE_FPS_REAL_DATA pr=%s targets=avg33.4ms-p95_50ms-worst250ms\n' "$BRUR_PR_CHECK_PR"
+  run_godot_test res://tests/godot/test_production_fps_real_data.gd
 fi
 
 if [[ "$ROAD_LOD_SCOPE" == "required" ]]; then
@@ -241,7 +243,7 @@ if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then
   exit 0
 fi
 if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
-  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION confirm HUS starts OFF; turn HUS ON and zoom/pan across Stockholm: each settled viewport must appear coherently in one swap with no block-by-block reveal, remain playable, and reuse nearby views quickly; turn HUS OFF and verify buildings disappear; close Godot when finished\n'
+  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION production Drive real-data FPS/building checks have already passed automatically; inspect only genuinely perceptual presentation quality if desired, then close Godot\n'
 else
   printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION inspect only the changed real-data presentation; close Godot when finished\n'
 fi
