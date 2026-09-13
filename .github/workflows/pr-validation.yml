@@ -59,6 +59,7 @@ jobs:
           bash -n tools/windows_build.sh
           bash -n tools/windows_build/build.sh
           bash -n tools/windows_build/target.sh
+          python -m unittest tests.test_windows_runtime_data
           python -m unittest tests.test_windows_build_package
 
       - name: Install Godot 4 headless runtime
