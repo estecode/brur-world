@@ -26,7 +26,7 @@ if str(WINDOWS_BUILD_DIR) not in sys.path:
 
 from prepare_runtime_data import DELIVERY_MANIFEST, selected_runtime_files  # noqa: E402
 
-PACK_FORMAT_VERSION = 1
+PACK_FORMAT_VERSION = 2
 STATE_SCHEMA_VERSION = 1
 PACK_FILENAME = "brur-world-data.zip"
 HASH_STATE_FILENAME = "runtime_file_hashes.json"
@@ -211,7 +211,13 @@ def _pack_cache_valid(pack_path: Path, fingerprint: str) -> bool:
         return False
     try:
         with zipfile.ZipFile(pack_path, "r") as archive:
-            return f"world_data/{DELIVERY_MANIFEST}" in archive.namelist()
+            manifest = f"world_data/{DELIVERY_MANIFEST}"
+            if manifest not in archive.namelist():
+                return False
+            return all(
+                entry.is_dir() or entry.compress_type == zipfile.ZIP_STORED
+                for entry in archive.infolist()
+            )
     except (OSError, zipfile.BadZipFile):
         return False
 
@@ -223,6 +229,8 @@ def _verify_built_pack(pack_path: Path) -> None:
         progress = _Progress("verifying", len(entries), total_bytes)
         verified_bytes = 0
         for number, entry in enumerate(entries, 1):
+            if entry.compress_type != zipfile.ZIP_STORED:
+                raise RuntimeError(f"runtime pack entry is unexpectedly compressed: {entry.filename}")
             with archive.open(entry, "r") as handle:
                 while chunk := handle.read(1024 * 1024):
                     verified_bytes += len(chunk)
@@ -243,8 +251,7 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
         with zipfile.ZipFile(
             temp_path,
             "w",
-            compression=zipfile.ZIP_DEFLATED,
-            compresslevel=6,
+            compression=zipfile.ZIP_STORED,
             allowZip64=True,
         ) as archive:
             for number, relative_name in enumerate(sorted(hashes), 1):
@@ -265,6 +272,7 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
                     indent=2,
                     sort_keys=True,
                 ),
+                compress_type=zipfile.ZIP_STORED,
             )
         progress.update(len(hashes), packed_bytes, force=True)
         _verify_built_pack(temp_path)
@@ -302,7 +310,7 @@ def prepare_cached_runtime_pack(source: Path, cache_dir: Path) -> dict[str, Any]
         print("[runtime-pack] reusable world pack unchanged — skipping packing", flush=True)
     else:
         print("WINDOWS BUILD — PACKING + SHIPPING", flush=True)
-        print("[runtime-pack] building reusable world pack", flush=True)
+        print("[runtime-pack] building reusable stored world pack for monolithic delivery compression", flush=True)
         _build_pack(source, pack_path, fingerprint, hashes)
     pack_seconds = time.monotonic() - pack_started
 
