@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs one optional exact-PR local check while keeping machine status separate from human visual review.
-# Dependencies: bash, gh/Python for stale-bootstrap review recovery, plus explicit worktree/runtime paths supplied by tools/pr_check.sh.
+# Dependencies: bash, gh/Python for review-contract recovery, plus explicit worktree/runtime paths supplied by tools/pr_check.sh.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,11 +17,6 @@ GODOT_BIN="${5:-}"
 [[ -n "$GODOT_BIN" ]] || { printf 'PR_CHECK=FAIL missing Godot path for PR-owned check\n' >&2; exit 69; }
 
 HOOK="$WORKTREE/tools/pr_check_local.sh"
-if [[ ! -f "$HOOK" ]]; then
-  printf 'PR_CHECK=SKIP_PR_OWNED_OBJECTIVE_CHECKS pr=%s reason=no-hook\n' "$PR"
-  exit 0
-fi
-
 STATUS_HELPER="$ROOT/tools/pr_check_status.py"
 [[ -f "$STATUS_HELPER" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_status.py\n' >&2; exit 66; }
 WORKTREE_HEAD="$(git -C "$WORKTREE" rev-parse HEAD)"
@@ -114,9 +109,41 @@ exit 0
 WRAPPER
 chmod +x "$GODOT_WRAPPER"
 
+run_wrapped_godot() {
+  BRUR_PR_CHECK_PR="$PR" \
+  BRUR_PR_CHECK_HEAD="$WORKTREE_HEAD" \
+  BRUR_PR_CHECK_REAL_GODOT="$GODOT_BIN" \
+  BRUR_PR_CHECK_SUCCESS_MARKER="$SUCCESS_MARKER" \
+  BRUR_PR_CHECK_STATUS_HELPER="$STATUS_HELPER" \
+  BRUR_PR_CHECK_PYTHON="$PYTHON_BIN" \
+  "$GODOT_WRAPPER" "$@"
+}
+
+launch_required_review_if_missing() {
+  [[ "$BRUR_PR_CHECK_MANUAL_REVIEW" == "required" ]] || return 0
+  [[ ! -f "$SUCCESS_MARKER" ]] || return 0
+  local main_scene="$WORKTREE/scenes/main.tscn"
+  [[ -f "$main_scene" ]] || {
+    printf 'PR_CHECK=FAIL manual review is required but PR revision has no scenes/main.tscn\n' >&2
+    return 66
+  }
+  printf 'PR_CHECK=FORCE_VISUAL_REVIEW pr=%s reason=authoritative-manual-review-not-launched-by-pr-hook\n' "$PR"
+  printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=manual-review-contract-fallback\n'
+  printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=editor\n'
+  run_wrapped_godot --path "$WORKTREE" "$main_scene"
+}
+
 run_owned_hook() {
   resolve_manual_review_contract
+  if [[ ! -f "$HOOK" ]]; then
+    printf 'PR_CHECK=SKIP_PR_OWNED_OBJECTIVE_CHECKS pr=%s reason=no-hook\n' "$PR"
+    launch_required_review_if_missing
+    return $?
+  fi
+
   printf 'PR_CHECK=RUN_PR_OWNED_OBJECTIVE_CHECKS pr=%s hook=tools/pr_check_local.sh\n' "$PR"
+  local hook_status
+  set +e
   (
     cd "$WORKTREE"
     BRUR_PR_CHECK_PR="$PR" \
@@ -132,6 +159,12 @@ run_owned_hook() {
     GODOT_BIN="$GODOT_WRAPPER" \
     bash "$HOOK"
   )
+  hook_status=$?
+  set -e
+  if [[ "$hook_status" -ne 0 ]]; then
+    return "$hook_status"
+  fi
+  launch_required_review_if_missing
 }
 
 # New mapped checkouts are already fully tee'd by pr_check_entry.sh. Older mapped
