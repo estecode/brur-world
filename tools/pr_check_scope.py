@@ -27,8 +27,12 @@ ROUTE_GEOMETRY_DATASET_OWNERS = frozenset(
 ROAD_LOD_DATASET_OWNERS = frozenset(
     {
         "tools/build_roads.py",
+        "tools/road_surface_mesh.py",
         "tools/world_common.py",
         "scripts/road_lod_policy.gd",
+        "scripts/main.gd",
+        "tests/test_road_surface_mesh.py",
+        "tests/godot/test_road_surface_mesh_runtime.gd",
     }
 )
 
@@ -82,7 +86,7 @@ def route_geometry_check_required(changed_paths: Iterable[str]) -> bool:
 
 
 def road_lod_rebuild_required(changed_paths: Iterable[str]) -> bool:
-    """Return whether the PR can alter generated road LOD data or its policy contract."""
+    """Return whether the PR can alter generated road LOD/surface data or its runtime contract."""
     return any(path in ROAD_LOD_DATASET_OWNERS for path in _paths(changed_paths))
 
 
