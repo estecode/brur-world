@@ -71,8 +71,12 @@ def main() -> None:
 
     for path in (
         "tools/build_roads.py",
+        "tools/road_surface_mesh.py",
         "tools/world_common.py",
         "scripts/road_lod_policy.gd",
+        "scripts/main.gd",
+        "tests/test_road_surface_mesh.py",
+        "tests/godot/test_road_surface_mesh_runtime.gd",
     ):
         assert road_lod_rebuild_required((path,)), f"road owner must trigger rebuild: {path}"
     assert not road_lod_rebuild_required(("tools/build_sweden.py",)), (
