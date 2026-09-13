@@ -1,10 +1,11 @@
 extends RefCounted
 class_name BuildingLodPolicy
 
-## Selects deterministic building detail from camera altitude and OSM-derived footprint size.
+## Selects deterministic building detail and spatial chunk scale from camera altitude.
 ##
 ## Dependencies:
-## - Consumes existing building runtime records only.
+## - Consumes existing building runtime records only for offline/reference filtering.
+## - Mirrors the offline building mesh-pyramid contract.
 ## - Has no SceneTree, rendering, file-I/O, or world-coordinate dependencies.
 
 const LOD_COARSE := 0
@@ -19,6 +20,11 @@ const MEDIUM_ALTITUDE_M := 1200.0
 const COARSE_MIN_AREA_M2 := 3500.0
 const LARGE_MIN_AREA_M2 := 1200.0
 const MEDIUM_MIN_AREA_M2 := 300.0
+
+const COARSE_CHUNK_SIZE_M := 16000.0
+const LARGE_CHUNK_SIZE_M := 8000.0
+const MEDIUM_CHUNK_SIZE_M := 4000.0
+const FULL_CHUNK_SIZE_M := 2000.0
 
 static func choose_lod(altitude_m: float) -> int:
 	if altitude_m >= COARSE_ALTITUDE_M:
@@ -39,6 +45,17 @@ static func minimum_footprint_area_m2(lod: int) -> float:
 			return MEDIUM_MIN_AREA_M2
 		_:
 			return 0.0
+
+static func chunk_size_m(lod: int) -> float:
+	match lod:
+		LOD_COARSE:
+			return COARSE_CHUNK_SIZE_M
+		LOD_LARGE:
+			return LARGE_CHUNK_SIZE_M
+		LOD_MEDIUM:
+			return MEDIUM_CHUNK_SIZE_M
+		_:
+			return FULL_CHUNK_SIZE_M
 
 static func record_visible(record: Dictionary, lod: int) -> bool:
 	return footprint_area_m2(record) >= minimum_footprint_area_m2(lod)
