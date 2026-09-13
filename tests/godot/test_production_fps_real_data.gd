@@ -62,8 +62,10 @@ func _initialize() -> void:
 	print("PRODUCTION_DRIVE_FPS_REAL_DATA waiting for production player")
 
 func _process(delta: float) -> bool:
+	# SceneTree/MainLoop uses true as a request to terminate. Keep returning false
+	# until _finish_measurement() or _fail() explicitly calls quit().
 	if _main == null:
-		return true
+		return false
 	match _state:
 		0:
 			_setup_elapsed += delta
@@ -93,11 +95,11 @@ func _process(delta: float) -> bool:
 				_frame_times.append(float(now_usec - _frame_started_usec) / 1000.0)
 			if _frame_times.size() >= MEASURE_FRAMES:
 				_finish_measurement()
-				return true
+				return false
 			if _frame_times.size() > 0 and _frame_times.size() % CELL_CROSS_INTERVAL == 0:
 				_cross_render_cell()
 			_frame_started_usec = Time.get_ticks_usec()
-	return true
+	return false
 
 func _begin_measurement() -> void:
 	_state = 2
