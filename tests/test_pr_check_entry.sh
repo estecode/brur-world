@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Verifies current-main Safe Check bootstrap plus persistent mapped-checkout logging on success and failure.
-# Dependencies: bash, git, mktemp, tools/pr_check_entry.sh, and tools/run_pr_owned_check.sh.
+# Dependencies: bash, git, mktemp, tools/pr_check_entry.sh, tools/run_pr_owned_check.sh, and a fake gh PR metadata response.
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -12,6 +12,19 @@ trap 'rm -rf "$TMP"' EXIT
 REMOTE="$TMP/remote.git"
 SEED="$TMP/seed"
 MAPPED="$TMP/mapped"
+FAKE_BIN="$TMP/bin"
+mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/gh" <<'GH'
+#!/usr/bin/env bash
+set -euo pipefail
+cat <<'BODY'
+## Merge decision
+
+**Merge recommendation**
+MERGE
+BODY
+GH
+chmod +x "$FAKE_BIN/gh"
 
 git init --bare -q "$REMOTE"
 git init -q -b main "$SEED"
@@ -23,6 +36,14 @@ cat > "$SEED/tools/pr_check.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'LAUNCHER=OLD pr=%s\n' "$1"
 SH
+cat > "$SEED/tools/pr_merge_decision.py" <<'PY'
+#!/usr/bin/env python3
+import sys
+body = sys.stdin.read()
+if "**Merge recommendation**\nMERGE" not in body:
+    raise SystemExit(2)
+print("merge")
+PY
 git -C "$SEED" add .
 git -C "$SEED" commit -qm initial
 git -C "$SEED" remote add origin "$REMOTE"
@@ -35,14 +56,14 @@ printf '{}\n' > "$MAPPED/world_data/manifest.json"
 
 cat > "$SEED/tools/pr_check.sh" <<'SH'
 #!/usr/bin/env bash
-printf 'LAUNCHER=NEW pr=%s\n' "$1"
+printf 'LAUNCHER=NEW pr=%s manual=%s\n' "$1" "${BRUR_PR_CHECK_MANUAL_REVIEW:-missing}"
 SH
 git -C "$SEED" add tools/pr_check.sh
 git -C "$SEED" commit -qm current-launcher
 git -C "$SEED" push -q origin main
 
-output="$(cd "$MAPPED" && bash "$ENTRY" 97)"
-printf '%s\n' "$output" | grep -q 'LAUNCHER=NEW pr=97'
+output="$(cd "$MAPPED" && PATH="$FAKE_BIN:$PATH" bash "$ENTRY" 97)"
+printf '%s\n' "$output" | grep -q 'LAUNCHER=NEW pr=97 manual=none'
 if printf '%s\n' "$output" | grep -q 'LAUNCHER=OLD'; then
   printf 'stale mapped launcher was executed\n' >&2
   exit 1
@@ -50,7 +71,8 @@ fi
 SUCCESS_LOG="$MAPPED/.safecommand/logs/pr-check-97.log"
 [[ -f "$SUCCESS_LOG" ]]
 grep -q 'PR_CHECK=LOG_STARTED pr=97' "$SUCCESS_LOG"
-grep -q 'LAUNCHER=NEW pr=97' "$SUCCESS_LOG"
+grep -q 'PR_CHECK=MANUAL_REVIEW none pr=97 source=pr-merge-decision' "$SUCCESS_LOG"
+grep -q 'LAUNCHER=NEW pr=97 manual=none' "$SUCCESS_LOG"
 grep -q 'PR_CHECK=LOG_FINISHED pr=97 exit=0' "$SUCCESS_LOG"
 
 rm "$SEED/tools/pr_check.sh"
@@ -59,7 +81,7 @@ git -C "$SEED" commit -qm remove-launcher
 git -C "$SEED" push -q origin main
 
 set +e
-failure_output="$(cd "$MAPPED" && bash "$ENTRY" 97 2>&1)"
+failure_output="$(cd "$MAPPED" && PATH="$FAKE_BIN:$PATH" bash "$ENTRY" 97 2>&1)"
 status=$?
 set -e
 [[ "$status" -ne 0 ]]
