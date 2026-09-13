@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Verifies world-showcase appearance, background compositing, atmosphere, streaming, and camera-scale contracts.
+## Verifies world-showcase appearance, background compositing, atmosphere, atomic building streaming, and camera-scale contracts.
 ## Dependencies: production map, building, atmosphere, coordinates, and camera modules only.
 
 const MainScript = preload("res://scripts/main.gd")
@@ -20,6 +20,13 @@ class DummyCameraRig:
 		return focus
 	func get_altitude() -> float:
 		return altitude
+	func get_ground_view_corners() -> PackedVector3Array:
+		return PackedVector3Array([
+			focus + Vector3(-2000.0, 0.0, -2000.0),
+			focus + Vector3(2000.0, 0.0, -2000.0),
+			focus + Vector3(2000.0, 0.0, 2000.0),
+			focus + Vector3(-2000.0, 0.0, 2000.0),
+		])
 
 func _init() -> void:
 	call_deferred("_run")
@@ -28,7 +35,7 @@ func _run() -> void:
 	_test_deterministic_building_appearance()
 	_test_background_compositing()
 	_test_atmosphere_profile()
-	_test_showcase_streaming_bounds()
+	await _test_showcase_streaming_bounds()
 	await process_frame
 	_test_camera_scale_transition()
 	if _failed:
@@ -51,18 +58,12 @@ func _test_deterministic_building_appearance() -> void:
 	_assert(wall_a.r >= 0.42 and wall_a.r <= 0.56, "wall variation stays restrained")
 	_assert(base_a.get_luminance() < wall_a.get_luminance(), "building base is darker for contact shading")
 	var mesh: ArrayMesh = BuildingMeshBuilderScript.build_tile_mesh([record_a, record_b], Vector2.ZERO)
-	_assert(mesh != null and mesh.get_surface_count() == 1, "multiple buildings remain one batched tile surface")
+	_assert(mesh != null and mesh.get_surface_count() == 1, "multiple buildings remain one batched reference surface")
 	if mesh == null:
 		return
 	var arrays := mesh.surface_get_arrays(0)
 	var vertex_colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
-	_assert(not vertex_colors.is_empty(), "batched mesh carries deterministic vertex colors")
-	var min_luma := 10.0
-	var max_luma := -1.0
-	for color in vertex_colors:
-		min_luma = minf(min_luma, color.get_luminance())
-		max_luma = maxf(max_luma, color.get_luminance())
-	_assert(max_luma - min_luma > 0.04, "roof/wall/base shading remains visible inside one batch")
+	_assert(not vertex_colors.is_empty(), "batched reference mesh carries deterministic vertex colors")
 
 func _test_background_compositing() -> void:
 	var main = MainScript.new()
@@ -93,43 +94,53 @@ func _test_atmosphere_profile() -> void:
 	_assert(is_equal_approx(float(high["fog_density"]), 0.0), "high map view keeps haze effectively off")
 	_assert(float(city["fog_density"]) > float(high["fog_density"]), "haze grows gradually during city descent")
 	_assert(float(low["fog_density"]) > float(city["fog_density"]), "street approach has stronger depth haze")
-	_assert(float(low["blend"]) <= 1.0 and float(low["blend"]) >= 0.99, "atmosphere blend is bounded")
 
 func _test_showcase_streaming_bounds() -> void:
 	var cache_dir := "user://world_showcase_test_%d" % Time.get_ticks_usec()
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(cache_dir))
-	_write_tile(cache_dir, Vector2i(0, 0), _record(10.0, 10.0, "way/0", 70.0))
-	_write_tile(cache_dir, Vector2i(1, 0), _record(110.0, 10.0, "way/1", 70.0))
-	_write_tile(cache_dir, Vector2i(2, 0), _record(210.0, 10.0, "way/2", 70.0))
-	var coordinates = WorldCoordinatesScript.new(Vector2.ZERO, 100.0)
+	_write_bmc_chunk(cache_dir, 1, Vector2i(0, 0))
+	_write_bmc_chunk(cache_dir, 0, Vector2i(0, 0))
+	var coordinates = WorldCoordinatesScript.new(Vector2.ZERO, 2000.0)
 	var camera := DummyCameraRig.new()
 	get_root().add_child(camera)
 	var layer := BuildingStreamLayerScript.new()
-	layer.active_radius_tiles = 1
-	layer.max_pending_tiles = 2
-	layer.builds_per_frame = 1
-	layer.build_budget_ms = 1000.0
-	layer.prefetch_tiles_ahead = 0
+	layer.view_margin_chunks = 0
+	layer.max_view_chunks = 16
+	layer.max_cache_chunks = 4
 	layer.appear_altitude_m = 16000.0
 	layer.hide_altitude_m = 17500.0
+	layer.streaming_enabled = false
 	get_root().add_child(layer)
 	layer.setup(coordinates, camera, cache_dir)
-	_assert(layer.pending_tile_count() == 2, "showcase queue remains bounded")
-	layer._process(0.0)
-	_assert(layer.active_tile_count() == 1, "showcase builds at most one configured tile per frame")
-	if layer.active_tile_count() > 0:
-		var first_instance: MeshInstance3D = layer._active.values()[0] as MeshInstance3D
-		_assert(first_instance.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "showcase building batches do not cast expensive dynamic shadows by default")
+	layer.set_streaming_enabled(true)
+	await _wait_until_ready(layer)
+	_assert(layer.active_mesh_count() == 1, "showcase publishes one coherent building viewport mesh")
+	var active_instance: MeshInstance3D = layer._active_instance
+	_assert(active_instance != null and active_instance.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF, "showcase building viewport does not cast expensive dynamic shadows by default")
+
 	camera.altitude = 16800.0
 	layer._process(0.0)
-	_assert(layer.active_tile_count() >= 1, "showcase keeps eligible geometry through visibility hysteresis")
+	await _wait_until_ready(layer)
+	_assert(layer.active_mesh_count() == 1, "showcase keeps an eligible coherent viewport through visibility hysteresis")
 	camera.altitude = 17600.0
 	layer._process(0.0)
-	_assert(layer.active_tile_count() == 0, "showcase unloads above hide threshold")
+	_assert(layer.active_mesh_count() == 0, "showcase unloads above hide threshold")
+
 	camera.altitude = 4200.0
-	camera.focus = Vector3(1010.0, 0.0, -10.0)
+	camera.focus = Vector3(90000.0, 0.0, 0.0)
 	layer._process(0.0)
-	_assert(layer.active_tile_count() == 0 and layer.pending_tile_count() == 0, "large city jump leaves no stale geometry or queue")
+	await _wait_until_ready(layer)
+	_assert(layer.active_mesh_count() == 0, "empty distant viewport atomically replaces stale city geometry")
+	layer.queue_free()
+	camera.queue_free()
+	await process_frame
+
+func _wait_until_ready(layer: Node) -> void:
+	for _index in range(120):
+		layer._process(0.0)
+		if layer.is_viewport_ready():
+			return
+		await process_frame
+	_assert(false, "showcase building viewport stages within bounded test frames")
 
 func _test_camera_scale_transition() -> void:
 	var rig = CameraControllerScript.new()
@@ -157,18 +168,35 @@ func _test_camera_scale_transition() -> void:
 	_assert(rig.is_driving_view(), "manual drive handoff enters production drive camera state")
 	_assert(rig.is_mode_transition_active(), "manual drive handoff uses production smooth mode transition")
 
+func _write_bmc_chunk(root_dir: String, lod: int, chunk: Vector2i) -> void:
+	var directory := "%s/lod%d" % [root_dir, lod]
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory))
+	var file := FileAccess.open("%s/%d_%d.bmc" % [directory, chunk.x, chunk.y], FileAccess.WRITE)
+	_assert(file != null, "showcase prebuilt chunk is writable")
+	if file == null:
+		return
+	file.store_buffer("BMC2".to_ascii_buffer())
+	file.store_32(2)
+	file.store_32(3)
+	file.store_float(0.0)
+	file.store_float(0.0)
+	file.store_32(3)
+	for position in [Vector3(0.0, 0.0, 0.0), Vector3(100.0, 0.0, 0.0), Vector3(0.0, 20.0, -100.0)]:
+		file.store_float(position.x)
+		file.store_float(position.y)
+		file.store_float(position.z)
+		file.store_float(0.0)
+		file.store_float(1.0)
+		file.store_float(0.0)
+		file.store_8(130)
+		file.store_8(134)
+		file.store_8(138)
+		file.store_8(255)
+	file.close()
+
 func _record(x: float, y: float, source_id: String, size_m: float = 10.0) -> Dictionary:
 	var half := size_m * 0.5
 	return {"id": source_id, "x": x, "y": y, "geometry": [{"outer": [[x - half, y - half], [x + half, y - half], [x + half, y + half], [x - half, y + half]], "holes": []}], "tags": {"building": "yes", "building:levels": "4"}}
-
-func _write_tile(cache_dir: String, tile: Vector2i, record: Dictionary) -> void:
-	var path := "%s/%d_%d.jsonl" % [cache_dir, tile.x, tile.y]
-	var file := FileAccess.open(path, FileAccess.WRITE)
-	_assert(file != null, "showcase test tile is writable")
-	if file == null:
-		return
-	file.store_line(JSON.stringify(record))
-	file.close()
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:

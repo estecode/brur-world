@@ -39,7 +39,7 @@ if [[ "$WORLD_SHOWCASE_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_WORLD_SHOWCASE_PREP pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
 fi
 if [[ "$BUILDING_TILE_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=SKIP_BUILDING_TILES pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
+  printf 'PR_CHECK=SKIP_BUILDING_MESH_LOD pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
 fi
 
 if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" ]]; then
@@ -135,21 +135,23 @@ fi
 
 if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
   [[ -f "$WORLD_DATA/buildings.jsonl" ]] || {
-    printf 'PR_CHECK=FAIL missing authoritative buildings.jsonl for production building tiles\n' >&2
+    printf 'PR_CHECK=FAIL missing authoritative buildings.jsonl for production building mesh LOD\n' >&2
     exit 66
   }
-  if "$PYTHON" "$WORKTREE/tools/build_building_tiles.py" "$WORLD_DATA" --check >/dev/null 2>&1; then
-    printf 'PR_CHECK=REUSE_BUILDING_TILES pr=%s reason=source-and-builder-match\n' "$BRUR_PR_CHECK_PR"
+  if "$PYTHON" "$WORKTREE/tools/build_building_mesh_pyramid.py" "$WORLD_DATA" --check >/dev/null 2>&1; then
+    printf 'PR_CHECK=REUSE_BUILDING_MESH_LOD pr=%s reason=source-builder-policy-match\n' "$BRUR_PR_CHECK_PR"
   else
-    printf 'PR_CHECK=BUILD_BUILDING_TILES pr=%s reason=missing-or-stale-cache source=existing-buildings-jsonl\n' "$BRUR_PR_CHECK_PR"
-    "$PYTHON" "$WORKTREE/tools/build_building_tiles.py" "$WORLD_DATA"
-    "$PYTHON" "$WORKTREE/tools/build_building_tiles.py" "$WORLD_DATA" --check >/dev/null || {
-      printf 'PR_CHECK=FAIL production building tile cache is invalid after rebuild\n' >&2
+    printf 'PR_CHECK=BUILD_BUILDING_MESH_LOD pr=%s reason=missing-or-stale-cache source=existing-buildings-jsonl\n' "$BRUR_PR_CHECK_PR"
+    "$PYTHON" "$WORKTREE/tools/build_building_mesh_pyramid.py" "$WORLD_DATA"
+    "$PYTHON" "$WORKTREE/tools/build_building_mesh_pyramid.py" "$WORLD_DATA" --check >/dev/null || {
+      printf 'PR_CHECK=FAIL production building mesh LOD cache is invalid after rebuild\n' >&2
       exit 1
     }
   fi
-  printf 'PR_CHECK=CHECK_BUILDING_STREAM_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
+  printf 'PR_CHECK=CHECK_BUILDING_ATOMIC_STREAM_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
   run_godot_test res://tests/godot/test_world_streaming_foundation.gd
+  printf 'PR_CHECK=CHECK_BUILDING_REAL_DATA_PERFORMANCE pr=%s targets=cold750ms-warm250ms-publish5ms\n' "$BRUR_PR_CHECK_PR"
+  run_godot_test res://tests/godot/test_building_mesh_real_data.gd
   printf 'PR_CHECK=CHECK_MAP_CONTROLS_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
   run_godot_test res://tests/godot/test_map_controls.gd
 fi
@@ -192,7 +194,7 @@ fi
 
 printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
 if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
-  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION confirm HUS starts OFF; turn HUS ON near street/city altitude and verify nearby buildings appear with acceptable playability; turn HUS OFF and verify they disappear; close Godot when finished\n'
+  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION confirm HUS starts OFF; turn HUS ON and zoom/pan across Stockholm: each settled viewport must appear coherently in one swap with no block-by-block reveal, remain playable, and reuse nearby views quickly; turn HUS OFF and verify buildings disappear; close Godot when finished\n'
 else
   printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION inspect only the changed real-data presentation; close Godot when finished\n'
 fi
