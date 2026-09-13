@@ -1,0 +1,22 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/person.gd" id="1_person"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape_person"]
+radius = 0.35
+height = 1.8
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_person"]
+radius = 0.35
+height = 1.8
+
+[node name="Person" type="CharacterBody3D"]
+script = ExtResource("1_person")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.9, 0)
+shape = SubResource("CapsuleShape_person")
+
+[node name="Visual" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.9, 0)
+mesh = SubResource("CapsuleMesh_person")
