@@ -1,42 +1,41 @@
 #!/usr/bin/env bash
-# Stages the selected revision's production runtime data into res://world_data and exports Windows.
-# Dependencies: prepare_runtime_data.py, project.godot production startup scene, Windows export preset, Godot, authoritative local world_data.
+# Exports the selected revision while reusing a cached external production world-data resource pack.
+# Dependencies: runtime_pack.py, project.godot production startup scene, Windows export preset, Godot, authoritative local world_data.
 set -euo pipefail
 
 : "${BRUR_WINDOWS_SOURCE_ROOT:?}"
 : "${BRUR_WINDOWS_WORLD_DATA:?}"
-: "${BRUR_WINDOWS_RUNTIME_DATA_OUT:?}"
+: "${BRUR_WINDOWS_RUNTIME_PACK_INFO:?}"
 : "${BRUR_WINDOWS_EXPORT_DIR:?}"
 : "${BRUR_WINDOWS_BUILD_NAME:?}"
 : "${GODOT_BIN:?}"
 PYTHON="${PYTHON_BIN:-python3}"
+CACHE_DIR="${BRUR_WINDOWS_CACHE_DIR:-$HOME/.cache/brur-world/windows-build}"
 
-"$PYTHON" "$BRUR_WINDOWS_SOURCE_ROOT/tools/windows_build/prepare_runtime_data.py" \
-  "$BRUR_WINDOWS_WORLD_DATA" --output "$BRUR_WINDOWS_RUNTIME_DATA_OUT"
+TIMEFORMAT='WINDOWS_TIMING stage=runtime_pack seconds=%3R'
+time "$PYTHON" "$BRUR_WINDOWS_SOURCE_ROOT/tools/windows_build/runtime_pack.py" \
+  "$BRUR_WINDOWS_WORLD_DATA" \
+  --cache-dir "$CACHE_DIR" \
+  --output-info "$BRUR_WINDOWS_RUNTIME_PACK_INFO"
 
-STAGED_WORLD_DATA="$BRUR_WINDOWS_SOURCE_ROOT/world_data"
-rm -rf "$STAGED_WORLD_DATA"
-cp -R "$BRUR_WINDOWS_RUNTIME_DATA_OUT" "$STAGED_WORLD_DATA"
-
-"$PYTHON" - "$BRUR_WINDOWS_SOURCE_ROOT/export_presets.cfg" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8")
-old = 'include_filter=""'
-new = 'include_filter="world_data/*,world_data/**/*"'
-if old not in text:
-    raise SystemExit("WINDOWS_TARGET=FAIL expected empty Windows export include_filter")
-path.write_text(text.replace(old, new, 1), encoding="utf-8")
+RUNTIME_PACK_PATH="$($PYTHON - "$BRUR_WINDOWS_RUNTIME_PACK_INFO" <<'PY'
+import json, pathlib, sys
+info = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+path = pathlib.Path(info["pack_path"])
+if not path.is_file() or path.stat().st_size <= 0:
+    raise SystemExit(f"WINDOWS_TARGET=FAIL missing runtime pack: {path}")
+print(path)
 PY
+)"
 
-printf 'WINDOWS_TARGET=EXPORT name=%s\n' "$BRUR_WINDOWS_BUILD_NAME"
-"$GODOT_BIN" --headless --path "$BRUR_WINDOWS_SOURCE_ROOT" \
+printf 'WINDOWS_TARGET=EXPORT name=%s runtime_pack=%s\n' "$BRUR_WINDOWS_BUILD_NAME" "$RUNTIME_PACK_PATH"
+TIMEFORMAT='WINDOWS_TIMING stage=godot_export seconds=%3R'
+time "$GODOT_BIN" --headless --path "$BRUR_WINDOWS_SOURCE_ROOT" \
   --export-release "Windows Desktop" "$BRUR_WINDOWS_EXPORT_DIR/$BRUR_WINDOWS_BUILD_NAME.exe"
 
 PCK_PATH="$BRUR_WINDOWS_EXPORT_DIR/$BRUR_WINDOWS_BUILD_NAME.pck"
 [[ -s "$PCK_PATH" ]] || { printf 'WINDOWS_TARGET=FAIL missing exported PCK\n' >&2; exit 1; }
-printf 'WINDOWS_TARGET=VERIFY_PACKAGED_WORLD_DATA\n'
-"$GODOT_BIN" --headless --main-pack "$PCK_PATH" \
-  --script res://tests/godot/test_windows_packaged_world_data.gd
+printf 'WINDOWS_TARGET=VERIFY_EXTERNAL_WORLD_DATA\n'
+TIMEFORMAT='WINDOWS_TIMING stage=runtime_pack_verify seconds=%3R'
+time "$GODOT_BIN" --headless --main-pack "$PCK_PATH" \
+  --script res://tests/godot/test_windows_packaged_world_data.gd -- "$RUNTIME_PACK_PATH"
