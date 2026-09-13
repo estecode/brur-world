@@ -6,6 +6,7 @@ extends SceneTree
 const PLAYER_OWNER: int = 0
 const GPS_OWNER: int = 1
 const FIXTURE_ROUTE_POINT_COUNT: int = 12
+const MAX_ROUTE_DEVIATION_M: float = 10.0
 
 func _init() -> void:
 	call_deferred("_run")
@@ -63,6 +64,10 @@ func _run() -> void:
 	var target_mesh := renderer.get_node_or_null("GpsTarget") as MeshInstance3D
 	_assert(route_mesh != null and route_mesh.mesh != null, "Set Route creates visible route mesh geometry")
 	_assert(target_mesh != null and target_mesh.visible, "Set Route shows the visible route destination marker")
+	_assert(float(renderer.call("ribbon_width_m")) <= 14.0, "harness route stays at close-drive ribbon width")
+	_assert(float(renderer.call("outline_width_m")) <= 25.0, "harness route outline stays bounded")
+	_assert(float(renderer.call("target_scale")) < 0.1, "harness destination marker stays compact")
+	_assert(float(renderer.call("route_height")) < 1.0, "harness route stays close to the local road surface")
 	_assert(bool(follower.call("is_follow_enabled")), "Set Route immediately starts GPS route following")
 	_assert(int(player.call("control_owner")) == GPS_OWNER, "Set Route immediately transfers control to GPS")
 	_assert(not bool(player_controller.get("enabled")), "player controller releases the vehicle when route starts")
@@ -108,23 +113,31 @@ func _run() -> void:
 		_assert(int(renderer.call("rendered_point_count")) == FIXTURE_ROUTE_POINT_COUNT, "AI mode switching preserves the visible route")
 		_assert(player.global_position.distance_to(position_before_mode) < 0.5, "AI mode switching does not reset or teleport the vehicle")
 
-	# Prove route completion behavior on a short production follower route without waiting for the long human-playtest loop.
-	var short_start: Vector3 = player.global_position
-	var short_route := PackedVector3Array([
-		short_start,
-		short_start + Vector3(8.0, 0.0, 0.0),
-		short_start + Vector3(16.0, 0.0, 0.0),
+	# Reproduce the human failure with several 90-degree turns and assert the actual trajectory,
+	# not merely total movement or final distance. The production follower must remain near the polyline.
+	var path_route := PackedVector3Array([
+		Vector3(-35.0, 0.8, 25.0),
+		Vector3(25.0, 0.8, 25.0),
+		Vector3(25.0, 0.8, -20.0),
+		Vector3(-25.0, 0.8, -20.0),
+		Vector3(-25.0, 0.8, 5.0),
 	])
-	var short_limits := PackedFloat32Array([8.0, 8.0, 8.0])
+	var path_limits := PackedFloat32Array([13.9, 13.9, 13.9, 13.9, 13.9])
 	follower.call("set_follow_enabled", false)
-	follower.call("set_route", short_route, short_limits)
+	player.call("set_world_position", path_route[0])
 	player.call("set_motion_state", 0.0, -PI / 2.0)
+	follower.call("set_route", path_route, path_limits)
+	follower.call("clear_upcoming_intersection")
+	follower.call("set_driving_mode", 1)
 	follower.call("set_follow_enabled", true)
-	for _frame in range(360):
+	var max_deviation: float = 0.0
+	for _frame in range(1500):
 		await physics_frame
-	var end_distance: float = Vector2(player.global_position.x - short_route[2].x, player.global_position.z - short_route[2].z).length()
-	_assert(end_distance < 4.0, "GPS follower drives the route to its final point")
-	_assert(float(player.call("speed_mps")) < 1.5, "GPS follower brakes near the final route point")
+		max_deviation = maxf(max_deviation, _distance_to_polyline(player.global_position, path_route))
+	var path_end_distance: float = Vector2(player.global_position.x - path_route[path_route.size() - 1].x, player.global_position.z - path_route[path_route.size() - 1].z).length()
+	_assert(max_deviation <= MAX_ROUTE_DEVIATION_M, "GPS trajectory stays inside the route corridor through turns (max deviation %.2f m)" % max_deviation)
+	_assert(path_end_distance < 5.0, "GPS trajectory follows the multi-turn path to its final point")
+	_assert(float(player.call("speed_mps")) < 1.5, "GPS trajectory brakes at the multi-turn route endpoint")
 
 	clear_route.emit_signal("pressed")
 	await process_frame
@@ -141,6 +154,20 @@ func _run() -> void:
 	harness.queue_free()
 	print("DRIVING_HARNESS_MODES=PASS")
 	quit(0)
+
+func _distance_to_polyline(point: Vector3, points: PackedVector3Array) -> float:
+	var best: float = INF
+	for index in range(points.size() - 1):
+		best = minf(best, _distance_to_segment(point, points[index], points[index + 1]))
+	return best
+
+func _distance_to_segment(point: Vector3, a: Vector3, b: Vector3) -> float:
+	var p := Vector2(point.x, point.z)
+	var av := Vector2(a.x, a.z)
+	var bv := Vector2(b.x, b.z)
+	var ab := bv - av
+	var t := clampf((p - av).dot(ab) / maxf(ab.length_squared(), 0.0001), 0.0, 1.0)
+	return p.distance_to(av + ab * t)
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:
