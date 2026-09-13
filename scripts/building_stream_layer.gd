@@ -140,6 +140,12 @@ func _update_desired_request(force: bool) -> void:
 		_last_visible = false
 		return
 	_last_visible = true
+	var next_lod := BuildingLodPolicyScript.choose_lod(altitude)
+	if not force and not _desired_request.is_empty() and int(_desired_request.get("lod", -1)) == next_lod:
+		var retained_bounds: Dictionary = _desired_request.get("bounds", {})
+		var core_bounds := _chunk_bounds(next_lod, 0)
+		if _bounds_contains(retained_bounds, core_bounds):
+			return
 	var request := _select_viewport_request(altitude)
 	var signature := String(request.get("signature", ""))
 	if not force and signature == _desired_signature:
@@ -216,6 +222,16 @@ func _chunk_bounds(lod: int, margin_chunks: int) -> Dictionary:
 
 func _bounds_chunk_count(bounds: Dictionary) -> int:
 	return maxi(0, int(bounds["max_x"]) - int(bounds["min_x"]) + 1) * maxi(0, int(bounds["max_y"]) - int(bounds["min_y"]) + 1)
+
+func _bounds_contains(outer: Dictionary, inner: Dictionary) -> bool:
+	if outer.is_empty() or inner.is_empty():
+		return false
+	return (
+		int(outer.get("min_x", 0)) <= int(inner.get("min_x", 0))
+		and int(outer.get("max_x", 0)) >= int(inner.get("max_x", 0))
+		and int(outer.get("min_y", 0)) <= int(inner.get("min_y", 0))
+		and int(outer.get("max_y", 0)) >= int(inner.get("max_y", 0))
+	)
 
 func _start_stage_if_needed() -> void:
 	if (
@@ -435,6 +451,7 @@ func debug_snapshot() -> Dictionary:
 		"viewport_ready": is_viewport_ready(),
 		"active_signature": _active_signature,
 		"desired_signature": _desired_signature,
+		"request_generation": _request_generation,
 		"building_lod": _active_lod,
 		"desired_lod": int(_desired_request.get("lod", -1)),
 		"active_chunks": _active_chunks,
