@@ -93,15 +93,6 @@ stamp_mismatch() {
   [[ "$(cat "$stamp")" != "$expected" ]]
 }
 
-pbf_newer_than_any() {
-  [[ -n "$PBF" ]] || return 1
-  local output
-  for output in "$@"; do
-    [[ ! -f "$output" || "$PBF" -nt "$output" ]] && return 0
-  done
-  return 1
-}
-
 ensure_native() {
   local sources=()
   while IFS= read -r source; do
@@ -134,19 +125,6 @@ ensure_native() {
   done
 }
 
-routing_dataset_inputs() {
-  printf '%s\n' \
-    "$ROOT/tools/build_routing.py" \
-    "$ROOT/tools/build_routing_dataset.py" \
-    "$ROOT/tools/check_routing_dataset.py" \
-    "$ROOT/tools/compressed_routing.py" \
-    "$ROOT/tools/gps_snap_index.py" \
-    "$ROOT/tools/route_geometry.py" \
-    "$ROOT/tools/routing_graph.py" \
-    "$ROOT/tools/routing_graph_view.py" \
-    "$ROOT/tools/world_common.py"
-}
-
 routing_dataset_valid() {
   [[ -f "$ROOT/tools/check_routing_dataset.py" ]] || return 1
   local python
@@ -162,26 +140,18 @@ ensure_gps_data() {
     "$WORLD_DATA/routing_geometry.brh"
     "$WORLD_DATA/routing_stats.json"
   )
-  local build_inputs=()
-  while IFS= read -r input; do
-    build_inputs+=("$input")
-  done < <(routing_dataset_inputs)
-  local fingerprint
-  fingerprint="$(fingerprint_files "${build_inputs[@]}")"
-  local stamp="$WORLD_DATA/.playtest_gps_data_fingerprint"
   local rebuild=0
   local artifact
   for artifact in "${required[@]}"; do
     [[ -f "$artifact" ]] || rebuild=1
   done
-  pbf_newer_than_any "${required[@]}" && rebuild=1
-  if [[ "$rebuild" -eq 0 ]] && stamp_mismatch "$stamp" "$fingerprint"; then
-    rebuild=1
-  fi
   if [[ "$rebuild" -eq 0 ]] && ! routing_dataset_valid; then
     rebuild=1
   fi
 
+  # The offline build pipeline owns runtime-data freshness. A successful manual
+  # build is already authoritative; playtest only checks that its required
+  # artifacts exist and that the routing generation is internally consistent.
   if [[ "$rebuild" -eq 1 ]]; then
     require_pbf
     local python
@@ -196,7 +166,6 @@ ensure_gps_data() {
     [[ -f "$artifact" ]] || fail "missing $artifact after preparation"
   done
   routing_dataset_valid || fail "routing dataset failed identity validation after preparation"
-  printf '%s\n' "$fingerprint" > "$stamp"
 }
 
 ensure_game_data() {
@@ -209,33 +178,19 @@ ensure_game_data() {
     "$WORLD_DATA/routing_stats.json"
     "$WORLD_DATA/search_index.bsi"
   )
-  local build_inputs=(
-    "$ROOT/tools/build_sweden.py"
-    "$ROOT/tools/build_roads.py"
-    "$ROOT/tools/build_background.py"
-    "$ROOT/tools/build_features.py"
-    "$ROOT/tools/build_search_index.py"
-    "$ROOT/tools/build_search_binary.py"
-  )
-  while IFS= read -r input; do
-    build_inputs+=("$input")
-  done < <(routing_dataset_inputs)
-  local fingerprint
-  fingerprint="$(fingerprint_files "${build_inputs[@]}")"
-  local stamp="$WORLD_DATA/.playtest_world_fingerprint"
   local rebuild=0
   local artifact
   for artifact in "${required[@]}"; do
     [[ -f "$artifact" ]] || rebuild=1
   done
-  pbf_newer_than_any "${required[@]}" && rebuild=1
-  if [[ "$rebuild" -eq 0 ]] && stamp_mismatch "$stamp" "$fingerprint"; then
-    rebuild=1
-  fi
   if [[ "$rebuild" -eq 0 ]] && ! routing_dataset_valid; then
     rebuild=1
   fi
 
+  # World data is owned by build_sweden and its dataset validators. Do not
+  # second-guess an already-valid build using playtest-private fingerprints or
+  # source-file mtimes; those can drift independently and cause full duplicate
+  # Sweden builds immediately after a successful offline build.
   if [[ "$rebuild" -eq 1 ]]; then
     require_pbf
     local python
@@ -250,7 +205,6 @@ ensure_game_data() {
     [[ -f "$artifact" ]] || fail "world build did not produce $artifact"
   done
   routing_dataset_valid || fail "routing dataset failed identity validation after world preparation"
-  printf '%s\n' "$fingerprint" > "$stamp"
 }
 
 GODOT="$(resolve_godot)"

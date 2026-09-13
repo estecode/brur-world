@@ -40,7 +40,15 @@ PY
 for name in build_sweden.py build_roads.py build_routing.py build_routing_dataset.py build_background.py build_features.py build_search_index.py build_search_binary.py compressed_routing.py gps_snap_index.py route_geometry.py routing_graph.py routing_graph_view.py world_common.py; do
   printf 'builder\n' > "$FAKE_ROOT/tools/$name"
 done
+
+# Simulate a successful offline build followed by stale playtest-private stamps
+# and a later-touched source PBF. Neither is allowed to invalidate valid runtime data.
+printf 'old-world-fingerprint\n' > "$FAKE_ROOT/world_data/.playtest_world_fingerprint"
+printf 'old-gps-fingerprint\n' > "$FAKE_ROOT/world_data/.playtest_gps_data_fingerprint"
 sleep 1
+PBF="$TMP/sweden.osm.pbf"
+printf 'same-source-placeholder\n' > "$PBF"
+
 for name in brur-gps-server brur-gps-search-server; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKE_ROOT/bin/$name"
   chmod +x "$FAKE_ROOT/bin/$name"
@@ -61,14 +69,16 @@ grep -q 'unsupported target' "$TMP/err"
 [[ ! -e /tmp/brur-playtest-injection ]]
 [[ ! -e "$GODOT_LOG" ]]
 
-BRUR_GODOT="$TMP/godot" bash "$FAKE_ROOT/tools/playtest.sh" game >"$TMP/game.out"
+BRUR_GODOT="$TMP/godot" BRUR_WORLD_PBF="$PBF" bash "$FAKE_ROOT/tools/playtest.sh" game >"$TMP/game.out"
 grep -q 'PLAYTEST=READY world-data' "$TMP/game.out"
+! grep -q 'PLAYTEST=PREPARE world rebuild' "$TMP/game.out"
 grep -q 'PLAYTEST=READY native-gps' "$TMP/game.out"
 grep -q -- "--path $FAKE_ROOT $FAKE_ROOT/scenes/main.tscn" "$GODOT_LOG"
 
 : > "$GODOT_LOG"
-BRUR_GODOT="$TMP/godot" bash "$FAKE_ROOT/tools/playtest.sh" gps >"$TMP/gps.out"
+BRUR_GODOT="$TMP/godot" BRUR_WORLD_PBF="$PBF" bash "$FAKE_ROOT/tools/playtest.sh" gps >"$TMP/gps.out"
 grep -q 'PLAYTEST=READY routing-dataset' "$TMP/gps.out"
+! grep -q 'PLAYTEST=PREPARE routing-dataset rebuild' "$TMP/gps.out"
 grep -q -- "--path $FAKE_ROOT $FAKE_ROOT/harness/gps/gps_harness.tscn" "$GODOT_LOG"
 
 printf 'tampered\n' >> "$FAKE_ROOT/world_data/routing_geometry.brh"
