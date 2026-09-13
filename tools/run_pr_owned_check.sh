@@ -84,7 +84,7 @@ run_owned_hook() {
 
 # New mapped checkouts are already fully tee'd by pr_check_entry.sh. Older mapped
 # checkouts still bootstrap current main before this runner, so recover the stable
-# mapped root through the world_data symlink and persist the objective hook here.
+# mapped root through the world_data symlink and persist the objective hook there.
 if [[ -n "${BRUR_PR_CHECK_LOG_PATH:-}" ]]; then
   run_owned_hook
   exit $?
@@ -99,7 +99,7 @@ print(os.path.dirname(os.path.realpath(sys.argv[1])))
 PY
 )"
 fi
-LOG_DIR="$MAPPED_ROOT/.safecommand/logs"
+LOG_DIR="$MAPPED_ROOT/safecommand-logs"
 LOG_PATH="$LOG_DIR/pr-check-${PR}.log"
 mkdir -p "$LOG_DIR"
 : > "$LOG_PATH"
