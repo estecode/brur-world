@@ -4,7 +4,7 @@
 Dependencies:
 - Uses prepare_runtime_data.py as the single Windows runtime-selection contract.
 - Reads authoritative generated world_data without rebuilding it.
-- Stores only local verification metadata/hashes and derived ZIP resource packs in a cache.
+- Stores only local verification metadata/hashes and derived compressed ZIP resource packs in a cache.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ if str(WINDOWS_BUILD_DIR) not in sys.path:
 
 from prepare_runtime_data import DELIVERY_MANIFEST, selected_runtime_files  # noqa: E402
 
-PACK_FORMAT_VERSION = 2
+PACK_FORMAT_VERSION = 1
 STATE_SCHEMA_VERSION = 1
 PACK_FILENAME = "brur-world-data.zip"
 HASH_STATE_FILENAME = "runtime_file_hashes.json"
@@ -78,6 +79,56 @@ def _human_bytes(value: int) -> str:
     return f"{amount:.1f} TB"
 
 
+def _runtime_category(relative_name: str) -> str:
+    parts = Path(relative_name).parts
+    return parts[0] if len(parts) > 1 else "root-files"
+
+
+def _report_runtime_footprint(identities: dict[str, dict[str, int]]) -> None:
+    by_category: dict[str, int] = defaultdict(int)
+    for relative_name, identity in identities.items():
+        by_category[_runtime_category(relative_name)] += identity["size"]
+    total = sum(by_category.values())
+    print(f"WINDOWS_RUNTIME_RAW_TOTAL={_human_bytes(total)}", flush=True)
+    for category, size in sorted(by_category.items(), key=lambda item: (-item[1], item[0])):
+        print(
+            f"WINDOWS_RUNTIME_RAW category={category} size={_human_bytes(size)} percent={100.0 * size / max(total, 1):.1f}",
+            flush=True,
+        )
+
+
+def _cleanup_obsolete_pack_cache(cache_dir: Path) -> None:
+    """Remove only cache files whose own metadata identifies an obsolete pack format."""
+    pack_dir = cache_dir / "runtime-packs"
+    if not pack_dir.is_dir():
+        return
+    freed = 0
+    removed = 0
+    for metadata_path in pack_dir.glob("*.zip.json"):
+        metadata = _read_json(metadata_path)
+        version = metadata.get("pack_format_version")
+        if not isinstance(version, int) or version == PACK_FORMAT_VERSION:
+            continue
+        pack_path = metadata_path.with_suffix("")
+        fingerprint = str(metadata.get("fingerprint", ""))
+        if pack_path.is_file():
+            freed += pack_path.stat().st_size
+            pack_path.unlink()
+            removed += 1
+        metadata_path.unlink(missing_ok=True)
+        if len(fingerprint) == 64:
+            for shipping_path in pack_dir.glob(f"{fingerprint}.shipping-base-v*.zip*"):
+                if shipping_path.is_file():
+                    freed += shipping_path.stat().st_size
+                    shipping_path.unlink()
+                    removed += 1
+    if removed:
+        print(
+            f"WINDOWS_RUNTIME_CACHE_CLEANUP removed={removed} freed={_human_bytes(freed)} obsolete_format_only=true",
+            flush=True,
+        )
+
+
 class _Progress:
     def __init__(self, stage: str, total_items: int, total_bytes: int | None = None) -> None:
         self.stage = stage
@@ -119,15 +170,13 @@ def _verified_hashes(source: Path, cache_dir: Path) -> tuple[dict[str, str], int
         print("[runtime-pack] first/new world pack: checking files before packing", flush=True)
 
     identities: dict[str, dict[str, int]] = {}
-    total_bytes = 0
     check_progress = _Progress("checking", len(selected))
     for number, relative in enumerate(selected, 1):
         relative_name = relative.as_posix()
-        identity = _stat_identity(source / relative)
-        identities[relative_name] = identity
-        total_bytes += identity["size"]
+        identities[relative_name] = _stat_identity(source / relative)
         check_progress.update(number)
     check_progress.update(len(selected), force=True)
+    _report_runtime_footprint(identities)
 
     hashes: dict[str, str] = {}
     next_files: dict[str, dict[str, Any]] = {}
@@ -211,13 +260,7 @@ def _pack_cache_valid(pack_path: Path, fingerprint: str) -> bool:
         return False
     try:
         with zipfile.ZipFile(pack_path, "r") as archive:
-            manifest = f"world_data/{DELIVERY_MANIFEST}"
-            if manifest not in archive.namelist():
-                return False
-            return all(
-                entry.is_dir() or entry.compress_type == zipfile.ZIP_STORED
-                for entry in archive.infolist()
-            )
+            return f"world_data/{DELIVERY_MANIFEST}" in archive.namelist()
     except (OSError, zipfile.BadZipFile):
         return False
 
@@ -229,8 +272,6 @@ def _verify_built_pack(pack_path: Path) -> None:
         progress = _Progress("verifying", len(entries), total_bytes)
         verified_bytes = 0
         for number, entry in enumerate(entries, 1):
-            if entry.compress_type != zipfile.ZIP_STORED:
-                raise RuntimeError(f"runtime pack entry is unexpectedly compressed: {entry.filename}")
             with archive.open(entry, "r") as handle:
                 while chunk := handle.read(1024 * 1024):
                     verified_bytes += len(chunk)
@@ -251,7 +292,8 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
         with zipfile.ZipFile(
             temp_path,
             "w",
-            compression=zipfile.ZIP_STORED,
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=6,
             allowZip64=True,
         ) as archive:
             for number, relative_name in enumerate(sorted(hashes), 1):
@@ -272,7 +314,6 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
                     indent=2,
                     sort_keys=True,
                 ),
-                compress_type=zipfile.ZIP_STORED,
             )
         progress.update(len(hashes), packed_bytes, force=True)
         _verify_built_pack(temp_path)
@@ -295,6 +336,7 @@ def prepare_cached_runtime_pack(source: Path, cache_dir: Path) -> dict[str, Any]
     source = source.resolve()
     cache_dir = cache_dir.expanduser().resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
+    _cleanup_obsolete_pack_cache(cache_dir)
 
     started = time.monotonic()
     hashes, reused_hashes, rehashed_files = _verified_hashes(source, cache_dir)
@@ -310,7 +352,7 @@ def prepare_cached_runtime_pack(source: Path, cache_dir: Path) -> dict[str, Any]
         print("[runtime-pack] reusable world pack unchanged — skipping packing", flush=True)
     else:
         print("WINDOWS BUILD — PACKING + SHIPPING", flush=True)
-        print("[runtime-pack] building reusable stored world pack for monolithic delivery compression", flush=True)
+        print("[runtime-pack] building reusable compressed world pack", flush=True)
         _build_pack(source, pack_path, fingerprint, hashes)
     pack_seconds = time.monotonic() - pack_started
 
