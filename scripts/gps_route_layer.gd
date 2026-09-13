@@ -152,8 +152,8 @@ func _on_follow_changed(enabled: bool) -> void:
 func _on_manual_vehicle_input() -> void:
 	if _follow_enabled: set_follow_enabled(false)
 func _on_route_reroute_requested() -> void:
-	# Navigation remains active after manual takeover, but this composition layer
-	# owns rerouting. Requesting a fresh plan never changes vehicle control owner.
+	# Navigation stays active after manual takeover. A successfully installed fresh
+	# route deliberately re-enters GPS control through _install_follow_route().
 	if not route_model.has_destination() or gps_client == null: return
 	if not bool(gps_client.call("is_ready")) or bool(gps_client.call("is_busy")): return
 	request_current_plan()
@@ -192,8 +192,16 @@ func _install_follow_route(response: Dictionary) -> void:
 		var speed_mps := DEFAULT_ROUTE_SPEED_MPS
 		if index < speeds.size(): speed_mps = maxf(1.0, float(speeds[index]))
 		speed_limits_mps.append(speed_mps)
-	_route_follower.call("set_route", world_points, speed_limits_mps); var available := world_points.size() >= 2; route_ui.call("set_follow_available", available)
-	if _follow_enabled and not bool(_route_follower.call("set_follow_enabled", true)): _follow_enabled = false; route_ui.call("set_follow_enabled", false)
+	_route_follower.call("set_route", world_points, speed_limits_mps)
+	var available := world_points.size() >= 2
+	route_ui.call("set_follow_available", available)
+	if not available:
+		_follow_enabled = false
+		route_ui.call("set_follow_enabled", false)
+		return
+	if not set_follow_enabled(true):
+		_follow_enabled = false
+		route_ui.call("set_follow_enabled", false)
 func _clear_follow_route() -> void:
 	_follow_enabled = false
 	if _route_follower != null: _route_follower.call("set_follow_enabled", false); _route_follower.call("clear_route")
