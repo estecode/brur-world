@@ -9,6 +9,7 @@ extends Node3D
 ## - VehicleRouteFollower consumes routed world points/speeds and emits reroute intent; this layer owns route requests.
 ## - Main exposes WorldCoordinates and the current rendered road-surface height; RoadSurfaceQuery reads authoritative BRT1 world data for the player vehicle.
 ## - CameraRig receives the player as an explicit follow target.
+## - PlayerMapMarker owns the zoom-dependent Map-mode player presentation without changing vehicle physics.
 
 signal teleport_state_changed(armed: bool)
 
@@ -19,6 +20,7 @@ const GpsRouteModelScript = preload("res://scripts/gps_route_model.gd")
 const GpsRouteRendererScript = preload("res://scripts/gps_route_renderer.gd")
 const GpsRouteUiScript = preload("res://scripts/gps_route_ui.gd")
 const RoadSurfaceQueryScript = preload("res://scripts/road_surface_query.gd")
+const PlayerMapMarkerScript = preload("res://scripts/player_map_marker.gd")
 const WORLD_DIR := "res://world_data"
 const EARTH_RADIUS := 6378137.0
 const START_LON := 18.0686
@@ -40,7 +42,7 @@ var _camera: Camera3D
 var _player_controller: Node
 var _route_follower: Node
 var _road_surface_query = RoadSurfaceQueryScript.new()
-var _player_marker: MeshInstance3D
+var _player_marker: Node3D
 var _follow_enabled := false
 var _teleport_armed := false
 var _setup_started := false
@@ -231,9 +233,9 @@ func _update_player_surface() -> void:
 	if player == null or not player.has_method("set_surface_kind"): return
 	player.call("set_surface_kind", _road_surface_query.surface_at(player.global_position))
 func _create_player_marker() -> void:
-	_player_marker = MeshInstance3D.new(); _player_marker.name = "PlayerDirectionMarker"
-	var mesh := PrismMesh.new(); mesh.size = Vector3(120.0, 20.0, 180.0); _player_marker.mesh = mesh
-	var material := StandardMaterial3D.new(); material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED; material.albedo_color = Color(1.0, 0.85, 0.1); material.no_depth_test = true; _player_marker.material_override = material; add_child(_player_marker)
+	_player_marker = PlayerMapMarkerScript.new() as Node3D
+	_player_marker.name = "PlayerMapMarker"
+	add_child(_player_marker)
 func _update_driving_input_mode() -> void:
 	if _player_controller == null or _camera_rig == null: return
 	var driving_view := bool(_camera_rig.call("is_driving_view")) if _camera_rig.has_method("is_driving_view") else true; _player_controller.set("enabled", driving_view)
@@ -250,10 +252,10 @@ func _update_visual_height() -> void:
 	if player != null: player.position.y = road_surface_height; player.scale = Vector3.ONE
 	if _player_marker != null and player != null:
 		var route_clearance := maxf(0.0, float(route_renderer.call("route_height")) - road_surface_height)
-		_player_marker.global_position = player.global_position + Vector3.UP * maxf(12.0, route_clearance + 20.0)
-		_player_marker.rotation.y = float(player.call("heading_rad")) if player.has_method("heading_rad") else player.rotation.y
-		_player_marker.scale = Vector3.ONE * clampf(camera_distance / 8000.0, 1.0, 40.0)
-		_player_marker.visible = not bool(_camera_rig.call("is_driving_view"))
+		_player_marker.global_position = player.global_position + Vector3.UP * maxf(0.75, route_clearance + 0.35)
+		var heading := float(player.call("heading_rad")) if player.has_method("heading_rad") else player.rotation.y
+		var driving_view := bool(_camera_rig.call("is_driving_view")) if _camera_rig.has_method("is_driving_view") else false
+		_player_marker.call("set_view_state", camera_distance, driving_view, heading)
 func _screen_to_ground(screen_position: Vector2) -> Vector3:
 	var ray_origin := _camera.project_ray_origin(screen_position); var ray_direction := _camera.project_ray_normal(screen_position)
 	if ray_direction.y >= -0.000001: return Vector3(INF, INF, INF)
