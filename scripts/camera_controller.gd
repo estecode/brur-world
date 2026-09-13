@@ -3,7 +3,7 @@ extends Node3D
 ## Drives the map camera from an explicit real-world altitude with explicit Map/Drive ownership and optional map follow.
 ##
 ## Dependencies:
-## - camera_altitude_model.gd owns deterministic altitude state and readout formatting.
+## - camera_altitude_model.gd owns deterministic map-altitude state and readout formatting.
 ## - Camera3D presents framing; an explicitly wired generic Node3D may be followed in Drive mode or by Map Follow car.
 
 signal view_changed(focus_world: Vector3, distance_m: float, camera_world_position: Vector3)
@@ -30,6 +30,8 @@ const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.g
 @export var drive_max_distance_m: float = 48.0
 @export var drive_look_ahead_m: float = 42.0
 @export var drive_fov: float = 58.0
+@export var drive_near_m: float = 0.5
+@export var drive_far_m: float = 5000.0
 @export var mode_transition_seconds: float = 0.65
 
 var focus := Vector3.ZERO
@@ -174,21 +176,28 @@ func _target_heading_rad() -> float:
 	if _follow_target != null and _follow_target.has_method("heading_rad"): return float(_follow_target.call("heading_rad"))
 	return _follow_target.global_rotation.y if _follow_target != null else 0.0
 
+func _drive_camera_height() -> float:
+	var extra_distance := maxf(0.0, _drive_distance_current_m - drive_distance_m)
+	return drive_height_m + extra_distance * 0.22
+
 func _apply_drive_camera(delta_s: float = 0.0) -> void:
 	if not _has_follow_target(): return
 	var target := _follow_target.global_position
 	var heading := _target_heading_rad()
 	var forward := Vector3(-sin(heading), 0.0, -cos(heading)).normalized()
 	var extra_distance := maxf(0.0, _drive_distance_current_m - drive_distance_m)
-	var height := drive_height_m + extra_distance * 0.22
+	var height := _drive_camera_height()
 	var look_ahead := drive_look_ahead_m + extra_distance * 0.7
 	focus = Vector3(target.x, 0.0, target.z)
 	position = target
 	camera.position = -forward * _drive_distance_current_m + Vector3.UP * height
 	camera.fov = drive_fov
 	camera.look_at(target + forward * look_ahead + Vector3.UP * 2.5, Vector3.UP)
-	camera.near = 0.1
-	camera.far = 25000.0
+	# Drive mode renders a local chase-camera scene. Keeping the near plane away
+	# from zero and bounding the far plane preserves useful depth precision for
+	# roads, buildings and the player instead of spending it on map-scale range.
+	camera.near = maxf(0.25, drive_near_m)
+	camera.far = maxf(camera.near + 100.0, drive_far_m)
 	_apply_mode_transition(delta_s)
 	view_changed.emit(focus, _drive_distance_current_m, camera.global_position)
 
@@ -288,6 +297,13 @@ func _center_on_follow_target() -> void:
 	focus = Vector3(target_position.x, 0.0, target_position.z)
 	_apply_camera()
 func get_focus_world() -> Vector3: return focus
-func get_altitude() -> float: return clampf(start_altitude_m, min_altitude_m, max_altitude_m) if altitude_model == null else altitude_model.get_altitude()
-func format_altitude_readout() -> String: return CameraAltitudeModelScript.format_altitude(get_altitude()) if altitude_model == null else altitude_model.format_readout()
+func get_altitude() -> float:
+	# The altitude model intentionally keeps the Map zoom while Drive mode owns a
+	# close chase camera. Consumers that stream presentation (buildings, etc.)
+	# need the effective camera altitude, not the retained Map altitude.
+	if _drive_mode:
+		return _drive_camera_height()
+	return clampf(start_altitude_m, min_altitude_m, max_altitude_m) if altitude_model == null else altitude_model.get_altitude()
+func format_altitude_readout() -> String:
+	return CameraAltitudeModelScript.format_altitude(get_altitude())
 func get_distance() -> float: return _drive_distance_current_m if _drive_mode else _derived_distance()
