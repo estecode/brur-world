@@ -40,6 +40,9 @@ jobs:
       - name: Run traffic signal compiler tests
         run: python -m unittest tests.test_traffic_signals
 
+      - name: Run traffic intersection model tests
+        run: python -m unittest tests.test_traffic_intersections
+
       - name: Run building tile derivation tests
         run: |
           python -m unittest tests.test_building_tiles
