@@ -1,7 +1,7 @@
 class_name DriveHudAdapter
 extends Node
 
-## Adapts public vehicle, routing-world, camera, and navigation outputs into Drive HUD view state.
+## Adapts public vehicle, routing-world, and navigation outputs into road-vehicle HUD view state.
 ##
 ## Dependencies:
 ## - Reads player vehicle through GpsRouteLayer.get_player_vehicle().
@@ -40,16 +40,14 @@ func _ready() -> void:
 	call_deferred("_finish_setup")
 
 func _process(delta: float) -> void:
-	if _hud == null or _camera_rig == null or _route_layer == null:
+	if _hud == null or _route_layer == null:
 		return
 	if not _setup_complete:
 		_finish_setup()
-	var driving_view := bool(_camera_rig.call("is_driving_view")) if _camera_rig.has_method("is_driving_view") else false
-	_hud.call("set_drive_visible", driving_view)
-	if not driving_view:
-		return
 	var player: Node3D = _route_layer.call("get_player_vehicle") as Node3D if _route_layer.has_method("get_player_vehicle") else null
-	if player == null:
+	var has_road_vehicle := player != null and player.has_method("speed_kmh")
+	_hud.call("set_vehicle_visible", has_road_vehicle)
+	if not has_road_vehicle:
 		return
 	_speed_limit_refresh_s -= maxf(0.0, delta)
 	if _speed_limit_refresh_s <= 0.0:
@@ -61,7 +59,7 @@ func _process(delta: float) -> void:
 		if is_finite(eta) and eta >= 0.0:
 			eta_seconds = eta
 	_hud.call("set_state", {
-		"current_speed_kmh": float(player.call("speed_kmh")) if player.has_method("speed_kmh") else 0.0,
+		"current_speed_kmh": float(player.call("speed_kmh")),
 		"speed_limit_kmh": _last_speed_limit_kmh,
 		"eta_seconds": eta_seconds,
 	})
