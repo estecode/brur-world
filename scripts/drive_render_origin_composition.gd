@@ -111,9 +111,17 @@ func _rebase_background_mesh(instance: MeshInstance3D, origin: Vector3) -> void:
 	# building and vehicle logical heights remain unchanged.
 	instance.position.y = minf(instance.position.y, DRIVE_DECORATIVE_MAX_Y_M)
 
+	var previous_origin := Vector2(INF, INF)
+	if instance.has_meta(LOCALIZED_ORIGIN_META):
+		previous_origin = instance.get_meta(LOCALIZED_ORIGIN_META)
+	var next_origin := Vector2(origin.x, origin.z)
+	if previous_origin == next_origin:
+		return
+
 	# The ocean base is a Sweden-scale PlaneMesh. In Drive only a bounded local
 	# patch around the camera is required, so never send the country-scale plane
-	# vertices through the Drive render path.
+	# vertices through the Drive render path. Rebuild only when the render cell
+	# changes; a stable cell keeps the exact same mesh resource across frames.
 	if logical_mesh is PlaneMesh:
 		var local_plane := PlaneMesh.new()
 		var far_m := 5000.0
@@ -124,15 +132,9 @@ func _rebase_background_mesh(instance: MeshInstance3D, origin: Vector3) -> void:
 		instance.mesh = local_plane
 		instance.position.x = 0.0
 		instance.position.z = 0.0
-		instance.set_meta(LOCALIZED_ORIGIN_META, Vector2(origin.x, origin.z))
+		instance.set_meta(LOCALIZED_ORIGIN_META, next_origin)
 		return
 
-	var previous_origin := Vector2(INF, INF)
-	if instance.has_meta(LOCALIZED_ORIGIN_META):
-		previous_origin = instance.get_meta(LOCALIZED_ORIGIN_META)
-	var next_origin := Vector2(origin.x, origin.z)
-	if previous_origin == next_origin:
-		return
 	var localized := _localized_mesh(logical_mesh, logical_xz, next_origin)
 	if localized != null:
 		instance.mesh = localized
