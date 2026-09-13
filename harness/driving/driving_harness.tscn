@@ -10,10 +10,10 @@ script = ExtResource("1_harness")
 
 [node name="CameraRig" type="Node3D" parent="."]
 script = ExtResource("2_camera")
-min_distance = 55.0
-max_distance = 450.0
-start_distance = 115.0
-gameplay_blend_start = 300.0
+min_altitude_m = 55.0
+max_altitude_m = 450.0
+start_altitude_m = 115.0
+gameplay_blend_start_altitude_m = 300.0
 move_speed_factor = 0.55
 
 [node name="Camera3D" type="Camera3D" parent="CameraRig"]

@@ -18,6 +18,7 @@ const INNER_X_LEFT: float = -30.0
 const INNER_X_RIGHT: float = 30.0
 const INNER_Z_NEAR: float = -22.0
 const INNER_Z_FAR: float = 22.0
+const RESET_CAMERA_ALTITUDE_M: float = 115.0
 
 @onready var camera_rig: Node3D = $CameraRig
 @onready var follow_route: CheckButton = $Ui/Panel/Margin/VBox/FollowRoute
@@ -75,7 +76,8 @@ func _reset_player() -> void:
 	player.call("set_motion_state", 0.0, PI / 2.0)
 	if follow_car.button_pressed:
 		camera_rig.call("set_follow_target", player)
-		camera_rig.call("set_view", player.global_position, 115.0)
+		camera_rig.call("set_view_altitude", player.global_position, RESET_CAMERA_ALTITUDE_M)
+		camera_rig.call("set_map_follow_enabled", true)
 
 func _on_follow_route_toggled(enabled: bool) -> void:
 	if route_follower == null:
@@ -96,7 +98,7 @@ func _on_follow_car_toggled(enabled: bool) -> void:
 		return
 	if enabled:
 		camera_rig.call("set_follow_target", player)
-		camera_rig.call("set_view", player.global_position, camera_rig.call("get_distance"))
+		camera_rig.call("set_map_follow_enabled", true)
 	else:
 		camera_rig.call("clear_follow_target")
 
