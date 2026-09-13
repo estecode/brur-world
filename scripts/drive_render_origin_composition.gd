@@ -47,11 +47,8 @@ func _ready() -> void:
 		push_error("Drive render-origin composition dependencies do not expose required APIs")
 		set_process(false)
 		return
-	# Streaming publishes road tiles directly under World and complete building
-	# viewport groups directly under BuildingLayer. Rebase only those new branches
-	# when they arrive instead of recursively walking the whole static scene every frame.
 	_world.child_entered_tree.connect(_on_world_child_entered)
-	_building_layer.child_entered_tree.connect(_on_building_child_entered)
+	_connect_building_branch(_building_layer)
 	_sync_render_origin(true)
 
 func _process(_delta: float) -> void:
@@ -63,8 +60,6 @@ func _sync_render_origin(force_static: bool = true) -> void:
 	var origin: Vector3 = _camera_rig.call("get_render_origin_world")
 	var static_origin_changed := force_static or origin != _last_static_origin
 	if static_origin_changed:
-		# Static presentation only changes when the 1 km render cell changes. Newly
-		# streamed branches are handled by child_entered_tree callbacks below.
 		_set_horizontal_offset(_world, Vector3.ZERO)
 		_rebase_world_children(_world, origin)
 		_set_horizontal_offset(_building_layer, Vector3.ZERO)
@@ -76,8 +71,6 @@ func _sync_render_origin(force_static: bool = true) -> void:
 			_gps_route_layer.call("set_render_origin_world", origin)
 		_last_static_origin = origin
 
-	# Vehicle logical state moves every frame while VisualRoot is top-level, so its
-	# small presentation transform must follow every frame even inside one cell.
 	var player: Node = _gps_route_layer.call("get_player_vehicle")
 	if player != null and player.has_method("set_render_origin_world"):
 		player.call("set_render_origin_world", origin)
@@ -92,7 +85,16 @@ func _on_world_child_entered(node: Node) -> void:
 	else:
 		_rebase_node(child, origin)
 
-func _on_building_child_entered(node: Node) -> void:
+func _connect_building_branch(node: Node) -> void:
+	if node == null:
+		return
+	if not node.child_entered_tree.is_connected(_on_building_descendant_entered):
+		node.child_entered_tree.connect(_on_building_descendant_entered)
+	for child in node.get_children():
+		_connect_building_branch(child)
+
+func _on_building_descendant_entered(node: Node) -> void:
+	_connect_building_branch(node)
 	var child := node as Node3D
 	if child == null or _camera_rig == null:
 		return
@@ -156,6 +158,16 @@ func _rebase_background_mesh(instance: MeshInstance3D, origin: Vector3) -> void:
 		instance.position.x = 0.0
 		instance.position.z = 0.0
 		instance.set_meta(LOCALIZED_ORIGIN_META, next_origin)
+		return
+
+	# Keep the expensive BRM2 mesh localized around the first Drive origin for the
+	# session and move only its small node transform at later 1 km cell changes.
+	# This preserves local arithmetic for nearby vertices without copying the full
+	# Sweden mesh on every render-cell crossing.
+	if instance.has_meta(LOCALIZED_ORIGIN_META) and instance.mesh is ArrayMesh:
+		var mesh_origin: Vector2 = instance.get_meta(LOCALIZED_ORIGIN_META)
+		instance.position.x = mesh_origin.x - next_origin.x
+		instance.position.z = mesh_origin.y - next_origin.y
 		return
 
 	var localized := _localized_mesh(logical_mesh, logical_xz, next_origin)
