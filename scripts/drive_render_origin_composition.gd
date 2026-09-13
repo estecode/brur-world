@@ -14,6 +14,8 @@ extends Node
 @export var building_layer_path: NodePath
 @export var gps_route_layer_path: NodePath
 
+const LOGICAL_XZ_META: StringName = &"brur_drive_logical_xz"
+
 var _camera_rig: Node = null
 var _world: Node3D = null
 var _poi_layer: Node3D = null
@@ -45,16 +47,64 @@ func _sync_render_origin() -> void:
 	if _camera_rig == null:
 		return
 	var origin: Vector3 = _camera_rig.call("get_render_origin_world")
+	# Do not keep a huge inverse offset on the World/BuildingLayer parent while
+	# their children retain huge logical coordinates. That still performs a
+	# large-minus-large transform before rendering and loses near-ground precision.
+	# Instead keep those roots neutral and rebase the actual GPU-facing children.
+	_set_horizontal_offset(_world, Vector3.ZERO)
+	_rebase_direct_children(_world, origin)
+	_set_horizontal_offset(_building_layer, Vector3.ZERO)
+	_rebase_building_meshes(_building_layer, origin)
+
 	var offset := Vector3(-origin.x, 0.0, -origin.z)
-	_set_horizontal_offset(_world, offset)
 	_set_horizontal_offset(_poi_layer, offset)
 	_set_horizontal_offset(_cloud_field, offset)
-	_set_horizontal_offset(_building_layer, offset)
 	var player: Node = _gps_route_layer.call("get_player_vehicle")
 	if player != null and player.has_method("set_render_origin_world"):
 		player.call("set_render_origin_world", origin)
 	if _gps_route_layer.has_method("set_render_origin_world"):
 		_gps_route_layer.call("set_render_origin_world", origin)
+
+func _rebase_direct_children(root: Node3D, origin: Vector3) -> void:
+	if root == null:
+		return
+	for child_value in root.get_children():
+		var child := child_value as Node3D
+		if child == null:
+			continue
+		_rebase_node(child, origin)
+
+func _rebase_building_meshes(root: Node3D, origin: Vector3) -> void:
+	if root == null:
+		return
+	for child_value in root.get_children():
+		var child := child_value as Node3D
+		if child == null:
+			continue
+		_rebase_building_branch(child, origin)
+
+func _rebase_building_branch(node: Node3D, origin: Vector3) -> void:
+	if node is MeshInstance3D:
+		_rebase_node(node, origin)
+		return
+	for child_value in node.get_children():
+		var child := child_value as Node3D
+		if child != null:
+			_rebase_building_branch(child, origin)
+
+func _rebase_node(node: Node3D, origin: Vector3) -> void:
+	if origin.is_zero_approx():
+		if node.has_meta(LOGICAL_XZ_META):
+			var logical: Vector2 = node.get_meta(LOGICAL_XZ_META)
+			node.position.x = logical.x
+			node.position.z = logical.y
+			node.remove_meta(LOGICAL_XZ_META)
+		return
+	if not node.has_meta(LOGICAL_XZ_META):
+		node.set_meta(LOGICAL_XZ_META, Vector2(node.position.x, node.position.z))
+	var logical: Vector2 = node.get_meta(LOGICAL_XZ_META)
+	node.position.x = logical.x - origin.x
+	node.position.z = logical.y - origin.z
 
 func _set_horizontal_offset(node: Node3D, offset: Vector3) -> void:
 	if node == null:
