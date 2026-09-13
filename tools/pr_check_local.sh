@@ -28,11 +28,15 @@ WORLD_SHOWCASE_SCOPE="$(scope_decision world-showcase)"
 BUILDING_TILE_SCOPE="$(scope_decision building-tiles)"
 TRAFFIC_INTERSECTION_SCOPE="skip"
 DRIVING_VISUAL_SCOPE="skip"
+DRIVE_HUD_VISUAL_SCOPE="skip"
 if printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(traffic_intersections\.py|check_traffic_intersections_real_data\.py|test_traffic_intersections\.py)$'; then
   TRAFFIC_INTERSECTION_SCOPE="required"
 fi
 if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(harness/driving/|scripts/(route_driving_policy|vehicle_route_follower|vehicle_dynamics|player_vehicle|player_vehicle_controller)\.gd$|scenes/player_vehicle\.tscn$)'; then
   DRIVING_VISUAL_SCOPE="required"
+fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(scripts/(drive_hud|drive_hud_adapter|speed_limit_sign|road_speed_limit_query)\.gd|scenes/main\.tscn)$'; then
+  DRIVE_HUD_VISUAL_SCOPE="required"
 fi
 
 if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" ]]; then
@@ -55,6 +59,9 @@ if [[ "$TRAFFIC_INTERSECTION_SCOPE" == "skip" ]]; then
 fi
 if [[ "$DRIVING_VISUAL_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_DRIVING_VISUAL_REVIEW pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
+fi
+if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]]; then
+  printf 'PR_CHECK=SKIP_DRIVE_HUD_VISUAL_REVIEW pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
 fi
 
 if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$TRAFFIC_INTERSECTION_SCOPE" == "skip" ]]; then
@@ -229,13 +236,20 @@ PY
   run_godot_test res://tests/godot/test_world_showcase.gd
 fi
 
-if [[ "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$DRIVING_VISUAL_SCOPE" == "skip" ]]; then
+if [[ "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$DRIVING_VISUAL_SCOPE" == "skip" && "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "$BRUR_PR_CHECK_PR"
   exit 0
 fi
 
 printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
+if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then
+  printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud\n'
+  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION use the production Main scene, enter Drive, and inspect the ruta-1 HUD: Swedish speed-limit sign left, fixed-width current speed beside it, optional ETA on active route, and explicit unknown limit; close Godot when finished\n'
+  "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"
+  exit 0
+fi
 if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then
+  printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=harness/driving/driving_harness.tscn reason=driving-feel\n'
   printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION use Follow route and compare Driving policy Normal, Aggressive and Maniac on the same loop; confirm they feel clearly distinct and ordered in assertiveness; close Godot when finished\n'
   "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"
   exit 0
