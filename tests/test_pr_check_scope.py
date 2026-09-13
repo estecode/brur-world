@@ -99,9 +99,13 @@ def main() -> None:
         "scripts/building_mesh_chunk_codec.gd",
         "scripts/building_stream_layer.gd",
         "scripts/building_runtime_composition.gd",
+        "scripts/camera_controller.gd",
         "scenes/main.tscn",
     ):
         assert building_tiles_required((path,)), f"building runtime owner must trigger preparation: {path}"
+    assert building_tiles_required(("scripts/camera_controller.gd",)), (
+        "Drive camera presentation changes must run the building checks and open exact-PR visual review"
+    )
     assert not building_tiles_required(("scripts/map_controls_ui.gd",)), (
         "pure HUS UI changes do not need building data preparation"
     )
