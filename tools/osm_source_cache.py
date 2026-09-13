@@ -14,6 +14,7 @@ import json
 import math
 import pickle
 import shutil
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -175,14 +176,80 @@ def _progress_count(current: int, total: int | None) -> str:
     return f"{current:,}"
 
 
+class _ProgressDisplay:
+    """Render one compact live view of source scan and route-match progress."""
+
+    def __init__(
+        self,
+        source: Path,
+        source_identity: dict[str, object],
+        routes: Iterable[str],
+        known_totals: dict[str, int],
+        stream: TextIO | None = None,
+    ) -> None:
+        self.source = source
+        self.digest = str(source_identity.get("digest", "unknown"))
+        self.routes = tuple(sorted(routes))
+        self.route_counts = {route: 0 for route in self.routes}
+        self.total_items = sum(known_totals.values()) if len(known_totals) == 3 else None
+        self.stream = stream if stream is not None else sys.stdout
+        self.tty = bool(getattr(self.stream, "isatty", lambda: False)())
+        self._rendered_lines = 0
+
+    def hit(self, route: str) -> None:
+        if route in self.route_counts:
+            self.route_counts[route] += 1
+
+    def _scan_text(self, scanned: int) -> str:
+        if isinstance(self.total_items, int) and self.total_items >= scanned and self.total_items > 0:
+            return f"{scanned:,} / {self.total_items:,} items"
+        return f"{scanned:,} items"
+
+    def render(self, counts: dict[str, int], elapsed: float) -> None:
+        scanned = sum(counts.values())
+        rate = scanned / max(0.001, elapsed)
+        scan_text = self._scan_text(scanned)
+        if not self.tty:
+            routes = ", ".join(f"{route}={self.route_counts[route]:,}" for route in self.routes)
+            print(
+                f"[osm-source] scanned: {scan_text} | {rate:,.0f}/s | routes: {routes}",
+                file=self.stream,
+                flush=True,
+            )
+            return
+
+        lines = [
+            "[osm-source] single-pass ingest",
+            f"source: {self.source.name}",
+            f"sha256: {self.digest}",
+            f"scanned: {scan_text} | {rate:,.0f}/s",
+            "",
+            "routes (matched source items):",
+        ]
+        lines.extend(f"  {route:<16} {self.route_counts[route]:>12,}" for route in self.routes)
+        if self._rendered_lines:
+            self.stream.write(f"\x1b[{self._rendered_lines}A")
+        for line in lines:
+            self.stream.write(f"\x1b[2K{line}\n")
+        self.stream.flush()
+        self._rendered_lines = len(lines)
+
+
 class SourceCacheHandler(osmium.SimpleHandler):
     """Scan one OSM source and spool only facts needed to finalize stale routes."""
 
-    def __init__(self, work_dir: Path, stale_routes: set[str], known_totals: dict[str, int]) -> None:
+    def __init__(
+        self,
+        work_dir: Path,
+        stale_routes: set[str],
+        known_totals: dict[str, int],
+        progress: _ProgressDisplay | None = None,
+    ) -> None:
         super().__init__()
         self.work_dir = work_dir
         self.stale_routes = stale_routes
         self.known_totals = known_totals
+        self.progress = progress
         self.counts = {"nodes": 0, "ways": 0, "relations": 0}
         self.started = time.perf_counter()
         self.signal_ids: set[int] = set()
@@ -196,6 +263,10 @@ class SourceCacheHandler(osmium.SimpleHandler):
             self._handles[name] = handle
         return handle
 
+    def _hit(self, route: str) -> None:
+        if self.progress is not None:
+            self.progress.hit(route)
+
     def close(self) -> None:
         for handle in self._handles.values():
             handle.close()
@@ -206,6 +277,9 @@ class SourceCacheHandler(osmium.SimpleHandler):
         if current == 0 or current % interval != 0:
             return
         elapsed = max(0.001, time.perf_counter() - self.started)
+        if self.progress is not None:
+            self.progress.render(self.counts, elapsed)
+            return
         print(
             f"[osm-source] {kind}: {_progress_count(current, self.known_totals.get(kind))} | "
             f"{current / elapsed:,.0f}/s",
@@ -214,51 +288,65 @@ class SourceCacheHandler(osmium.SimpleHandler):
 
     def node(self, node: osmium.osm.Node) -> None:
         self.counts["nodes"] += 1
+        if node.location.valid():
+            tags = _tags_dict(node.tags)
+            record = (int(node.id), float(node.lon), float(node.lat), tags)
+            if "traffic_signals" in self.stale_routes and tags.get("highway") == "traffic_signals":
+                self.signal_ids.add(int(node.id))
+                _pickle_append(self._handle("traffic_signal_nodes"), record)
+                self._hit("traffic_signals")
+            if "pois" in self.stale_routes and _is_poi(tags):
+                _pickle_append(self._handle("poi_nodes"), record)
+                self._hit("pois")
+            if "addresses" in self.stale_routes and _is_address(tags):
+                _pickle_append(self._handle("address_nodes"), record)
+                self._hit("addresses")
         self._print_progress("nodes", NODE_PROGRESS_INTERVAL)
-        if not node.location.valid():
-            return
-        tags = _tags_dict(node.tags)
-        record = (int(node.id), float(node.lon), float(node.lat), tags)
-        if "traffic_signals" in self.stale_routes and tags.get("highway") == "traffic_signals":
-            self.signal_ids.add(int(node.id))
-            _pickle_append(self._handle("traffic_signal_nodes"), record)
-        if "pois" in self.stale_routes and _is_poi(tags):
-            _pickle_append(self._handle("poi_nodes"), record)
-        if "addresses" in self.stale_routes and _is_address(tags):
-            _pickle_append(self._handle("address_nodes"), record)
 
     def way(self, way: osmium.osm.Way) -> None:
         self.counts["ways"] += 1
-        self._print_progress("ways", WAY_PROGRESS_INTERVAL)
         tags = _tags_dict(way.tags)
-        needs_spool = False
+        is_highway = bool(tags.get("highway"))
+        is_signal_way = is_highway and any(int(ref.ref) in self.signal_ids for ref in way.nodes)
+        is_poi = _is_poi(tags)
+        is_address = _is_address(tags)
+        is_area = _is_area_candidate(tags)
+
+        selected = False
+        if "highways" in self.stale_routes and is_highway:
+            self._hit("highways")
+            selected = True
+        if "traffic_signals" in self.stale_routes and is_signal_way:
+            self._hit("traffic_signals")
+            selected = True
+        if "pois" in self.stale_routes and is_poi:
+            self._hit("pois")
+            selected = True
+        if "addresses" in self.stale_routes and is_address:
+            self._hit("addresses")
+            selected = True
         if "areas" in self.stale_routes:
-            needs_spool = True
-        elif "highways" in self.stale_routes and tags.get("highway"):
-            needs_spool = True
-        elif "traffic_signals" in self.stale_routes and tags.get("highway"):
-            needs_spool = any(int(ref.ref) in self.signal_ids for ref in way.nodes)
-        elif "pois" in self.stale_routes and _is_poi(tags):
-            needs_spool = True
-        elif "addresses" in self.stale_routes and _is_address(tags):
-            needs_spool = True
-        if needs_spool:
+            if is_area:
+                self._hit("areas")
+            selected = True
+
+        if selected:
             _pickle_append(self._handle("ways"), _way_record(way, tags))
+        self._print_progress("ways", WAY_PROGRESS_INTERVAL)
 
     def relation(self, relation: osmium.osm.Relation) -> None:
         self.counts["relations"] += 1
+        if "areas" in self.stale_routes:
+            tags = _tags_dict(relation.tags)
+            relation_type = tags.get("type")
+            if relation_type in {"multipolygon", "boundary"} or _is_area_candidate(tags):
+                record = _relation_record(relation, tags)
+                _pickle_append(self._handle("area_relations"), record)
+                self._hit("areas")
+                for member_type, member_ref, _role in record[1]:
+                    if member_type == "w":
+                        self.area_relation_way_ids.add(member_ref)
         self._print_progress("relations", RELATION_PROGRESS_INTERVAL)
-        if "areas" not in self.stale_routes:
-            return
-        tags = _tags_dict(relation.tags)
-        relation_type = tags.get("type")
-        if relation_type not in {"multipolygon", "boundary"} and not _is_area_candidate(tags):
-            return
-        record = _relation_record(relation, tags)
-        _pickle_append(self._handle("area_relations"), record)
-        for member_type, member_ref, _role in record[1]:
-            if member_type == "w":
-                self.area_relation_way_ids.add(member_ref)
 
 
 class _RouteWriter:
@@ -422,18 +510,17 @@ def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = A
         return {route: cache_dir / f"{route}.osm" for route in requested}
 
     known_totals = _known_totals(manifest, source_identity)
-    print(
-        f"[osm-source] scan once for stale routes: {', '.join(sorted(stale))} | source={source}",
-        flush=True,
-    )
+    progress = _ProgressDisplay(source, source_identity, stale, known_totals)
     started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="brur-osm-source-", dir=cache_dir) as temp_name:
         work_dir = Path(temp_name)
-        handler = SourceCacheHandler(work_dir, stale, known_totals)
+        handler = SourceCacheHandler(work_dir, stale, known_totals, progress)
+        progress.render(handler.counts, 0.001)
         try:
             handler.apply_file(str(source), locations=True)
         finally:
             handler.close()
+        progress.render(handler.counts, max(0.001, time.perf_counter() - handler.started))
 
         writers = {
             route: _RouteWriter(route, work_dir, cache_dir / f"{route}.osm")
