@@ -35,7 +35,13 @@ const DRIVE_RENDER_ORIGIN_GRID_M: float = 1024.0
 @export var drive_fov: float = 58.0
 @export var drive_near_m: float = 0.5
 @export var drive_far_m: float = 5000.0
-@export var mode_transition_seconds: float = 0.65
+@export var mode_transition_seconds: float = 1.0
+@export_range(0.05, 0.95, 0.01) var drive_transition_approach_fraction: float = 0.4
+@export var drive_transition_entry_distance_m: float = 140.0
+@export var drive_transition_entry_height_m: float = 72.0
+@export var drive_transition_entry_look_ahead_m: float = 58.0
+@export var drive_transition_entry_fov: float = 54.0
+@export var drive_transition_min_clearance_m: float = 8.0
 
 var focus := Vector3.ZERO
 var dragging := false
@@ -47,7 +53,9 @@ var _map_follow_enabled := false
 var _suppress_map_wasd_until_released := false
 var _drive_distance_current_m := 24.0
 var _transition_active := false
+var _transition_to_drive := false
 var _transition_elapsed_s := 0.0
+var _transition_phase := "idle"
 var _transition_from_transform := Transform3D.IDENTITY
 var _transition_from_fov := 58.0
 @onready var camera: Camera3D = $Camera3D
@@ -182,6 +190,10 @@ func _target_heading_rad() -> float:
 	if _follow_target != null and _follow_target.has_method("heading_rad"): return float(_follow_target.call("heading_rad"))
 	return _follow_target.global_rotation.y if _follow_target != null else 0.0
 
+func _target_forward() -> Vector3:
+	var heading := _target_heading_rad()
+	return Vector3(-sin(heading), 0.0, -cos(heading)).normalized()
+
 func get_render_origin_world() -> Vector3:
 	if not _drive_mode or not _has_follow_target():
 		return Vector3.ZERO
@@ -198,12 +210,20 @@ func world_to_render_position(world_position: Vector3) -> Vector3:
 func render_to_world_position(render_position: Vector3) -> Vector3:
 	return render_position + get_render_origin_world()
 
+func _drive_world_transform(distance_m: float, height_m: float, look_ahead_m: float) -> Transform3D:
+	if not _has_follow_target(): return camera.global_transform
+	var target_world := _follow_target.global_position
+	var target_render := world_to_render_position(target_world)
+	var forward := _target_forward()
+	var camera_render := target_render - forward * distance_m + Vector3.UP * height_m
+	var look_render := target_render + forward * look_ahead_m + Vector3.UP * 2.5
+	return Transform3D(Basis.IDENTITY, camera_render).looking_at(look_render, Vector3.UP)
+
 func _apply_drive_camera(delta_s: float = 0.0) -> void:
 	if not _has_follow_target(): return
 	var target_world := _follow_target.global_position
 	var target_render := world_to_render_position(target_world)
-	var heading := _target_heading_rad()
-	var forward := Vector3(-sin(heading), 0.0, -cos(heading)).normalized()
+	var forward := _target_forward()
 	var extra_distance := maxf(0.0, _drive_distance_current_m - drive_distance_m)
 	var height := _drive_camera_height()
 	var look_ahead := drive_look_ahead_m + extra_distance * 0.7
@@ -217,13 +237,16 @@ func _apply_drive_camera(delta_s: float = 0.0) -> void:
 	_apply_mode_transition(delta_s)
 	view_changed.emit(focus, _drive_distance_current_m, render_to_world_position(camera.global_position))
 
-func _begin_mode_transition() -> void:
+func _begin_mode_transition(to_drive: bool) -> void:
 	if not is_inside_tree() or camera == null or mode_transition_seconds <= 0.0:
 		_transition_active = false
+		_transition_phase = "idle"
 		return
 	_transition_from_transform = camera.global_transform
 	_transition_from_fov = camera.fov
 	_transition_elapsed_s = 0.0
+	_transition_to_drive = to_drive and _has_follow_target()
+	_transition_phase = "approach" if _transition_to_drive else "blend"
 	_transition_active = true
 
 func _rebase_transition_frame(previous_render_origin: Vector3, next_render_origin: Vector3) -> void:
@@ -236,11 +259,68 @@ func _apply_mode_transition(delta_s: float) -> void:
 	var desired_transform := camera.global_transform
 	var desired_fov := camera.fov
 	_transition_elapsed_s += maxf(0.0, delta_s)
+	if _transition_to_drive and _has_follow_target():
+		_apply_drive_mode_transition(desired_transform, desired_fov)
+		return
 	var raw := clampf(_transition_elapsed_s / maxf(0.001, mode_transition_seconds), 0.0, 1.0)
 	var eased := raw * raw * (3.0 - 2.0 * raw)
 	camera.global_transform = _transition_from_transform.interpolate_with(desired_transform, eased)
 	camera.fov = lerpf(_transition_from_fov, desired_fov, eased)
-	if raw >= 1.0: _transition_active = false
+	if raw >= 1.0:
+		_transition_active = false
+		_transition_phase = "idle"
+
+func _apply_drive_mode_transition(desired_transform: Transform3D, desired_fov: float) -> void:
+	var total_s := maxf(0.001, mode_transition_seconds)
+	var approach_s := total_s * clampf(drive_transition_approach_fraction, 0.05, 0.95)
+	var settle_s := maxf(0.001, total_s - approach_s)
+	var entry_transform := _drive_world_transform(
+		maxf(drive_transition_entry_distance_m, drive_distance_m),
+		maxf(drive_transition_entry_height_m, drive_height_m),
+		maxf(0.0, drive_transition_entry_look_ahead_m)
+	)
+	if _transition_elapsed_s <= approach_s:
+		_transition_phase = "approach"
+		var raw := clampf(_transition_elapsed_s / approach_s, 0.0, 1.0)
+		var eased := 1.0 - pow(1.0 - raw, 4.0)
+		camera.global_transform = _transition_from_transform.interpolate_with(entry_transform, eased)
+		camera.fov = lerpf(_transition_from_fov, drive_transition_entry_fov, eased)
+	else:
+		_transition_phase = "settle"
+		var raw := clampf((_transition_elapsed_s - approach_s) / settle_s, 0.0, 1.0)
+		var eased := raw * raw * (3.0 - 2.0 * raw)
+		camera.global_transform = entry_transform.interpolate_with(desired_transform, eased)
+		camera.fov = lerpf(drive_transition_entry_fov, desired_fov, eased)
+	_enforce_drive_transition_clearance()
+	if _transition_elapsed_s >= total_s:
+		camera.global_transform = desired_transform
+		camera.fov = desired_fov
+		_transition_active = false
+		_transition_phase = "idle"
+
+func _enforce_drive_transition_clearance() -> void:
+	if not _has_follow_target(): return
+	var transform := camera.global_transform
+	var minimum_y := _follow_target.global_position.y + maxf(0.0, drive_transition_min_clearance_m)
+	if transform.origin.y < minimum_y:
+		transform.origin.y = minimum_y
+		camera.global_transform = transform
+
+func mode_transition_debug_snapshot() -> Dictionary:
+	var target_world := _follow_target.global_position if _has_follow_target() else Vector3.ZERO
+	var approach_s := maxf(0.0, mode_transition_seconds) * clampf(drive_transition_approach_fraction, 0.05, 0.95)
+	return {
+		"active": _transition_active,
+		"to_drive": _transition_to_drive,
+		"phase": _transition_phase,
+		"elapsed_s": _transition_elapsed_s,
+		"total_s": maxf(0.0, mode_transition_seconds),
+		"approach_s": approach_s,
+		"settle_s": maxf(0.0, mode_transition_seconds - approach_s),
+		"camera_world": render_to_world_position(camera.global_position) if camera != null else Vector3.ZERO,
+		"target_world": target_world,
+		"clearance_m": (camera.global_position.y - target_world.y) if camera != null and _has_follow_target() else INF,
+	}
 
 func _required_ground_far(distance: float) -> float:
 	var viewport_size := get_viewport().get_visible_rect().size
@@ -300,7 +380,7 @@ func clear_follow_target() -> void:
 func set_drive_mode(enabled: bool) -> void:
 	if _drive_mode == enabled: return
 	var previous_render_origin := get_render_origin_world()
-	_begin_mode_transition()
+	_begin_mode_transition(enabled)
 	_drive_mode = enabled
 	var next_render_origin := get_render_origin_world()
 	_rebase_transition_frame(previous_render_origin, next_render_origin)
