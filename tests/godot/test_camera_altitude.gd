@@ -6,11 +6,13 @@ extends SceneTree
 ## - scripts/camera_altitude_model.gd for portable altitude behavior.
 ## - scripts/camera_controller.gd for thin Camera3D integration.
 ## - scripts/building_lod_policy.gd for Drive-mode building presentation detail.
+## - scripts/main.gd for Drive background/road depth-separation policy.
 ## - scenes/main.tscn for structural altitude-readout placement.
 
 const CameraAltitudeModelScript = preload("res://scripts/camera_altitude_model.gd")
 const CameraControllerScript = preload("res://scripts/camera_controller.gd")
 const BuildingLodPolicyScript = preload("res://scripts/building_lod_policy.gd")
+const MainScript = preload("res://scripts/main.gd")
 const NORMAL_CLOUD_TOP_M: float = 12000.0
 
 func _init() -> void:
@@ -99,6 +101,17 @@ func _test_camera_adapter() -> void:
 	_assert(BuildingLodPolicyScript.choose_lod(drive_altitude) == BuildingLodPolicyScript.LOD_FULL, "Drive from coarse Map altitude requests full building LOD")
 	_assert(camera.near >= 0.25, "Drive near plane stays away from zero for stable depth precision")
 	_assert(camera.far <= 5000.0, "Drive far plane is bounded to local chase-camera range")
+
+	var main := MainScript.new() as Node3D
+	main.set("camera_rig", rig)
+	main.set("current_layer_spacing", float(main.call("_layer_spacing")))
+	var road_height := float(main.call("get_road_surface_height"))
+	var urban_height := float(main.call("_background_height", 3))
+	var land_height := float(main.call("_background_height", 0))
+	_assert(road_height - urban_height >= 0.10, "Drive keeps the nearest decorative background materially below the road")
+	_assert(urban_height - land_height >= 0.15, "Drive background kinds no longer compete inside a centimetre-scale depth stack")
+	main.free()
+
 	rig.call("set_drive_mode", false)
 	_assert(is_equal_approx(float(rig.call("get_altitude")), retained_map_altitude), "leaving Drive restores the retained Map altitude")
 
