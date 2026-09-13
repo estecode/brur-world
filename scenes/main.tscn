@@ -46,7 +46,6 @@ script = ExtResource("16_buildings")
 view_margin_chunks = 1
 max_view_chunks = 64
 max_cache_chunks = 96
-prepare_budget_ms = 8.0
 base_height_m = 24.0
 streaming_enabled = false
 
