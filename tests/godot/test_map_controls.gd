@@ -1,10 +1,12 @@
 extends SceneTree
 
 ## Headless contract tests for POI/building visibility, armed teleport, map/drive camera ownership and map-control scene wiring.
-## Dependencies: production Main, PoiLayer, BuildingStreamLayer, GpsRouteLayer, GpsRouteRenderer, MapControlsUi, CameraRig, player controller and player vehicle adapters.
+## Dependencies: production Main, PoiLayer, BuildingStreamLayer/BuildingRuntimeComposition, GpsRouteLayer, GpsRouteRenderer, MapControlsUi, CameraRig, player controller and player vehicle adapters.
 
 const MainScript = preload("res://scripts/main.gd")
 const PoiLayerScript = preload("res://scripts/poi_layer.gd")
+const BuildingStreamLayerScript = preload("res://scripts/building_stream_layer.gd")
+const BuildingRuntimeCompositionScript = preload("res://scripts/building_runtime_composition.gd")
 const GpsRouteLayerScript = preload("res://scripts/gps_route_layer.gd")
 const GpsRouteRendererScript = preload("res://scripts/gps_route_renderer.gd")
 const MapControlsUiScript = preload("res://scripts/map_controls_ui.gd")
@@ -21,6 +23,7 @@ func _run() -> void:
 	_test_camera_mode_and_follow_contract()
 	_test_drive_camera_follows_heading_without_mutating_vehicle()
 	_test_drive_surface_height_contract()
+	_test_production_building_surface_contract()
 	_test_drive_zoom_contract()
 	_test_mode_transition_contract()
 	_test_player_steering_direction_contract()
@@ -167,6 +170,39 @@ func _test_drive_surface_height_contract() -> void:
 	player.free()
 	renderer.free()
 	route_layer.free()
+	main.free()
+	rig.free()
+
+func _test_production_building_surface_contract() -> void:
+	var rig := _new_rig()
+	rig.set("mode_transition_seconds", 0.0)
+	rig.call("set_drive_mode", true)
+
+	var main := MainScript.new() as Node3D
+	main.set("camera_rig", rig)
+	main.set("current_layer_spacing", float(main.call("_layer_spacing")))
+	var building_layer := BuildingStreamLayerScript.new() as Node3D
+	building_layer.set("base_height_m", 24.0)
+	var active_building := Node3D.new()
+	building_layer.add_child(active_building)
+	var active_id := active_building.get_instance_id()
+	var composition := BuildingRuntimeCompositionScript.new()
+	composition.set("_main", main)
+	composition.set("_building_layer", building_layer)
+	composition.call("_sync_surface_height")
+
+	var drive_road_height := float(main.call("get_road_surface_height"))
+	_assert(_approx(float(building_layer.get("base_height_m")), 0.0), "production composition removes the stale fixed 24 m building base")
+	_assert(_approx(building_layer.position.y, drive_road_height), "Drive-mode buildings follow the authoritative rendered road/world surface")
+	_assert(active_building.get_instance_id() == active_id and _approx(active_building.position.y, 0.0), "surface-height changes move active buildings through the layer transform without rebuilding them")
+
+	main.set("current_layer_spacing", 4.0)
+	composition.call("_sync_surface_height")
+	_assert(_approx(building_layer.position.y, 24.0), "Map-mode building layer follows the same zoom-dependent road presentation height")
+	_assert(active_building.get_instance_id() == active_id, "Map/Drive height changes preserve active building instances")
+
+	composition.free()
+	building_layer.free()
 	main.free()
 	rig.free()
 
