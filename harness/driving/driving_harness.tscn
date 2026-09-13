@@ -32,8 +32,8 @@ layer = 80
 [node name="Panel" type="PanelContainer" parent="Ui"]
 offset_left = 16.0
 offset_top = 16.0
-offset_right = 410.0
-offset_bottom = 224.0
+offset_right = 430.0
+offset_bottom = 264.0
 
 [node name="Margin" type="MarginContainer" parent="Ui/Panel"]
 theme_override_constants/margin_left = 12
@@ -50,11 +50,16 @@ text = "DRIVING HARNESS — connected streets + ring road"
 [node name="Help" type="Label" parent="Ui/Panel/Margin/VBox"]
 text = "W/S accelerate/reverse · A/D steer · Space brake"
 
+[node name="ModeLabel" type="Label" parent="Ui/Panel/Margin/VBox"]
+text = "Driving policy"
+
+[node name="DrivingMode" type="OptionButton" parent="Ui/Panel/Margin/VBox"]
+
 [node name="Speed" type="Label" parent="Ui/Panel/Margin/VBox"]
 text = "Speed: 0.0 km/h"
 
 [node name="Status" type="Label" parent="Ui/Panel/Margin/VBox"]
-text = "Control: MANUAL   Route: VISIBLE / MANUAL   Camera: FOLLOW"
+text = "Mode: Normal   Control: MANUAL   Route: VISIBLE / MANUAL   Camera: FOLLOW"
 
 [node name="FollowRoute" type="CheckButton" parent="Ui/Panel/Margin/VBox"]
 text = "Follow route"
