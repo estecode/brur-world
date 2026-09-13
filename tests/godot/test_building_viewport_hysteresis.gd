@@ -33,12 +33,15 @@ class DriveCameraRig:
 	var heading := 0.0
 	var side_extent_m := 1500.0
 	var forward_extent_m := 4500.0
+	var streaming_radius_m := 5000.0
 	func get_focus_world() -> Vector3:
 		return focus
 	func get_altitude() -> float:
 		return altitude
 	func is_driving_view() -> bool:
 		return true
+	func get_streaming_ground_radius_m() -> float:
+		return streaming_radius_m
 	func get_ground_view_corners() -> PackedVector3Array:
 		var basis := Basis(Vector3.UP, heading)
 		var points := PackedVector3Array()
@@ -122,9 +125,9 @@ func _test_drive_heading_hysteresis(directory: String, coordinates) -> void:
 	var generation := int(initial["request_generation"])
 	_assert(int(initial["coverage_chunks"]) <= layer.max_view_chunks, "Drive rotation-invariant coverage stays within configured chunk budget")
 
-	# A raw axis-aligned AABB for this 3 km x 9 km frustum changes shape as the
-	# vehicle turns. Building streaming must instead retain the same radial Drive
-	# coverage while heading rotates, otherwise production never reaches ready.
+	# Raw Drive frustum corners rotate, but the explicit streaming radius does not.
+	# Heading and visual transition geometry therefore cannot invalidate building
+	# staging while the authoritative focus remains inside the retained viewport.
 	for index in range(72):
 		camera.heading = TAU * float(index) / 72.0
 		layer._process(0.0)
