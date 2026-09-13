@@ -3,10 +3,11 @@ extends Node3D
 ## Composes a tiny connected road-grid fixture around the production player vehicle for driving playtests.
 ##
 ## Dependencies:
-## - Uses the production player_vehicle scene, VehicleRouteFollower and CameraRig implementation.
+## - Uses the production player_vehicle scene, VehicleRouteFollower, RouteDrivingPolicy and CameraRig implementation.
 ## - Fixture roads are presentation-only meter-scale guides; they do not duplicate routing or vehicle dynamics.
 
 const PlayerVehicleScene = preload("res://scenes/player_vehicle.tscn")
+const RouteDrivingPolicyScript = preload("res://scripts/route_driving_policy.gd")
 const ROAD_WIDTH: float = 10.0
 const ROAD_HEIGHT: float = 0.18
 const ROAD_Y: float = 0.10
@@ -23,6 +24,7 @@ const RESET_CAMERA_ALTITUDE_M: float = 115.0
 @onready var camera_rig: Node3D = $CameraRig
 @onready var follow_route: CheckButton = $Ui/Panel/Margin/VBox/FollowRoute
 @onready var follow_car: CheckButton = $Ui/Panel/Margin/VBox/FollowCar
+@onready var driving_mode: OptionButton = $Ui/Panel/Margin/VBox/DrivingMode
 @onready var status: Label = $Ui/Panel/Margin/VBox/Status
 @onready var speed: Label = $Ui/Panel/Margin/VBox/Speed
 
@@ -38,8 +40,10 @@ func _ready() -> void:
 	_fixture_route = _build_fixture_route()
 	if route_follower != null:
 		route_follower.call("set_route", _fixture_route)
+	_setup_driving_modes()
 	follow_route.toggled.connect(_on_follow_route_toggled)
 	follow_car.toggled.connect(_on_follow_car_toggled)
+	driving_mode.item_selected.connect(_on_driving_mode_selected)
 	$Ui/Panel/Margin/VBox/Reset.pressed.connect(_reset_player)
 	follow_car.button_pressed = true
 	_on_follow_car_toggled(true)
@@ -50,7 +54,8 @@ func _process(_delta: float) -> void:
 		return
 	speed.text = "Speed: %.1f km/h" % float(player.call("speed_kmh"))
 	var owner: int = int(player.call("control_owner"))
-	status.text = "Control: %s   Route: %s   Camera: %s" % [
+	status.text = "Mode: %s   Control: %s   Route: %s   Camera: %s" % [
+		_active_mode_name(),
 		"GPS" if owner == 1 else "MANUAL",
 		"FOLLOW" if follow_route.button_pressed else "VISIBLE / MANUAL",
 		"FOLLOW" if follow_car.button_pressed else "FREE",
@@ -64,6 +69,40 @@ func _spawn_player() -> void:
 	route_follower = player.get_node_or_null("VehicleRouteFollower")
 	if player_controller != null:
 		player_controller.connect("manual_input_detected", _on_manual_input_detected)
+
+func _setup_driving_modes() -> void:
+	driving_mode.clear()
+	driving_mode.add_item("Normal", RouteDrivingPolicyScript.Mode.NORMAL)
+	driving_mode.add_item("Aggressive", RouteDrivingPolicyScript.Mode.AGGRESSIVE)
+	driving_mode.add_item("Maniac", RouteDrivingPolicyScript.Mode.MANIAC)
+	if route_follower == null:
+		driving_mode.disabled = true
+		return
+	var active_mode: int = int(route_follower.call("driving_mode"))
+	for index in driving_mode.item_count:
+		if driving_mode.get_item_id(index) == active_mode:
+			driving_mode.select(index)
+			return
+
+func _on_driving_mode_selected(index: int) -> void:
+	if route_follower == null:
+		return
+	var requested_mode: int = driving_mode.get_item_id(index)
+	if not bool(route_follower.call("set_driving_mode", requested_mode)):
+		_setup_driving_modes()
+
+func _active_mode_name() -> String:
+	if route_follower == null:
+		return "Unavailable"
+	match int(route_follower.call("driving_mode")):
+		RouteDrivingPolicyScript.Mode.NORMAL:
+			return "Normal"
+		RouteDrivingPolicyScript.Mode.AGGRESSIVE:
+			return "Aggressive"
+		RouteDrivingPolicyScript.Mode.MANIAC:
+			return "Maniac"
+		_:
+			return "Unknown"
 
 func _reset_player() -> void:
 	if player == null:
