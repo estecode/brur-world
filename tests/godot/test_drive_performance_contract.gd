@@ -18,7 +18,7 @@ const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 const TEST_WORLD_POSITION := Vector3(52277.0, 0.06, 825907.0)
 const SYNTHETIC_BUILDING_LEAVES := 256
 const MEASURE_FRAMES := 360
-const MAX_DRIVE_BUILDING_COVERAGE_CHUNKS := 64
+const MAX_DRIVE_BUILDING_COVERAGE_CHUNKS := 36
 const MAX_AVG_FRAME_MS := 33.4
 const MAX_P95_FRAME_MS := 50.0
 const MAX_WORST_FRAME_MS := 250.0
@@ -47,8 +47,8 @@ func _run() -> void:
 	var drive_lod := BuildingLodPolicyScript.choose_lod(drive_altitude)
 	_assert(drive_lod == BuildingLodPolicyScript.LOD_FULL, "Drive uses full building detail")
 	var stable_stream_radius := float(rig.call("get_streaming_ground_radius_m"))
-	_assert(stable_stream_radius >= float(rig.get("drive_far_m")), "Drive streaming radius covers the production far plane")
-	_assert(stable_stream_radius < 10000.0, "Drive streaming radius ignores the transient Map-to-Drive camera transform")
+	_assert(is_equal_approx(stable_stream_radius, float(rig.get("drive_building_stream_radius_m"))), "Drive uses its explicit full-detail building residency radius")
+	_assert(stable_stream_radius < float(rig.get("drive_far_m")), "Drive full-detail building residency is independent of the clipping far plane")
 
 	var building_stream := BuildingStreamLayerScript.new()
 	building_stream.set("_camera_rig", rig)
@@ -56,7 +56,7 @@ func _run() -> void:
 	var bounds: Dictionary = building_stream.call("_chunk_bounds", drive_lod, 1)
 	var coverage := int(building_stream.call("_bounds_chunk_count", bounds))
 	print("DRIVE_PERF_BUILDING_COVERAGE chunks=", coverage, " bounds=", bounds, " altitude=", drive_altitude, " radius=", stable_stream_radius)
-	_assert(coverage <= MAX_DRIVE_BUILDING_COVERAGE_CHUNKS, "Drive full-detail building viewport stays inside the production 64-chunk budget")
+	_assert(coverage <= MAX_DRIVE_BUILDING_COVERAGE_CHUNKS, "Drive full-detail building viewport stays inside the production 36-chunk residency budget")
 
 	var world := Node3D.new()
 	root.add_child(world)
@@ -100,7 +100,6 @@ func _run() -> void:
 	_assert(int(baseline["background_localizations"]) == 1, "Drive localizes BRM2 exactly once on initial entry")
 	var stable_background := background.mesh
 
-	# Warm the renderer before measuring.
 	for _warmup in range(30):
 		composition.call("_sync_render_origin", false)
 		await process_frame
@@ -108,11 +107,9 @@ func _run() -> void:
 	var frame_times: Array[float] = []
 	var start_origin: Vector3 = rig.call("get_render_origin_world")
 	for frame_index in range(MEASURE_FRAMES):
-		# Force five realistic render-cell crossings during the measurement window.
 		if frame_index > 0 and frame_index % 60 == 0:
 			target.position.x += 1100.0
 			rig.call("_apply_drive_camera")
-		# Publish late building leaves while already in Drive to model production streaming.
 		if frame_index > 0 and frame_index % 90 == 0:
 			var streamed := MeshInstance3D.new()
 			streamed.position = target.position
