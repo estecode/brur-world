@@ -1,10 +1,11 @@
 extends SceneTree
 
-## Verifies the driving harness exposes explicit route start, exclusive Manual/GPS ownership and freely switchable AI policy controls.
-## Dependencies: production-backed driving harness scene, CameraRig, player controller and VehicleRouteFollower public APIs.
+## Verifies the driving harness exposes a visible route plus exclusive Manual/GPS ownership and freely switchable AI policy controls.
+## Dependencies: production-backed driving harness scene, GpsRouteRenderer, CameraRig, player controller and VehicleRouteFollower public APIs.
 
 const PLAYER_OWNER: int = 0
 const GPS_OWNER: int = 1
+const FIXTURE_ROUTE_POINT_COUNT: int = 12
 
 func _init() -> void:
 	call_deferred("_run")
@@ -21,15 +22,19 @@ func _run() -> void:
 	var clear_route := harness.get_node_or_null("Ui/Panel/Margin/VBox/ClearRoute") as Button
 	var selector := harness.get_node_or_null("Ui/Panel/Margin/VBox/DrivingMode") as OptionButton
 	var intersection := harness.get_node_or_null("Ui/Panel/Margin/VBox/IntersectionGap") as OptionButton
+	var status := harness.get_node_or_null("Ui/Panel/Margin/VBox/Status") as Label
 	var camera := harness.get_node_or_null("CameraRig")
+	var renderer := harness.get_node_or_null("GpsRouteRenderer")
 	var player := harness.get_node_or_null("PlayerVehicle")
 	_assert(control != null and control.item_count == 2, "harness exposes Manual Drive and GPS Drive")
-	_assert(set_route != null, "harness exposes explicit Set Route control")
+	_assert(set_route != null and set_route.text == "Set Route + Start GPS Drive", "harness exposes explicit Set Route control")
 	_assert(clear_route != null, "harness exposes explicit Clear Route control")
 	_assert(control.get_item_text(0) == "Manual Drive", "first control mode is Manual Drive")
 	_assert(control.get_item_text(1) == "GPS Drive", "second control mode is GPS Drive")
 	_assert(selector != null and selector.item_count == 3, "harness exposes exactly three AI policy modes")
 	_assert(intersection != null and intersection.item_count == 3, "harness exposes deterministic intersection-gap scenarios")
+	_assert(status != null, "harness exposes visible route/control status")
+	_assert(renderer != null, "driving harness reuses production GPS route renderer")
 	_assert(player != null, "driving harness uses production player vehicle")
 	_assert(camera != null, "driving harness uses production camera")
 
@@ -41,20 +46,29 @@ func _run() -> void:
 	_assert(int(player.call("control_owner")) == PLAYER_OWNER, "Manual Drive owns the vehicle initially")
 	_assert(bool(player_controller.get("enabled")), "player controller is enabled initially")
 	_assert(not bool(follower.call("has_route")), "harness starts without an implicit route")
+	_assert(int(renderer.call("rendered_point_count")) == 0, "no route is rendered before Set Route")
 	_assert(not bool(follower.call("is_follow_enabled")), "GPS follower is disabled before a route is set")
 	_assert(bool(camera.call("is_driving_view")), "Manual Drive reserves camera drive mode so WASD cannot pan the map")
 	_assert(selector.disabled, "AI style selector is disabled before GPS route start")
+	_assert(status.text.contains("Route: NONE"), "visible status reports no route before Set Route")
 
 	var player_instance := player
 	var start_position: Vector3 = player.global_position
-	set_route.pressed.emit()
+	# Exercise the exact runtime UI signal wired by the scene, not a harness-private helper.
+	set_route.emit_signal("pressed")
 	await process_frame
-	_assert(bool(follower.call("has_route")), "Set Route installs the route")
+	_assert(bool(follower.call("has_route")), "Set Route installs the production follower route")
+	_assert(int(renderer.call("rendered_point_count")) == FIXTURE_ROUTE_POINT_COUNT, "Set Route renders the complete visible route")
+	var route_mesh := renderer.get_node_or_null("GpsRoute") as MeshInstance3D
+	var target_mesh := renderer.get_node_or_null("GpsTarget") as MeshInstance3D
+	_assert(route_mesh != null and route_mesh.mesh != null, "Set Route creates visible route mesh geometry")
+	_assert(target_mesh != null and target_mesh.visible, "Set Route shows the visible route destination marker")
 	_assert(bool(follower.call("is_follow_enabled")), "Set Route immediately starts GPS route following")
 	_assert(int(player.call("control_owner")) == GPS_OWNER, "Set Route immediately transfers control to GPS")
 	_assert(not bool(player_controller.get("enabled")), "player controller releases the vehicle when route starts")
 	_assert(control.selected == 1, "Set Route selects GPS Drive in the UI")
 	_assert(not selector.disabled, "AI mode selector becomes available once GPS route starts")
+	_assert(status.text.contains("Route: SET"), "visible status reports that the route is set")
 
 	for _frame in range(20):
 		await physics_frame
@@ -68,6 +82,7 @@ func _run() -> void:
 	_assert(bool(player_controller.get("enabled")), "manual takeover enables player controller")
 	_assert(not bool(follower.call("is_follow_enabled")), "manual takeover pauses AI driving")
 	_assert(bool(follower.call("has_route")), "manual takeover preserves the active route")
+	_assert(int(renderer.call("rendered_point_count")) == FIXTURE_ROUTE_POINT_COUNT, "manual takeover keeps the visible route")
 	_assert(harness.get_node_or_null("PlayerVehicle") == player_instance, "manual takeover preserves vehicle instance")
 	_assert(player.global_position.distance_to(position_before_manual) < 0.5, "manual takeover does not reset or teleport the vehicle")
 
@@ -78,6 +93,7 @@ func _run() -> void:
 	_assert(bool(follower.call("is_follow_enabled")), "GPS Drive resumes route following")
 	_assert(not bool(player_controller.get("enabled")), "GPS resume disables manual player input")
 	_assert(bool(follower.call("has_route")), "GPS resume keeps the same route")
+	_assert(int(renderer.call("rendered_point_count")) == FIXTURE_ROUTE_POINT_COUNT, "GPS resume keeps the same visible route")
 	_assert(harness.get_node_or_null("PlayerVehicle") == player_instance, "GPS resume preserves vehicle instance")
 
 	for index in range(3):
@@ -89,6 +105,7 @@ func _run() -> void:
 		_assert(harness.get_node_or_null("PlayerVehicle") == player_instance, "AI mode switching keeps the same production vehicle instance")
 		_assert(int(player.call("control_owner")) == GPS_OWNER, "AI mode switching does not change GPS ownership")
 		_assert(bool(follower.call("has_route")), "AI mode switching preserves the route")
+		_assert(int(renderer.call("rendered_point_count")) == FIXTURE_ROUTE_POINT_COUNT, "AI mode switching preserves the visible route")
 		_assert(player.global_position.distance_to(position_before_mode) < 0.5, "AI mode switching does not reset or teleport the vehicle")
 
 	# Prove route completion behavior on a short production follower route without waiting for the long human-playtest loop.
@@ -109,12 +126,16 @@ func _run() -> void:
 	_assert(end_distance < 4.0, "GPS follower drives the route to its final point")
 	_assert(float(player.call("speed_mps")) < 1.5, "GPS follower brakes near the final route point")
 
-	clear_route.pressed.emit()
+	clear_route.emit_signal("pressed")
 	await process_frame
 	_assert(not bool(follower.call("has_route")), "Clear Route removes the route")
+	_assert(int(renderer.call("rendered_point_count")) == 0, "Clear Route removes the visible route")
+	_assert(route_mesh.mesh == null, "Clear Route removes route mesh geometry")
+	_assert(not target_mesh.visible, "Clear Route hides the destination marker")
 	_assert(not bool(follower.call("is_follow_enabled")), "Clear Route stops GPS driving")
 	_assert(int(player.call("control_owner")) == PLAYER_OWNER, "Clear Route returns control to Manual Drive")
 	_assert(bool(player_controller.get("enabled")), "Clear Route restores manual input")
+	_assert(status.text.contains("Route: NONE"), "visible status returns to no-route state")
 	_assert(harness.get_node_or_null("PlayerVehicle") == player_instance, "Clear Route preserves vehicle instance")
 
 	harness.queue_free()
