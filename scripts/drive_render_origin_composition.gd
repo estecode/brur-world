@@ -19,7 +19,9 @@ const LOGICAL_XZ_META: StringName = &"brur_drive_logical_xz"
 const LOGICAL_MESH_META: StringName = &"brur_drive_logical_mesh"
 const LOCALIZED_ORIGIN_META: StringName = &"brur_drive_localized_origin"
 const DRIVE_GROUND_DIAMETER_MIN_M: float = 4096.0
-const DRIVE_GROUND_DIAMETER_MAX_M: float = 12000.0
+const DRIVE_GROUND_DIAMETER_MAX_M: float = 14000.0
+const DRIVE_RENDER_CELL_MAX_AXIS_M: float = 512.0
+const DRIVE_GROUND_EDGE_MARGIN_M: float = 64.0
 const DRIVE_DECORATIVE_MAX_Y_M: float = -0.20
 
 var _camera_rig: Node = null
@@ -120,14 +122,18 @@ func _rebase_background_mesh(instance: MeshInstance3D, origin: Vector3) -> void:
 
 	# The ocean base is a Sweden-scale PlaneMesh. In Drive only a bounded local
 	# patch around the camera is required, so never send the country-scale plane
-	# vertices through the Drive render path. Rebuild only when the render cell
-	# changes; a stable cell keeps the exact same mesh resource across frames.
+	# vertices through the Drive render path. Derive its radius from the camera's
+	# full far range plus worst-case render-cell/chase offsets and a safety margin.
+	# A stable cell keeps the exact same mesh resource across frames.
 	if logical_mesh is PlaneMesh:
 		var local_plane := PlaneMesh.new()
 		var far_m := 5000.0
+		var drive_offset_m := 48.0
 		if _camera_rig != null:
 			far_m = float(_camera_rig.get("drive_far_m"))
-		var diameter := clampf(far_m * 2.2, DRIVE_GROUND_DIAMETER_MIN_M, DRIVE_GROUND_DIAMETER_MAX_M)
+			drive_offset_m = float(_camera_rig.get("drive_max_distance_m"))
+		var required_radius := far_m + DRIVE_RENDER_CELL_MAX_AXIS_M + drive_offset_m + DRIVE_GROUND_EDGE_MARGIN_M
+		var diameter := clampf(required_radius * 2.0, DRIVE_GROUND_DIAMETER_MIN_M, DRIVE_GROUND_DIAMETER_MAX_M)
 		local_plane.size = Vector2(diameter, diameter)
 		instance.mesh = local_plane
 		instance.position.x = 0.0
