@@ -45,8 +45,8 @@ func format_speed_kmh(value: float) -> String:
 
 func format_eta(seconds: float) -> String:
 	var total_seconds := maxi(0, roundi(seconds))
-	var hours := total_seconds / 3600
-	var minutes := (total_seconds % 3600) / 60
+	var hours := floori(float(total_seconds) / 3600.0)
+	var minutes := floori(float(total_seconds % 3600) / 60.0)
 	var secs := total_seconds % 60
 	return "%02d:%02d:%02d" % [hours, minutes, secs]
 
