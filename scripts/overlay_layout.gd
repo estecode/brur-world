@@ -4,13 +4,12 @@ extends RefCounted
 ##
 ## Dependencies:
 ## - Operates only on Godot Control anchors/offsets in presentation code.
-## - Reserves the production bottom control/HUD stack so persistent windows never cover it.
+## - Supports an explicit per-window bottom reservation for persistent HUD/control stacks.
 ## - Does not depend on gameplay, routing, world state, or subsystem internals.
 
 const MARGIN: float = 14.0
 const HEADER_HEIGHT: float = 32.0
 const HEADER_GAP: float = 6.0
-const BOTTOM_RESERVED_HEIGHT: float = 168.0
 
 enum Slot {
 	TOP_LEFT,
@@ -19,7 +18,7 @@ enum Slot {
 	BOTTOM_RIGHT,
 }
 
-static func apply_window(header: Control, body: Control, slot: int, width: float) -> void:
+static func apply_window(header: Control, body: Control, slot: int, width: float, bottom_reserve: float = 0.0) -> void:
 	_apply_horizontal(header, slot, width)
 	_apply_horizontal(body, slot, width)
 	header.custom_minimum_size = Vector2(width, HEADER_HEIGHT)
@@ -37,7 +36,7 @@ static func apply_window(header: Control, body: Control, slot: int, width: float
 			body.offset_bottom = body.offset_top
 			body.grow_vertical = Control.GROW_DIRECTION_END
 		Slot.BOTTOM_LEFT, Slot.BOTTOM_RIGHT:
-			var reserved_bottom := MARGIN + BOTTOM_RESERVED_HEIGHT
+			var reserved_bottom := MARGIN + maxf(0.0, bottom_reserve)
 			header.anchor_top = 1.0
 			header.anchor_bottom = 1.0
 			header.offset_top = -reserved_bottom - HEADER_HEIGHT
@@ -50,9 +49,6 @@ static func apply_window(header: Control, body: Control, slot: int, width: float
 
 	header.reset_size()
 	body.reset_size()
-
-static func bottom_reserved_height() -> float:
-	return BOTTOM_RESERVED_HEIGHT
 
 static func _apply_horizontal(control: Control, slot: int, width: float) -> void:
 	if slot == Slot.TOP_LEFT or slot == Slot.BOTTOM_LEFT:
