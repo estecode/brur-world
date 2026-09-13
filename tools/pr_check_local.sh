@@ -10,6 +10,7 @@ GODOT="${GODOT_BIN:?}"
 CHANGED_FILES="${BRUR_PR_CHECK_CHANGED_FILES:-}"
 CACHE="$WORKTREE/.poc_runtime/world_showcase"
 RUNTIME_WORLD_DATA="$WORKTREE/.poc_runtime/pr_check_world_data"
+TRAFFIC_INTERSECTION_DATA="$WORKTREE/.poc_runtime/traffic_intersections"
 
 scope_decision() {
   local scope="$1" decision
@@ -25,6 +26,10 @@ ROAD_LOD_SCOPE="$(scope_decision road-lod)"
 CITY_LIGHT_SCOPE="$(scope_decision city-lights)"
 WORLD_SHOWCASE_SCOPE="$(scope_decision world-showcase)"
 BUILDING_TILE_SCOPE="$(scope_decision building-tiles)"
+TRAFFIC_INTERSECTION_SCOPE="skip"
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(traffic_intersections\.py|check_traffic_intersections_real_data\.py|test_traffic_intersections\.py)$'; then
+  TRAFFIC_INTERSECTION_SCOPE="required"
+fi
 
 if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_E6_BJARRED_ROUTE pr=%s reason=unrelated-changes\n' "${BRUR_PR_CHECK_PR:?}"
@@ -41,8 +46,11 @@ fi
 if [[ "$BUILDING_TILE_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_BUILDING_TILES pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
 fi
+if [[ "$TRAFFIC_INTERSECTION_SCOPE" == "skip" ]]; then
+  printf 'PR_CHECK=SKIP_TRAFFIC_INTERSECTIONS pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
+fi
 
-if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" ]]; then
+if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$TRAFFIC_INTERSECTION_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=NO_EXPENSIVE_LOCAL_PREPARATION pr=%s\n' "$BRUR_PR_CHECK_PR"
 fi
 
@@ -72,6 +80,25 @@ ensure_routing_dataset_identity() {
   printf 'PR_CHECK=BUILD_ROUTING_DATASET pr=%s reason=identity-mismatch source=%s\n' "$BRUR_PR_CHECK_PR" "$(basename "$pbf")"
   "$PYTHON" "$WORKTREE/tools/build_routing_dataset.py" "$pbf" --output "$WORLD_DATA"
   "$PYTHON" "$WORKTREE/tools/check_routing_dataset.py" "$WORLD_DATA"
+}
+
+prepare_traffic_intersection_data() {
+  if [[ -f "$WORLD_DATA/traffic_signals.json" ]]; then
+    printf '%s\n' "$WORLD_DATA"
+    return 0
+  fi
+  local pbf
+  pbf="$(resolve_sweden_pbf)"
+  rm -rf "$TRAFFIC_INTERSECTION_DATA"
+  mkdir -p "$TRAFFIC_INTERSECTION_DATA"
+  ln -s "$WORLD_DATA/routing.brg" "$TRAFFIC_INTERSECTION_DATA/routing.brg"
+  printf 'PR_CHECK=BUILD_TRAFFIC_SIGNALS pr=%s reason=missing-runtime-data source=%s\n' "$BRUR_PR_CHECK_PR" "$(basename "$pbf")" >&2
+  "$PYTHON" "$WORKTREE/tools/build_traffic_signals.py" "$pbf" --output "$TRAFFIC_INTERSECTION_DATA" >&2
+  [[ -f "$TRAFFIC_INTERSECTION_DATA/traffic_signals.json" ]] || {
+    printf 'PR_CHECK=FAIL traffic signal build did not produce traffic_signals.json\n' >&2
+    return 1
+  }
+  printf '%s\n' "$TRAFFIC_INTERSECTION_DATA"
 }
 
 prepare_road_runtime_data() {
@@ -131,6 +158,14 @@ if [[ "$ROUTE_GEOMETRY_SCOPE" == "required" ]]; then
   }
   printf 'PR_CHECK=CHECK_E6_BJARRED_ROUTE pr=%s\n' "$BRUR_PR_CHECK_PR"
   "$PYTHON" "$WORKTREE/tools/check_e6_bjarred_route.py" "$WORLD_DATA" "$SERVER"
+fi
+
+if [[ "$TRAFFIC_INTERSECTION_SCOPE" == "required" ]]; then
+  ensure_routing_dataset_identity
+  traffic_data="$(prepare_traffic_intersection_data)"
+  printf 'PR_CHECK=CHECK_TRAFFIC_INTERSECTIONS_REAL_DATA pr=%s\n' "$BRUR_PR_CHECK_PR"
+  "$PYTHON" "$WORKTREE/tools/check_traffic_intersections_real_data.py" "$traffic_data"
+  printf 'PR_CHECK=TRAFFIC_INTERSECTIONS_REAL_DATA_OK pr=%s\n' "$BRUR_PR_CHECK_PR"
 fi
 
 if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then

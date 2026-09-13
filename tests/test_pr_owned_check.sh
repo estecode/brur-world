@@ -48,6 +48,7 @@ success_line="$(grep -n -- '--state success' "$ROOT/tools/pr_check.sh" | head -n
   exit 1
 }
 
+bash -n "$ROOT/tools/pr_check_local.sh"
 no_prep_line="$(grep -n 'PR_CHECK=NO_EXPENSIVE_LOCAL_PREPARATION' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
 skip_visual_line="$(grep -n 'PR_CHECK=SKIP_VISUAL_REVIEW' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
 visual_line="$(grep -n 'PR_CHECK=VISUAL_REVIEW pr=' "$ROOT/tools/pr_check_local.sh" | head -n 1 | cut -d: -f1)"
@@ -66,6 +67,19 @@ fi
 
 grep -q 'BUILDING_TILE_SCOPE.*required' "$ROOT/tools/pr_check_local.sh" || {
   printf 'visual presentation scopes must still be able to request review\n' >&2
+  exit 1
+}
+
+grep -q 'TRAFFIC_INTERSECTION_DATA=.*\.poc_runtime/traffic_intersections' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'traffic intersection fallback data must remain isolated inside the PR worktree\n' >&2
+  exit 1
+}
+grep -q 'BUILD_TRAFFIC_SIGNALS.*reason=missing-runtime-data' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'missing traffic signal runtime data must trigger an explicit rebuild path\n' >&2
+  exit 1
+}
+grep -q 'build_traffic_signals.py.*--output.*TRAFFIC_INTERSECTION_DATA' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'traffic signal fallback must use the production #92 builder into isolated data\n' >&2
   exit 1
 }
 
