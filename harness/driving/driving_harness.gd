@@ -223,7 +223,8 @@ func _reset_player() -> void:
 	if route_follower != null:
 		route_follower.call("set_follow_enabled", false)
 	player.call("set_world_position", Vector3(GRID_MIN_X, 0.8, GRID_MAX_Z))
-	player.call("set_motion_state", 0.0, PI / 2.0)
+	# The fixture route initially travels east (+X); heading -PI/2 faces +X in the shared vehicle convention.
+	player.call("set_motion_state", 0.0, -PI / 2.0)
 	if _route_is_set and route_follower != null:
 		route_follower.call("set_route", _fixture_route, _fixture_speed_limits)
 		_apply_intersection_scenario()
