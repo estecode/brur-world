@@ -11,6 +11,9 @@ WORLD_DATA="$ROOT/world_data"
 [[ -f "$ROOT/tools/pr_check_scope.py" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_scope.py\n' >&2; exit 66; }
 [[ -f "$ROOT/tools/pr_check_status.py" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_status.py\n' >&2; exit 66; }
 [[ -f "$ROOT/tools/run_pr_owned_check.sh" ]] || { printf 'PR_CHECK=FAIL missing tools/run_pr_owned_check.sh\n' >&2; exit 66; }
+[[ -f "$ROOT/tools/pr_check_native_gps_policy.sh" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_native_gps_policy.sh\n' >&2; exit 66; }
+# shellcheck source=tools/pr_check_native_gps_policy.sh
+source "$ROOT/tools/pr_check_native_gps_policy.sh"
 
 if [[ -x "$ROOT/.venv/bin/python" ]]; then
   PYTHON_BIN="$ROOT/.venv/bin/python"
@@ -44,6 +47,8 @@ printf 'PR_CHECK=STATUS pending pr=%s revision=%s\n' "$PR" "${PR_HEAD:0:12}"
 
 TMP=""
 ADDED=0
+NATIVE_MAIN_TMP=""
+NATIVE_MAIN_ADDED=0
 STATUS_ACTIVE=1
 AUTOMATED_SUCCESS=0
 cleanup() {
@@ -57,8 +62,14 @@ cleanup() {
   if [[ "$ADDED" -eq 1 && -n "$TMP" ]]; then
     git -C "$ROOT" worktree remove --force "$TMP" >/dev/null 2>&1 || true
   fi
+  if [[ "$NATIVE_MAIN_ADDED" -eq 1 && -n "$NATIVE_MAIN_TMP" ]]; then
+    git -C "$ROOT" worktree remove --force "$NATIVE_MAIN_TMP" >/dev/null 2>&1 || true
+  fi
   if [[ -n "$TMP" ]]; then
     rm -rf "$TMP"
+  fi
+  if [[ -n "$NATIVE_MAIN_TMP" ]]; then
+    rm -rf "$NATIVE_MAIN_TMP"
   fi
   exit "$status"
 }
@@ -193,17 +204,37 @@ ln -s "$WORLD_DATA" "$TMP/world_data"
 
 CURRENT_STAGE="native-gps"
 if [[ -f "$TMP/tools/build_native_gps.sh" ]]; then
-  if [[ "$NATIVE_GPS_SCOPE" == "required" ]]; then
-    printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s reason=relevant-changes\n' "$PR"
-    bash "$TMP/tools/build_native_gps.sh"
-  elif native_gps_ready; then
-    rm -rf "$TMP/bin"
-    ln -s "$ROOT/bin" "$TMP/bin"
-    printf 'PR_CHECK=SKIP_NATIVE_GPS_BUILD pr=%s reason=reuse-existing-binaries\n' "$PR"
+  if native_gps_ready; then
+    NATIVE_GPS_REUSABLE=yes
   else
-    printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s reason=missing-existing-binaries\n' "$PR"
-    bash "$TMP/tools/build_native_gps.sh"
+    NATIVE_GPS_REUSABLE=no
   fi
+  NATIVE_GPS_SOURCE="$(select_native_gps_source "$NATIVE_GPS_SCOPE" "$NATIVE_GPS_REUSABLE")"
+  case "$NATIVE_GPS_SOURCE" in
+    pr)
+      printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s reason=relevant-changes source=pr revision=%s\n' "$PR" "${PR_HEAD:0:12}"
+      bash "$TMP/tools/build_native_gps.sh"
+      ;;
+    reuse)
+      rm -rf "$TMP/bin"
+      ln -s "$ROOT/bin" "$TMP/bin"
+      printf 'PR_CHECK=SKIP_NATIVE_GPS_BUILD pr=%s reason=reuse-existing-binaries\n' "$PR"
+      ;;
+    main)
+      NATIVE_MAIN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/brur-world-main-native.XXXXXX")"
+      git -C "$ROOT" worktree add --quiet --detach "$NATIVE_MAIN_TMP" "$MAIN_HEAD"
+      NATIVE_MAIN_ADDED=1
+      [[ -f "$NATIVE_MAIN_TMP/tools/build_native_gps.sh" ]] || { printf 'PR_CHECK=FAIL current main has no native GPS builder\n' >&2; exit 66; }
+      printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s reason=missing-existing-binaries source=current-main revision=%s\n' "$PR" "${MAIN_HEAD:0:12}"
+      bash "$NATIVE_MAIN_TMP/tools/build_native_gps.sh"
+      rm -rf "$TMP/bin"
+      ln -s "$NATIVE_MAIN_TMP/bin" "$TMP/bin"
+      ;;
+    *)
+      printf 'PR_CHECK=FAIL invalid native GPS source: %s\n' "$NATIVE_GPS_SOURCE" >&2
+      exit 70
+      ;;
+  esac
 fi
 
 CURRENT_STAGE="route-geometry"
