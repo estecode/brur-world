@@ -52,4 +52,4 @@ func consume_pursuit_handoff() -> Dictionary:
 	return result
 
 func state_name() -> String:
-	return State.keys()[state]
+	return str(State.keys()[state])
