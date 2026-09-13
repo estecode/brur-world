@@ -69,6 +69,18 @@ grep -q 'BUILDING_TILE_SCOPE.*required' "$ROOT/tools/pr_check_local.sh" || {
   printf 'visual presentation scopes must still be able to request review\n' >&2
   exit 1
 }
+grep -q 'DRIVING_VISUAL_SCOPE="required"' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'driving changes must request an exact-revision visual review\n' >&2
+  exit 1
+}
+grep -q 'harness/driving/driving_harness.tscn' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'driving visual review must launch the driving harness from the PR worktree\n' >&2
+  exit 1
+}
+grep -q 'Normal, Aggressive and Maniac' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'driving visual review must state the concrete policy comparison\n' >&2
+  exit 1
+}
 
 grep -q 'TRAFFIC_INTERSECTION_DATA=.*\.poc_runtime/traffic_intersections' "$ROOT/tools/pr_check_local.sh" || {
   printf 'traffic intersection fallback data must remain isolated inside the PR worktree\n' >&2
