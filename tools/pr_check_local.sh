@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs only relevant local real-data preparation, then opens the exact PR runtime only when human visual review remains meaningful.
-# Dependencies: changed-file scope from pr_check.sh, existing local world_data, and source/build tools only for scopes that require them.
+# Dependencies: changed-file scope and explicit PR merge-decision review contract from pr_check.sh, existing local world_data, and source/build tools only for scopes that require them.
 set -euo pipefail
 
 WORKTREE="${BRUR_PR_CHECK_WORKTREE:?}"
@@ -8,9 +8,15 @@ WORLD_DATA="${BRUR_PR_CHECK_WORLD_DATA:?}"
 PYTHON="${PYTHON_BIN:?}"
 GODOT="${GODOT_BIN:?}"
 CHANGED_FILES="${BRUR_PR_CHECK_CHANGED_FILES:-}"
+MANUAL_REVIEW="${BRUR_PR_CHECK_MANUAL_REVIEW:-none}"
 CACHE="$WORKTREE/.poc_runtime/world_showcase"
 RUNTIME_WORLD_DATA="$WORKTREE/.poc_runtime/pr_check_world_data"
 TRAFFIC_INTERSECTION_DATA="$WORKTREE/.poc_runtime/traffic_intersections"
+
+case "$MANUAL_REVIEW" in
+  required|none) ;;
+  *) printf 'PR_CHECK=FAIL invalid BRUR_PR_CHECK_MANUAL_REVIEW=%s\n' "$MANUAL_REVIEW" >&2; exit 70 ;;
+esac
 
 scope_decision() {
   local scope="$1" decision
@@ -243,7 +249,7 @@ PY
   run_godot_test res://tests/godot/test_world_showcase.gd
 fi
 
-if [[ "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$DRIVING_VISUAL_SCOPE" == "skip" && "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]]; then
+if [[ "$MANUAL_REVIEW" == "none" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$DRIVING_VISUAL_SCOPE" == "skip" && "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]]; then
   printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "$BRUR_PR_CHECK_PR"
   exit 0
 fi
@@ -260,6 +266,13 @@ if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then
   printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=harness/driving/driving_harness.tscn reason=driving-feel\n'
   printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION use Follow route and compare Driving policy Normal, Aggressive and Maniac on the same loop; confirm they feel clearly distinct and ordered in assertiveness; close Godot when finished\n'
   "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"
+  exit 0
+fi
+if [[ "$MANUAL_REVIEW" == "required" && "$BUILDING_TILE_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" ]]; then
+  printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=pr-merge-decision\n'
+  printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=editor\n'
+  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION perform the concrete CHECK from the PR merge decision in the normal Brur World game; close Godot when finished\n'
+  "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"
   exit 0
 fi
 if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
