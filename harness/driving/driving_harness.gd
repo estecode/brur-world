@@ -3,11 +3,12 @@ extends Node3D
 ## Composes one production player vehicle for manual and AI/GPS driving-policy playtests.
 ##
 ## Dependencies:
-## - Uses the production player_vehicle scene, VehicleRouteFollower, RouteDrivingPolicy and CameraRig implementation.
+## - Uses the production player_vehicle scene, VehicleRouteFollower, RouteDrivingPolicy, GpsRouteRenderer and CameraRig implementation.
 ## - Fixture roads/speed limits/intersection observations are deterministic harness inputs, not alternate vehicle/routing logic.
 
 const PlayerVehicleScene = preload("res://scenes/player_vehicle.tscn")
 const RouteDrivingPolicyScript = preload("res://scripts/route_driving_policy.gd")
+const GpsRouteRendererScript = preload("res://scripts/gps_route_renderer.gd")
 const ROAD_WIDTH: float = 10.0
 const ROAD_HEIGHT: float = 0.18
 const ROAD_Y: float = 0.10
@@ -49,6 +50,7 @@ enum GapScenario {
 var player: Node3D = null
 var player_controller: Node = null
 var route_follower: Node = null
+var route_renderer: Node3D = null
 var _fixture_route: PackedVector3Array = PackedVector3Array()
 var _fixture_speed_limits: PackedFloat32Array = PackedFloat32Array()
 var _control_mode: int = ControlMode.MANUAL
@@ -61,6 +63,7 @@ func _ready() -> void:
 	_spawn_player()
 	_fixture_route = _build_fixture_route()
 	_fixture_speed_limits = _build_fixture_speed_limits(_fixture_route.size())
+	_setup_route_renderer()
 	_setup_control_modes()
 	_setup_driving_modes()
 	_setup_intersection_scenarios()
@@ -94,6 +97,31 @@ func _spawn_player() -> void:
 	add_child(player)
 	player_controller = player.get_node_or_null("PlayerVehicleController")
 	route_follower = player.get_node_or_null("VehicleRouteFollower")
+
+func _setup_route_renderer() -> void:
+	route_renderer = GpsRouteRendererScript.new() as Node3D
+	route_renderer.name = "GpsRouteRenderer"
+	add_child(route_renderer)
+	route_renderer.call("setup", Callable(self, "_fixture_to_world"))
+	route_renderer.call("update_height", RESET_CAMERA_ALTITUDE_M, ROAD_Y + ROAD_HEIGHT * 0.5)
+
+func _fixture_to_world(x: float, z: float) -> Vector3:
+	return Vector3(x, 0.0, z)
+
+func _fixture_route_pairs() -> Array:
+	var pairs: Array = []
+	for point in _fixture_route:
+		pairs.append([point.x, point.z])
+	return pairs
+
+func _render_active_route() -> bool:
+	if route_renderer == null or _fixture_route.size() < 2:
+		return false
+	var rendered: bool = bool(route_renderer.call("draw_route", _fixture_route_pairs()))
+	var last_point: Vector3 = _fixture_route[_fixture_route.size() - 1]
+	route_renderer.call("show_target", [last_point.x, last_point.z])
+	route_renderer.call("update_height", RESET_CAMERA_ALTITUDE_M, ROAD_Y + ROAD_HEIGHT * 0.5)
+	return rendered
 
 func _setup_control_modes() -> void:
 	control_mode.clear()
@@ -151,7 +179,13 @@ func _set_fixture_route_and_start() -> void:
 		return
 	route_follower.call("set_follow_enabled", false)
 	route_follower.call("set_route", _fixture_route, _fixture_speed_limits)
-	_route_is_set = true
+	_route_is_set = bool(route_follower.call("has_route")) and _render_active_route()
+	if not _route_is_set:
+		route_follower.call("clear_route")
+		if route_renderer != null:
+			route_renderer.call("clear")
+		_set_control_mode(ControlMode.MANUAL)
+		return
 	_apply_intersection_scenario()
 	control_mode.select(ControlMode.GPS)
 	_set_control_mode(ControlMode.GPS)
@@ -160,6 +194,8 @@ func _on_clear_route_pressed() -> void:
 	if route_follower != null:
 		route_follower.call("set_follow_enabled", false)
 		route_follower.call("clear_route")
+	if route_renderer != null:
+		route_renderer.call("clear")
 	_route_is_set = false
 	control_mode.select(ControlMode.MANUAL)
 	_set_control_mode(ControlMode.MANUAL)
@@ -223,10 +259,10 @@ func _reset_player() -> void:
 	if route_follower != null:
 		route_follower.call("set_follow_enabled", false)
 	player.call("set_world_position", Vector3(GRID_MIN_X, 0.8, GRID_MAX_Z))
-	# The fixture route initially travels east (+X); heading -PI/2 faces +X in the shared vehicle convention.
 	player.call("set_motion_state", 0.0, -PI / 2.0)
 	if _route_is_set and route_follower != null:
 		route_follower.call("set_route", _fixture_route, _fixture_speed_limits)
+		_render_active_route()
 		_apply_intersection_scenario()
 	if follow_car.button_pressed:
 		camera_rig.call("set_follow_target", player)
