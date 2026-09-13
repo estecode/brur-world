@@ -160,9 +160,6 @@ func _rebase_background_mesh(instance: MeshInstance3D, origin: Vector3) -> void:
 		instance.set_meta(LOCALIZED_ORIGIN_META, next_origin)
 		return
 
-	# Localize the expensive BRM2 ArrayMesh only once per Drive session. Later
-	# render-cell changes keep the exact mesh resource and apply only a small node
-	# delta. This removes the Sweden-scale CPU/GPU mesh copy from cell crossings.
 	if instance.has_meta(LOCALIZED_ORIGIN_META) and instance.mesh is ArrayMesh:
 		var mesh_origin: Vector2 = instance.get_meta(LOCALIZED_ORIGIN_META)
 		instance.position.x = mesh_origin.x - next_origin.x
