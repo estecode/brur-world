@@ -244,7 +244,8 @@ fi
 printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
 if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then
   printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud\n'
-  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION use the production Main scene, enter Drive, and inspect the ruta-1 HUD: Swedish speed-limit sign left, fixed-width current speed beside it, optional ETA on active route, and explicit unknown limit; close Godot when finished\n'
+  printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=driving-harness\n'
+  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION this check must open the normal Brur World production Main scene, not DRIVING HARNESS. Enter Drive in that scene and inspect the ruta-1 HUD: Swedish speed-limit sign left, fixed-width current speed beside it, optional ETA on active route, and explicit unknown limit. If the window title/content says DRIVING HARNESS, close it and report launcher failure instead of judging the HUD.\n'
   "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"
   exit 0
 fi
