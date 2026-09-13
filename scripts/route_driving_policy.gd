@@ -1,7 +1,7 @@
 class_name RouteDrivingPolicy
 extends RefCounted
 
-## Converts route geometry, speed limits and current speed into forward driving targets.
+## Converts route geometry, speed limits, intersection risk and current speed into AI-driver targets.
 ##
 ## Dependencies:
 ## - Uses only meter/m/s route facts, Vector3 geometry, and RouteDrivingProfile data.
@@ -22,9 +22,9 @@ var _profiles: Dictionary = {}
 
 func _init() -> void:
 	_profiles = {
-		Mode.NORMAL: RouteDrivingProfileScript.new(1.0, 3.2, 3.5, 5.5, 6.0, 0.12, 0.10, 0.55, 0.55),
-		Mode.AGGRESSIVE: RouteDrivingProfileScript.new(1.12, 4.4, 5.0, 4.0, 4.5, 0.18, 0.16, 0.80, 0.80),
-		Mode.MANIAC: RouteDrivingProfileScript.new(1.35, 6.0, 7.0, 2.5, 3.0, 0.25, 0.22, 1.0, 1.0),
+		Mode.NORMAL: RouteDrivingProfileScript.new(1.0, 3.2, 3.5, 5.5, 6.0, 0.12, 0.10, 0.55, 0.55, 1.0, 1.0),
+		Mode.AGGRESSIVE: RouteDrivingProfileScript.new(1.3, 4.8, 5.5, 3.5, 4.0, 0.20, 0.18, 0.90, 0.90, 0.65, 0.65),
+		Mode.MANIAC: RouteDrivingProfileScript.new(INF, 7.5, 8.5, 1.8, 2.2, 0.35, 0.30, 1.0, 1.0, 0.35, 0.35),
 	}
 
 func set_mode(new_mode: int) -> bool:
@@ -47,7 +47,8 @@ func target_speed_mps(
 		return 0.0
 	var profile = _profile()
 	var index: int = clampi(target_index, 1, points.size() - 1)
-	var target: float = _speed_limit_at(index, speed_limits_mps) * float(profile.speed_limit_multiplier)
+	var legal_limit: float = _speed_limit_at(index, speed_limits_mps)
+	var target: float = vehicle_max_speed_mps if _mode == Mode.MANIAC else legal_limit * float(profile.speed_limit_multiplier)
 	var distance_ahead: float = 0.0
 	var previous: Vector3 = points[index - 1]
 	for i in range(index, mini(points.size() - 1, index + 12)):
@@ -67,11 +68,24 @@ func target_speed_mps(
 		var radius_m: float = maxf(3.0, segment_m / maxf(2.0 * sin(angle * 0.5), 0.05))
 		var curve_speed: float = maxf(MIN_CURVE_SPEED_MPS, sqrt(float(profile.max_lateral_accel_mps2) * radius_m))
 		target = minf(target, _approach_speed(curve_speed, distance_ahead, float(profile.comfort_brake_mps2)))
-		var upcoming_limit: float = _speed_limit_at(i + 1, speed_limits_mps) * float(profile.speed_limit_multiplier)
-		target = minf(target, _approach_speed(upcoming_limit, distance_ahead, float(profile.comfort_brake_mps2)))
+		if _mode != Mode.MANIAC:
+			var upcoming_limit: float = _speed_limit_at(i + 1, speed_limits_mps) * float(profile.speed_limit_multiplier)
+			target = minf(target, _approach_speed(upcoming_limit, distance_ahead, float(profile.comfort_brake_mps2)))
 	if is_finite(vehicle_max_speed_mps):
 		target = minf(target, maxf(vehicle_max_speed_mps, 0.0))
 	return maxf(0.0, target)
+
+func intersection_target_speed_mps(
+	road_target_speed_mps: float,
+	safe_intersection_speed_mps: float,
+	vehicle_max_speed_mps: float = INF
+) -> float:
+	var profile = _profile()
+	var risk_adjusted: float = safe_intersection_speed_mps / maxf(float(profile.intersection_speed_factor), 0.01)
+	return minf(road_target_speed_mps, minf(risk_adjusted, vehicle_max_speed_mps))
+
+func accepted_gap_seconds(base_safe_gap_seconds: float) -> float:
+	return maxf(0.1, base_safe_gap_seconds * float(_profile().intersection_gap_factor))
 
 func controls_for_speed(current_speed_mps: float, target_speed_mps_value: float) -> Vector2:
 	var profile = _profile()
