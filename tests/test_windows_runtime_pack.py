@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import tempfile
@@ -54,6 +56,32 @@ class WindowsRuntimePackTests(unittest.TestCase):
             self.assertEqual(second["hashes_reused"], len(second["runtime_files"]))
             self.assertEqual(first["fingerprint"], second["fingerprint"])
             self.assertEqual(first["pack_path"], second["pack_path"])
+
+    def test_cold_and_warm_runs_explain_progress_and_shipping_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self._source_fixture(root)
+            cache = root / "cache"
+
+            cold_output = io.StringIO()
+            with contextlib.redirect_stdout(cold_output):
+                runtime_pack.prepare_cached_runtime_pack(source, cache)
+            cold = cold_output.getvalue()
+            self.assertIn("WINDOWS BUILD — PACKING + SHIPPING", cold)
+            self.assertIn("[runtime-pack] checking", cold)
+            self.assertIn("[runtime-pack] hashing", cold)
+            self.assertIn("[runtime-pack] packing", cold)
+            self.assertIn("[runtime-pack] verifying", cold)
+            self.assertIn("WINDOWS_RUNTIME_PACK=MISS", cold)
+
+            warm_output = io.StringIO()
+            with contextlib.redirect_stdout(warm_output):
+                runtime_pack.prepare_cached_runtime_pack(source, cache)
+            warm = warm_output.getvalue()
+            self.assertIn("WINDOWS BUILD — SHIPPING", warm)
+            self.assertIn("0 files changed — no content reread", warm)
+            self.assertIn("WINDOWS_RUNTIME_PACK=HIT", warm)
+            self.assertIn("rehashed=0", warm)
 
     def test_metadata_change_rehashes_only_changed_file_and_changes_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
