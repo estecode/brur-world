@@ -93,7 +93,7 @@ git -C "$FALLBACK_WORKTREE" add .
 git -C "$FALLBACK_WORKTREE" commit -qm fallback-fixture
 ln -s "$MAPPED/world_data" "$FALLBACK_LAUNCHER/world_data"
 set +e
-env -u BRUR_PR_CHECK_LOG_PATH -u BRUR_PR_CHECK_MAPPED_ROOT \
+env -u BRUR_PR_CHECK_LOG_PATH -u BRUR_PR_CHECK_MAPPED_ROOT BRUR_PR_CHECK_MANUAL_REVIEW=none \
   bash "$OWNED_RUNNER" "$FALLBACK_WORKTREE" 98 "$FALLBACK_LAUNCHER/world_data" /usr/bin/python3 /usr/bin/true >/dev/null 2>&1
 fallback_status=$?
 set -e
