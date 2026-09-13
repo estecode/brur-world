@@ -67,6 +67,7 @@ jobs:
           bash -n tools/windows_build/build.sh
           bash -n tools/windows_build/target.sh
           python -m unittest tests.test_windows_runtime_data
+          python -m unittest tests.test_windows_runtime_pack
           python -m unittest tests.test_windows_build_package
 
       - name: Install Godot 4 headless runtime
@@ -127,6 +128,7 @@ jobs:
       - name: Run world streaming foundation tests
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_streaming_foundation.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_building_mesh_compact_codec.gd
 
       - name: Run road surface query tests
         run: |
@@ -147,6 +149,10 @@ jobs:
       - name: Run map controls regression tests
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_map_controls.gd
+
+      - name: Run player map presentation regression tests
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_player_map_marker.gd
 
       - name: Run POI startup default regression test
         run: |
