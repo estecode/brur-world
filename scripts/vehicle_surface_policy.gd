@@ -1,7 +1,7 @@
 class_name VehicleSurfacePolicy
 extends RefCounted
 
-## Defines deterministic vehicle performance modifiers for road and off-road surfaces.
+## Defines deterministic vehicle performance and grip modifiers for road and off-road surfaces.
 ##
 ## Dependencies:
 ## - Pure vehicle-domain policy with no SceneTree, rendering, world-data, or input dependency.
@@ -17,6 +17,7 @@ func modifiers(surface_kind: StringName) -> Dictionary:
 			"acceleration_factor": 0.55,
 			"braking_factor": 0.60,
 			"steering_factor": 0.65,
+			"grip_factor": 0.55,
 			"overspeed_deceleration_mps2": 2.0,
 		}
 	return {
@@ -24,5 +25,6 @@ func modifiers(surface_kind: StringName) -> Dictionary:
 		"acceleration_factor": 1.0,
 		"braking_factor": 1.0,
 		"steering_factor": 1.0,
+		"grip_factor": 1.0,
 		"overspeed_deceleration_mps2": 0.0,
 	}

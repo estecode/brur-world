@@ -100,10 +100,17 @@ jobs:
       - name: Validate PR check scope
         run: python tests/test_pr_check_scope.py
 
+      - name: Validate native GPS build environment
+        run: |
+          bash -n tools/build_native_gps.sh
+          python tests/test_native_gps_build_env.py
+
       - name: Validate persistent local PR-check status
         run: |
           bash -n tools/pr_check.sh
+          bash -n tools/pr_check_native_gps_policy.sh
           python tests/test_pr_check_status.py
+          python tests/test_pr_check_native_gps.py
 
       - name: Validate PR-owned local check hook
         run: |
