@@ -1,12 +1,12 @@
 class_name VehicleRouteFollower
 extends Node
 
-## Tracks progress on an active GPS polyline and converts route policy into GPS-owned controls.
+## Tracks progress on an active GPS polyline and converts AI-driver policy into GPS-owned controls.
 ##
 ## Dependencies:
-## - Consumes world-space route points and optional per-point speed limits supplied by GPS composition.
-## - RouteDrivingPolicy owns speed/curve policy; the vehicle adapter owns dynamics.
-## - Emits reroute_requested on meaningful deviation; it does not calculate routes itself.
+## - Consumes world-space route points, speed limits and explicit upcoming-intersection observations supplied by composition.
+## - RouteDrivingPolicy owns speed/curve/intersection policy; the vehicle adapter owns dynamics.
+## - Emits reroute_requested on meaningful deviation; it does not calculate routes, traffic, or intersections itself.
 
 signal reroute_requested
 
@@ -27,6 +27,10 @@ var _speed_limits_mps: PackedFloat32Array = PackedFloat32Array()
 var _target_index: int = 0
 var _policy = RouteDrivingPolicyScript.new()
 var _deviation_reported: bool = false
+var _intersection_index: int = -1
+var _intersection_safe_speed_mps: float = 0.0
+var _intersection_base_gap_seconds: float = 0.0
+var _intersection_observed_gap_seconds: float = INF
 
 func _ready() -> void:
 	var parent_node: Node = get_parent()
@@ -42,12 +46,14 @@ func set_route(points: PackedVector3Array, speed_limits_mps: PackedFloat32Array 
 	_points = points
 	_speed_limits_mps = speed_limits_mps
 	_target_index = _forward_target_index()
+	clear_upcoming_intersection()
 
 func clear_route() -> void:
 	_points = PackedVector3Array()
 	_speed_limits_mps = PackedFloat32Array()
 	_target_index = 0
 	_deviation_reported = false
+	clear_upcoming_intersection()
 	if vehicle != null and enabled:
 		vehicle.call("clear_control_inputs", GPS_OWNER)
 
@@ -59,6 +65,29 @@ func set_driving_mode(mode: int) -> bool:
 
 func driving_mode() -> int:
 	return _policy.mode()
+
+func set_upcoming_intersection(
+	route_point_index: int,
+	safe_speed_mps: float,
+	base_safe_gap_seconds: float,
+	observed_gap_seconds: float
+) -> bool:
+	if route_point_index < 0 or route_point_index >= _points.size():
+		return false
+	_intersection_index = route_point_index
+	_intersection_safe_speed_mps = maxf(0.0, safe_speed_mps)
+	_intersection_base_gap_seconds = maxf(0.1, base_safe_gap_seconds)
+	_intersection_observed_gap_seconds = maxf(0.0, observed_gap_seconds)
+	return true
+
+func update_intersection_gap(observed_gap_seconds: float) -> void:
+	_intersection_observed_gap_seconds = maxf(0.0, observed_gap_seconds)
+
+func clear_upcoming_intersection() -> void:
+	_intersection_index = -1
+	_intersection_safe_speed_mps = 0.0
+	_intersection_base_gap_seconds = 0.0
+	_intersection_observed_gap_seconds = INF
 
 func set_follow_enabled(new_enabled: bool) -> bool:
 	if new_enabled and not has_route():
@@ -110,6 +139,16 @@ func _drive_route() -> void:
 
 	var vehicle_max_speed_mps: float = maxf(float(vehicle.get("max_speed_mps")), 0.0)
 	var target_speed: float = _policy.target_speed_mps(_points, _target_index, _speed_limits_mps, speed_mps, vehicle_max_speed_mps)
+	if _intersection_index >= _target_index and _intersection_index < _points.size():
+		var distance_to_intersection: float = _route_distance_to_index(_intersection_index)
+		target_speed = minf(target_speed, _policy.intersection_approach_speed_mps(
+			target_speed,
+			_intersection_safe_speed_mps,
+			distance_to_intersection,
+			_intersection_base_gap_seconds,
+			_intersection_observed_gap_seconds,
+			vehicle_max_speed_mps
+		))
 	var controls: Vector2 = _policy.controls_for_speed(speed_mps, target_speed)
 	if absf(heading_error) > deg_to_rad(70.0):
 		controls.x = 0.0
@@ -121,6 +160,8 @@ func _update_progress() -> void:
 		if _flat_distance(vehicle.global_position, _points[_target_index]) > waypoint_radius_m:
 			break
 		_target_index += 1
+	if _intersection_index >= 0 and _target_index > _intersection_index:
+		clear_upcoming_intersection()
 
 func _lookahead_index(distance_m: float) -> int:
 	var index := _target_index
@@ -134,6 +175,14 @@ func _lookahead_index(distance_m: float) -> int:
 		cursor = _points[index]
 		index += 1
 	return index
+
+func _route_distance_to_index(route_point_index: int) -> float:
+	if route_point_index < _target_index or route_point_index >= _points.size():
+		return 0.0
+	var distance: float = _flat_distance(vehicle.global_position, _points[_target_index])
+	for index in range(_target_index, route_point_index):
+		distance += _flat_distance(_points[index], _points[index + 1])
+	return distance
 
 func _forward_target_index() -> int:
 	if vehicle == null or _points.is_empty():
