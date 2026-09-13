@@ -1,7 +1,7 @@
 extends SceneTree
 
-## Verifies the driving harness exposes exclusive Manual/GPS ownership and AI policy controls.
-## Dependencies: production-backed driving harness scene, CameraRig and VehicleRouteFollower public APIs.
+## Verifies the driving harness exposes explicit route start, exclusive Manual/GPS ownership and freely switchable AI policy controls.
+## Dependencies: production-backed driving harness scene, CameraRig, player controller and VehicleRouteFollower public APIs.
 
 const PLAYER_OWNER: int = 0
 const GPS_OWNER: int = 1
@@ -17,11 +17,15 @@ func _run() -> void:
 	await process_frame
 
 	var control := harness.get_node_or_null("Ui/Panel/Margin/VBox/ControlMode") as OptionButton
+	var set_route := harness.get_node_or_null("Ui/Panel/Margin/VBox/SetRoute") as Button
+	var clear_route := harness.get_node_or_null("Ui/Panel/Margin/VBox/ClearRoute") as Button
 	var selector := harness.get_node_or_null("Ui/Panel/Margin/VBox/DrivingMode") as OptionButton
 	var intersection := harness.get_node_or_null("Ui/Panel/Margin/VBox/IntersectionGap") as OptionButton
 	var camera := harness.get_node_or_null("CameraRig")
 	var player := harness.get_node_or_null("PlayerVehicle")
 	_assert(control != null and control.item_count == 2, "harness exposes Manual Drive and GPS Drive")
+	_assert(set_route != null, "harness exposes explicit Set Route control")
+	_assert(clear_route != null, "harness exposes explicit Clear Route control")
 	_assert(control.get_item_text(0) == "Manual Drive", "first control mode is Manual Drive")
 	_assert(control.get_item_text(1) == "GPS Drive", "second control mode is GPS Drive")
 	_assert(selector != null and selector.item_count == 3, "harness exposes exactly three AI policy modes")
@@ -35,37 +39,65 @@ func _run() -> void:
 	_assert(player_controller != null, "driving harness uses production player controller")
 
 	_assert(int(player.call("control_owner")) == PLAYER_OWNER, "Manual Drive owns the vehicle initially")
-	_assert(bool(player_controller.get("enabled")), "player controller is enabled in Manual Drive")
-	_assert(not bool(follower.call("is_follow_enabled")), "GPS follower is disabled in Manual Drive")
+	_assert(bool(player_controller.get("enabled")), "player controller is enabled initially")
+	_assert(not bool(follower.call("has_route")), "harness starts without an implicit route")
+	_assert(not bool(follower.call("is_follow_enabled")), "GPS follower is disabled before a route is set")
 	_assert(bool(camera.call("is_driving_view")), "Manual Drive reserves camera drive mode so WASD cannot pan the map")
-	_assert(selector.disabled, "AI style selector is disabled in Manual Drive")
+	_assert(selector.disabled, "AI style selector is disabled before GPS route start")
+
+	var player_instance := player
+	var start_position: Vector3 = player.global_position
+	set_route.pressed.emit()
+	await process_frame
+	_assert(bool(follower.call("has_route")), "Set Route installs the route")
+	_assert(bool(follower.call("is_follow_enabled")), "Set Route immediately starts GPS route following")
+	_assert(int(player.call("control_owner")) == GPS_OWNER, "Set Route immediately transfers control to GPS")
+	_assert(not bool(player_controller.get("enabled")), "player controller releases the vehicle when route starts")
+	_assert(control.selected == 1, "Set Route selects GPS Drive in the UI")
+	_assert(not selector.disabled, "AI mode selector becomes available once GPS route starts")
+
+	for _frame in range(20):
+		await physics_frame
+	_assert(player.global_position.distance_to(start_position) > 0.01, "vehicle begins moving after Set Route without another follow toggle")
+
+	var position_before_manual: Vector3 = player.global_position
+	control.select(0)
+	control.item_selected.emit(0)
+	await process_frame
+	_assert(int(player.call("control_owner")) == PLAYER_OWNER, "Manual Drive can take over an active route")
+	_assert(bool(player_controller.get("enabled")), "manual takeover enables player controller")
+	_assert(not bool(follower.call("is_follow_enabled")), "manual takeover pauses AI driving")
+	_assert(bool(follower.call("has_route")), "manual takeover preserves the active route")
+	_assert(harness.get_node_or_null("PlayerVehicle") == player_instance, "manual takeover preserves vehicle instance")
+	_assert(player.global_position.distance_to(position_before_manual) < 0.5, "manual takeover does not reset or teleport the vehicle")
 
 	control.select(1)
 	control.item_selected.emit(1)
 	await process_frame
-	_assert(int(player.call("control_owner")) == GPS_OWNER, "GPS Drive owns the same vehicle")
-	_assert(not bool(player_controller.get("enabled")), "player controller is disabled in GPS Drive")
-	_assert(bool(follower.call("is_follow_enabled")), "route follower is enabled in GPS Drive")
-	_assert(not bool(camera.call("is_driving_view")), "GPS Drive releases WASD for map pan")
-	_assert(not selector.disabled, "AI style selector is enabled only in GPS Drive")
+	_assert(int(player.call("control_owner")) == GPS_OWNER, "GPS Drive can resume the preserved route")
+	_assert(bool(follower.call("is_follow_enabled")), "GPS Drive resumes route following")
+	_assert(not bool(player_controller.get("enabled")), "GPS resume disables manual player input")
+	_assert(bool(follower.call("has_route")), "GPS resume keeps the same route")
+	_assert(harness.get_node_or_null("PlayerVehicle") == player_instance, "GPS resume preserves vehicle instance")
 
-	var player_instance := player
 	for index in range(3):
+		var position_before_mode: Vector3 = player.global_position
 		selector.select(index)
 		selector.item_selected.emit(index)
 		await process_frame
 		_assert(int(follower.call("driving_mode")) == selector.get_item_id(index), "selector updates production AI policy mode")
 		_assert(harness.get_node_or_null("PlayerVehicle") == player_instance, "AI mode switching keeps the same production vehicle instance")
-		_assert(int(player.call("control_owner")) == GPS_OWNER, "AI mode switching does not change control ownership")
+		_assert(int(player.call("control_owner")) == GPS_OWNER, "AI mode switching does not change GPS ownership")
+		_assert(bool(follower.call("has_route")), "AI mode switching preserves the route")
+		_assert(player.global_position.distance_to(position_before_mode) < 0.5, "AI mode switching does not reset or teleport the vehicle")
 
-	control.select(0)
-	control.item_selected.emit(0)
+	clear_route.pressed.emit()
 	await process_frame
-	_assert(int(player.call("control_owner")) == PLAYER_OWNER, "switching back restores manual owner")
-	_assert(bool(player_controller.get("enabled")), "player controller returns without respawning the car")
-	_assert(not bool(follower.call("is_follow_enabled")), "GPS follower releases the vehicle on manual takeover")
-	_assert(bool(camera.call("is_driving_view")), "manual takeover again suppresses map WASD")
-	_assert(harness.get_node_or_null("PlayerVehicle") == player_instance, "manual/GPS ownership switching preserves vehicle instance")
+	_assert(not bool(follower.call("has_route")), "Clear Route removes the route")
+	_assert(not bool(follower.call("is_follow_enabled")), "Clear Route stops GPS driving")
+	_assert(int(player.call("control_owner")) == PLAYER_OWNER, "Clear Route returns control to Manual Drive")
+	_assert(bool(player_controller.get("enabled")), "Clear Route restores manual input")
+	_assert(harness.get_node_or_null("PlayerVehicle") == player_instance, "Clear Route preserves vehicle instance")
 
 	harness.queue_free()
 	print("DRIVING_HARNESS_MODES=PASS")
