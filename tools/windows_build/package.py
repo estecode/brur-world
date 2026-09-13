@@ -40,6 +40,14 @@ def find_binary_pair(binary_dir: Path) -> tuple[Path, Path]:
     return exe, pck
 
 
+def resolve_runtime_pack_info_path(path: Path) -> Path:
+    """Accept the current info-file contract and the pre-#226 launcher directory contract."""
+    resolved = path.resolve()
+    if resolved.is_dir():
+        resolved = resolved / "runtime_pack_info.json"
+    return resolved
+
+
 def load_runtime_pack_info(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise SystemExit(f"missing runtime pack info: {path}")
@@ -88,7 +96,7 @@ def package_client(
     output_zip: Path,
 ) -> dict:
     binary_dir = binary_dir.resolve()
-    runtime_pack_info_path = runtime_pack_info_path.resolve()
+    runtime_pack_info_path = resolve_runtime_pack_info_path(runtime_pack_info_path)
     build_info_path = build_info_path.resolve()
     source_manifest = source_manifest.resolve()
     output_zip = output_zip.expanduser().resolve()
