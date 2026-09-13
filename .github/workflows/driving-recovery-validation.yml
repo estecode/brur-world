@@ -10,7 +10,8 @@ on:
       - "scripts/vehicle.gd"
       - "scripts/vehicle_dynamics.gd"
       - "scripts/vehicle_state.gd"
-      - "tests/godot/test_vehicle_route_recovery.gd"
+      - "harness/driving/test_vehicle_route_recovery.gd"
+      - "tests/test_driving_visual_handoff.py"
       - ".github/workflows/driving-recovery-validation.yml"
 
 permissions:
@@ -41,4 +42,7 @@ jobs:
           echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
 
       - name: Verify post-slip route recovery
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_route_recovery.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script harness/driving/test_vehicle_route_recovery.gd
+
+      - name: Verify Safe Check launches driving harness
+        run: python -m unittest tests.test_driving_visual_handoff
