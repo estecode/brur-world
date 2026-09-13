@@ -119,6 +119,10 @@ grep -q 'VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud' "$ROOT/to
   printf 'Drive HUD human review must identify the production Main scene explicitly\n' >&2
   exit 1
 }
+grep -q 'VISUAL_REVIEW_EXPECT window=production-main not=driving-harness' "$ROOT/tools/pr_check_local.sh" || {
+  printf 'Drive HUD handoff must state the expected production review surface\n' >&2
+  exit 1
+}
 grep -Fq '"$WORKTREE/scenes/main.tscn"' "$ROOT/tools/pr_check_local.sh" || {
   printf 'Drive HUD human review must launch scenes/main.tscn, not the driving harness\n' >&2
   exit 1
@@ -137,7 +141,6 @@ mkdir -p "$SELECTOR/tools" "$SELECTOR/scenes" "$SELECTOR/harness/driving"
 cp "$ROOT/tools/pr_check_local.sh" "$SELECTOR/tools/pr_check_local.sh"
 cat > "$SELECTOR/tools/pr_check_scope.py" <<'PY'
 #!/usr/bin/env python3
-import sys
 print("skip")
 PY
 chmod +x "$SELECTOR/tools/pr_check_scope.py"
