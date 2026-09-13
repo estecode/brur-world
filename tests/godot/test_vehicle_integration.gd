@@ -14,11 +14,13 @@ func _run() -> void:
 	_test_route_policy()
 	var player_scene := load("res://scenes/player_vehicle.tscn") as PackedScene
 	_assert(player_scene != null, "player vehicle scene loads")
-	var player: Node3D = player_scene.instantiate() as Node3D
-	_assert(player != null, "player vehicle scene instantiates the production vehicle adapter")
 
 	var root := Node.new()
 	get_root().add_child(root)
+	_test_production_acceleration_and_owner_parity(player_scene, root)
+
+	var player: Node3D = player_scene.instantiate() as Node3D
+	_assert(player != null, "player vehicle scene instantiates the production vehicle adapter")
 	root.add_child(player)
 	player.call("set_world_position", Vector3(100.0, 0.0, 200.0))
 
@@ -68,6 +70,38 @@ func _run() -> void:
 	root.queue_free()
 	print("godot vehicle-integration tests: OK")
 	quit(0)
+
+func _test_production_acceleration_and_owner_parity(player_scene: PackedScene, root: Node) -> void:
+	var acceleration_car: Node3D = player_scene.instantiate() as Node3D
+	root.add_child(acceleration_car)
+	acceleration_car.call("set_world_position", Vector3.ZERO)
+	acceleration_car.call("set_motion_state", 0.0, 0.0)
+	_assert(bool(acceleration_car.call("set_control_inputs", PLAYER_OWNER, 1.0, 0.0, 0.0)), "manual full throttle is accepted for acceleration calibration")
+	for _index in range(480):
+		acceleration_car.call("_physics_process", 1.0 / 60.0)
+	_assert(_approx_tolerance(float(acceleration_car.call("speed_kmh")), 100.0, 0.5), "standard car reaches approximately 100 km/h in 8 seconds")
+	acceleration_car.queue_free()
+
+	var manual_car: Node3D = player_scene.instantiate() as Node3D
+	var gps_car: Node3D = player_scene.instantiate() as Node3D
+	root.add_child(manual_car)
+	root.add_child(gps_car)
+	manual_car.call("set_world_position", Vector3.ZERO)
+	gps_car.call("set_world_position", Vector3.ZERO)
+	manual_car.call("set_motion_state", 25.0, 0.0)
+	gps_car.call("set_motion_state", 25.0, 0.0)
+	gps_car.call("set_control_owner", GPS_OWNER)
+	_assert(bool(manual_car.call("set_control_inputs", PLAYER_OWNER, 0.7, 0.35, 1.0)), "manual owner accepts saturated cornering controls")
+	_assert(bool(gps_car.call("set_control_inputs", GPS_OWNER, 0.7, 0.35, 1.0)), "GPS owner accepts the same saturated cornering controls")
+	for _index in range(60):
+		manual_car.call("_physics_process", 1.0 / 60.0)
+		gps_car.call("_physics_process", 1.0 / 60.0)
+	var manual_state = manual_car.call("state_snapshot")
+	var gps_state = gps_car.call("state_snapshot")
+	_assert(absf(manual_state.last_slip_angle_rad) > 0.10, "manual driving can exceed grip and create visible body/trajectory slip")
+	_assert(_same_dynamic_state(manual_state, gps_state), "manual and GPS ownership produce identical physics for identical state and intent")
+	manual_car.queue_free()
+	gps_car.queue_free()
 
 func _test_route_policy() -> void:
 	var policy = RouteDrivingPolicyScript.new()
@@ -145,6 +179,15 @@ func _test_route_policy() -> void:
 
 func _same_state(a, b) -> bool:
 	return _approx(a.x_m, b.x_m) and _approx(a.z_m, b.z_m) and _approx(a.heading_rad, b.heading_rad) and _approx(a.speed_mps, b.speed_mps)
+
+func _same_dynamic_state(a, b) -> bool:
+	return _same_state(a, b) \
+		and _approx(a.travel_heading_rad, b.travel_heading_rad) \
+		and _approx(a.yaw_rate_rps, b.yaw_rate_rps) \
+		and _approx(a.last_slip_angle_rad, b.last_slip_angle_rad) \
+		and _approx(a.last_grip_usage, b.last_grip_usage) \
+		and _approx(a.energy_remaining, b.energy_remaining) \
+		and _approx(a.tire_condition, b.tire_condition)
 
 func _approx(a: float, b: float) -> bool:
 	return absf(a - b) < 0.00001
