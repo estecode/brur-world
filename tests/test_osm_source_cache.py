@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
@@ -23,7 +24,13 @@ from build_roads import build_roads  # noqa: E402
 from build_routing_dataset import build_routing_dataset  # noqa: E402
 from build_search_index import build_search_index  # noqa: E402
 from build_traffic_signals import build_traffic_signals  # noqa: E402
-from osm_source_cache import ALL_ROUTES, ROUTE_VERSIONS, SourceCacheHandler, build_source_caches  # noqa: E402
+from osm_source_cache import (  # noqa: E402
+    ALL_ROUTES,
+    ROUTE_VERSIONS,
+    SourceCacheHandler,
+    _ProgressDisplay,
+    build_source_caches,
+)
 
 
 FIXTURE = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -80,6 +87,11 @@ class FixtureCopyHandler(osmium.SimpleHandler):
         self.writer.add_relation(relation)
 
 
+class TTYBuffer(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
 def write_pbf(source: Path, destination: Path) -> None:
     with osmium.SimpleWriter(str(destination), overwrite=True) as writer:
         FixtureCopyHandler(writer).apply_file(str(source))
@@ -133,6 +145,55 @@ class OsmSourceCacheTests(unittest.TestCase):
         for route in ALL_ROUTES:
             self.assertTrue(manifest["routes"][route]["complete"])
             self.assertEqual(manifest["routes"][route]["version"], ROUTE_VERSIONS[route])
+
+    def test_live_route_counters_follow_source_matches(self) -> None:
+        stream = io.StringIO()
+        display = _ProgressDisplay(self.pbf, {"digest": "abc123"}, ALL_ROUTES, {}, stream)
+        work_dir = self.root / "progress-work"
+        work_dir.mkdir()
+        handler = SourceCacheHandler(work_dir, set(ALL_ROUTES), {}, display)
+        try:
+            handler.apply_file(str(self.pbf), locations=True)
+        finally:
+            handler.close()
+        self.assertEqual(
+            display.route_counts,
+            {"addresses": 2, "areas": 3, "highways": 1, "pois": 2, "traffic_signals": 2},
+        )
+        self.assertEqual(handler.counts, {"nodes": 8, "ways": 5, "relations": 1})
+
+    def test_tty_progress_rewrites_compact_block_with_hash_and_total(self) -> None:
+        stream = TTYBuffer()
+        display = _ProgressDisplay(
+            Path("/tmp/sweden-260824.osm.pbf"),
+            {"digest": "abc123"},
+            ("highways", "traffic_signals"),
+            {"nodes": 8, "ways": 5, "relations": 1},
+            stream,
+        )
+        display.hit("highways")
+        display.hit("traffic_signals")
+        display.render({"nodes": 10, "ways": 2, "relations": 1}, 1.0)
+        display.hit("highways")
+        display.render({"nodes": 10, "ways": 3, "relations": 1}, 2.0)
+        output = stream.getvalue()
+        self.assertIn("source: sweden-260824.osm.pbf", output)
+        self.assertIn("sha256: abc123", output)
+        self.assertIn("scanned: 13 / 14 items", output)
+        self.assertIn("scanned: 14 / 14 items", output)
+        self.assertIn("highways", output)
+        self.assertIn("traffic_signals", output)
+        self.assertIn("\x1b[", output)
+
+    def test_non_tty_progress_is_log_friendly_without_ansi(self) -> None:
+        stream = io.StringIO()
+        display = _ProgressDisplay(Path("sweden.osm.pbf"), {"digest": "abc123"}, ("pois",), {}, stream)
+        display.hit("pois")
+        display.render({"nodes": 5, "ways": 1, "relations": 0}, 1.0)
+        output = stream.getvalue()
+        self.assertIn("scanned: 6 items", output)
+        self.assertIn("pois=1", output)
+        self.assertNotIn("\x1b[", output)
 
     def test_routes_are_independently_selectable(self) -> None:
         caches = build_source_caches(self.pbf, self.cache, ("highways", "addresses"))
