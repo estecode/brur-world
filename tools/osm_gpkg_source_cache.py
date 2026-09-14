@@ -46,7 +46,7 @@ from source_identity import compute_source_identity
 from world_common import project
 
 CACHE_FORMAT = "BOSC6-GDAL-OSM-GPKG"
-EXTRACTOR_VERSION = 2
+EXTRACTOR_VERSION = 3
 ROUTE_VERSIONS = {"highways": 7, "pois": 6, "addresses": 6, "traffic_signals": 6, "areas": 4}
 ALL_ROUTES = tuple(ROUTE_VERSIONS)
 SCHEMAS = {"pois": 1, "addresses": 1, "traffic_signals": 1}
@@ -190,7 +190,7 @@ def _qcoord(lon: float, lat: float) -> tuple[int, int]:
 
 def _synthetic_node_id(lon: float, lat: float, separation: str = "") -> int:
     qlon, qlat = _qcoord(lon, lat)
-    digest = hashlib.blake2b(f"{qlon}:{qlat}:{separation}".encode("ascii"), digest_size=8, person=b"brurroad").digest()
+    digest = hashlib.blake2b(f"{qlon}:{qlat}:{separation}".encode("utf-8"), digest_size=8, person=b"brurroad").digest()
     return int.from_bytes(digest, "little", signed=False) & 0x7FFF_FFFF_FFFF_FFFF
 
 
