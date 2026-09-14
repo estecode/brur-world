@@ -65,13 +65,13 @@ def _run_target(target: str, sources: dict[str, Path], output: Path) -> None:
     elif target == "background":
         build_background(sources["areas"], output)
     elif target == "pois":
-        build_pois(sources["pois"], output)
+        build_pois(sources["pois"], output, sources["areas"])
+        build_city_light_density(output)
     elif target == "buildings":
         build_buildings(sources["areas"], output)
         # BMC2 is the canonical production building representation. Legacy
         # building_tiles are intentionally not rebuilt or shipped here.
         build_building_mesh_pyramid(output)
-        build_city_light_density(output)
     elif target == "search":
         search_jsonl = build_search_index(sources["addresses"], output)
         build_search_binary(search_jsonl, output / "search_index.bsi")
