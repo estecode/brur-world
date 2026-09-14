@@ -30,21 +30,30 @@ class Tests(unittest.TestCase):
         run=text[text.index("def _run_target") : text.index("def main()")]
         buildings=run.index('build_buildings(sources["areas"], output)')
         mesh=run.index("build_building_mesh_pyramid(output)")
-        lights=run.index("build_city_light_density(output)")
-        self.assertLess(buildings,mesh); self.assertLess(mesh,lights)
+        self.assertLess(buildings,mesh)
         self.assertNotIn("build_building_tiles",text)
         self.assertIn("BMC2 is the canonical production building representation",text)
+
+    def test_pois_own_relation_areas_and_city_light_density(self):
+        text=(ROOT/"tools"/"build_sweden.py").read_text(encoding="utf-8")
+        run=text[text.index("def _run_target") : text.index("def main()")]
+        self.assertIn('build_pois(sources["pois"], output, sources["areas"])',run)
+        self.assertIn("build_city_light_density(output)",run)
+        buildings_block=run[run.index('elif target == "buildings"'):run.index('elif target == "search"')]
+        self.assertNotIn("build_city_light_density",buildings_block)
 
     def test_target_dependency_closure_is_minimal(self):
         self.assertEqual(parse_targets("routing"),("routing",))
         self.assertEqual(required_source_routes(parse_targets("routing")),("highways",))
-        self.assertEqual(parse_targets("buildings"),("pois","buildings"))
-        self.assertEqual(required_source_routes(parse_targets("buildings")),("pois","areas"))
+        self.assertEqual(parse_targets("buildings"),("buildings",))
+        self.assertEqual(required_source_routes(parse_targets("buildings")),("areas",))
+        self.assertEqual(parse_targets("pois"),("pois",))
+        self.assertEqual(required_source_routes(parse_targets("pois")),("pois","areas"))
 
     def test_unrelated_dependency_change_does_not_invalidate_routing(self):
         with tempfile.TemporaryDirectory() as temp:
             world=Path(temp)
-            for name in ("routing.brg","routing_geometry.brh","routing_snap.brs"):
+            for name in ("routing.brg","routing_geometry.brh","routing_snap.brs","routing_stats.json"):
                 (world/name).write_bytes(b"x")
             first=next(p for p in make_plan(TOOLS,world,self._manifest(),("routing",)) if p.target=="routing")
             self.assertEqual(first.status,"REBUILD")
