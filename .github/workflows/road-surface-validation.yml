@@ -9,6 +9,7 @@ on:
       - "tools/road_surface_mesh.py"
       - "scripts/main.gd"
       - "tests/test_road_surface_mesh.py"
+      - "tests/test_road_surface_split_way.py"
       - "tests/godot/test_road_surface_mesh_runtime.gd"
       - ".github/workflows/road-surface-validation.yml"
 
@@ -33,7 +34,7 @@ jobs:
         run: python -m pip install -r requirements.txt
 
       - name: Run deterministic road-surface geometry tests
-        run: python -m unittest tests.test_road_surface_mesh tests.test_build_roads_lod
+        run: python -m unittest tests.test_road_surface_mesh tests.test_road_surface_split_way tests.test_build_roads_lod
 
       - name: Install Godot 4 headless runtime
         shell: bash
