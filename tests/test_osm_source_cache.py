@@ -41,7 +41,7 @@ FIXTURE = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
   <way id=\"30\"><nd ref=\"5\"/><nd ref=\"6\"/><nd ref=\"7\"/><nd ref=\"8\"/><nd ref=\"5\"/><tag k=\"building\" v=\"yes\"/></way>
   <way id=\"40\"><nd ref=\"5\"/><nd ref=\"6\"/><nd ref=\"7\"/><nd ref=\"8\"/><nd ref=\"5\"/></way>
   <way id=\"50\"><nd ref=\"2\"/><nd ref=\"4\"/><tag k=\"addr:housenumber\" v=\"14\"/><tag k=\"addr:street\" v=\"Testvägen\"/></way>
-  <relation id=\"100\"><member type=\"way\" ref=\"40\" role=\"outer\"/><tag k=\"type\" v=\"multipolygon\"/><tag k=\"building\" v=\"yes\"/></relation>
+  <relation id=\"100\"><member type=\"way\" ref=\"40\" role=\"outer\"/><tag k=\"type\" v=\"multipolygon\"/><tag k=\"building\" v=\"yes\"/><tag k=\"amenity\" v=\"library\"/></relation>
 </osm>
 """
 
@@ -88,6 +88,7 @@ class OsmSourceCacheTests(unittest.TestCase):
         self.assertIn(50, ids(caches["addresses"], "way"))
         facts = list(iter_area_facts(caches["areas"]))
         self.assertTrue(any(f["tags"].get("building") == "yes" for f in facts))
+        self.assertTrue(any(f["osm_type"] == "relation" and f["tags"].get("amenity") == "library" for f in facts))
         manifest = json.loads((self.cache / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["format"], "BOSC2")
         for route in ALL_ROUTES:
@@ -123,7 +124,7 @@ class OsmSourceCacheTests(unittest.TestCase):
         build_routing_dataset(caches["highways"], output)
         build_traffic_signals(caches["traffic_signals"], output)
         build_background(caches["areas"], output)
-        build_pois(caches["pois"], output)
+        build_pois(caches["pois"], output, caches["areas"])
         build_buildings(caches["areas"], output)
         search_path = build_search_index(caches["addresses"], output)
         self.assertTrue((output / "routing.brg").is_file())
@@ -132,6 +133,8 @@ class OsmSourceCacheTests(unittest.TestCase):
         self.assertGreater(search_path.stat().st_size, 0)
         features = json.loads((output / "manifest.json").read_text(encoding="utf-8"))["features"]
         self.assertTrue(features["way_pois_complete"])
+        self.assertTrue(features["relation_pois_complete"])
+        self.assertEqual(features["poi_areas"], 1)
         self.assertTrue(features["area_source_shared"])
 
     def test_unknown_route_is_rejected(self) -> None:
