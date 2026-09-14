@@ -8,6 +8,8 @@ const MeshBuilderScript = preload("res://scripts/geodot_world_mesh_builder.gd")
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 const LUND_FOCUS := Vector3(-489086.0, 0.0, 1582123.0)
 const CELL_SIZE := 2000.0
+const MAX_BUILDING_SOURCE_FEATURES := 12000
+const MAX_ROAD_SOURCE_FEATURES := 8000
 
 var _failed := false
 
@@ -39,17 +41,22 @@ func _run() -> void:
 		quit(1)
 		return
 	_assert(int(opened.get("epsg", 0)) > 0, "GeoPackage feature CRS is explicit")
-	var result: Dictionary = source.query_cell(top_left, CELL_SIZE, 12000, 8000)
+	var result: Dictionary = source.query_cell(top_left, CELL_SIZE, MAX_BUILDING_SOURCE_FEATURES, MAX_ROAD_SOURCE_FEATURES)
 	_assert(result.get("ok", false) == true, "Lund cell query succeeds")
 	_assert(int(result.get("building_features", 0)) > 0, "Lund query contains buildings")
 	_assert(int(result.get("road_features", 0)) > 0, "Lund query contains roads")
+	# GeoDot applies max_features before BRUR filters the mixed OSM multipolygon/line
+	# layers. Hitting either raw cap could silently omit valid buildings/highways, so
+	# production data must prove margin rather than merely staying within the bound.
+	_assert(int(result.get("raw_building_features", 0)) < MAX_BUILDING_SOURCE_FEATURES, "Lund mixed polygon source query does not saturate before building filtering")
+	_assert(int(result.get("raw_road_features", 0)) < MAX_ROAD_SOURCE_FEATURES, "Lund mixed line source query does not saturate before highway filtering")
 	var build_started := Time.get_ticks_usec()
 	var building_mesh := MeshBuilderScript.build_buildings(result.get("buildings", []), Vector2(float(cell.x) * CELL_SIZE, float(cell.y) * CELL_SIZE), MeshBuilderScript.LOD_FAR)
 	var road_mesh := MeshBuilderScript.build_roads(result.get("roads", []), Vector2(float(cell.x) * CELL_SIZE, float(cell.y) * CELL_SIZE), MeshBuilderScript.LOD_FAR)
 	var build_ms := float(Time.get_ticks_usec() - build_started) / 1000.0
 	_assert(building_mesh != null, "real Lund buildings batch into a mesh")
 	_assert(road_mesh != null, "real Lund roads batch into a mesh")
-	_assert(int(result.get("building_features", 0)) <= 12000 and int(result.get("road_features", 0)) <= 8000, "feature query is explicitly bounded")
+	_assert(int(result.get("building_features", 0)) <= MAX_BUILDING_SOURCE_FEATURES and int(result.get("road_features", 0)) <= MAX_ROAD_SOURCE_FEATURES, "feature query is explicitly bounded")
 	print("GEODOT_REAL_DATA metadata=", opened)
 	print("GEODOT_REAL_DATA lund_abs=", lund_abs, " cell=", cell, " buildings=", result.get("building_features"), " roads=", result.get("road_features"), " raw_buildings=", result.get("raw_building_features"), " raw_roads=", result.get("raw_road_features"), " building_query_ms=", result.get("building_query_ms"), " road_query_ms=", result.get("road_query_ms"), " build_ms=", build_ms)
 	if _failed:
