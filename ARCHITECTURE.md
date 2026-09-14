@@ -2,7 +2,7 @@
 
 This file defines the architectural rules for `brur-world`.
 
-The goal is to keep gameplay/runtime systems small, isolated, testable, profileable and portable between Godot and native C++ where useful.
+The goal is to keep gameplay/runtime systems small, isolated, testable, profileable and portable between Godot and native C++ where useful, while keeping one coherent world truth from offline data build through simulation, physics and presentation.
 
 Do not introduce frameworks or abstractions only to satisfy this document. Prefer the smallest explicit boundary that solves the current problem.
 
@@ -16,19 +16,9 @@ The fundamental dependency direction is:
 core/domain -> adapter -> presentation
 ```
 
-Core/domain logic must not depend on:
+Core/domain logic must not depend on Godot rendering/UI, SceneTree structure, TCP/sockets, JSON transport, mmap/POSIX APIs, command-line/process entrypoints or harness code.
 
-- Godot rendering or UI
-- SceneTree structure
-- TCP/sockets
-- JSON transport
-- mmap/POSIX APIs
-- command-line/process entrypoints
-- harness code
-
-Adapters may depend on core. Presentation may depend on adapters/core-facing APIs.
-
-Never reverse this dependency direction.
+Adapters may depend on core. Presentation may depend on adapters/core-facing APIs. Never reverse this dependency direction.
 
 ---
 
@@ -55,143 +45,43 @@ Harness code must never become a production dependency.
 
 ## 3. Subsystem ownership
 
-Major systems own their own behavior and expose small explicit APIs.
+Major systems own their own behavior and expose small explicit APIs. Typical owners include world, routing, search, player, vehicle, traffic, police and UI.
 
-Examples:
-
-```text
-world
-routing
-search
-player
-vehicle
-traffic
-police
-ui
-```
-
-Do not reach into another subsystem's internal dictionaries, nodes or private state.
-
-Prefer:
-
-```gdscript
-routing.find_route(...)
-```
-
-over:
-
-```gdscript
-routing._graph._nodes[...]
-```
-
-Public APIs should remain small enough that implementations can later be replaced or moved to C++ without rewriting consumers.
+Do not reach into another subsystem's internal dictionaries, nodes or private state. Public APIs should remain small enough that implementations can later be replaced or moved to C++ without rewriting consumers.
 
 ---
 
 ## 4. Composition instead of scene-tree coupling
 
-Do not use scene-tree traversal to locate unrelated systems.
+Do not use scene-tree traversal to locate unrelated systems. Dependencies between systems are provided explicitly by the composition root.
 
-Avoid:
-
-```gdscript
-get_node("../../RoutingSystem")
-```
-
-or:
-
-```gdscript
-$"../../../TrafficManager"
-```
-
-Dependencies between systems are provided explicitly by the composition root.
-
-Example:
-
-```gdscript
-func setup(routing_system: RoutingSystem) -> void:
-    routing = routing_system
-```
-
-`game/*` and harness scenes are allowed to wire systems together.
-
-`main.gd` / game root should primarily compose systems, not implement them.
+`game/*` and harness scenes may wire systems together. `main.gd` / game root should primarily compose systems, not implement them.
 
 ---
 
 ## 5. Calls and signals
 
-Use the simplest communication mechanism appropriate to ownership.
+Use the simplest communication mechanism appropriate to ownership:
 
 ```text
-Direct call
-    ↓
-owned dependency / explicit API
-
-Local signal
-    ↓
-child -> owner / nearby lifecycle notification
-
-Global gameplay event
-    ↓
-only genuinely cross-cutting gameplay events
+Direct call -> owned dependency / explicit API
+Local signal -> child -> owner / nearby lifecycle notification
+Global gameplay event -> only genuinely cross-cutting gameplay events
 ```
 
-Prefer the rule:
+Prefer:
 
 > Call downward, signal upward.
 
-Do not create a global EventBus for high-frequency internal communication.
-
-Examples of bad global events:
-
-```text
-vehicle_position_changed
-route_node_changed
-chunk_loaded
-vehicle_speed_changed
-```
-
-A global event mechanism, if used, is reserved for genuinely broad gameplay events where direct ownership would be artificial.
+Do not create a global EventBus for high-frequency internal state such as vehicle position, route-node changes, chunk loading or vehicle speed.
 
 ---
 
 ## 6. Runtime harnesses
 
-Major runtime subsystems that benefit from interactive verification should be runnable in isolation under:
+Major runtime subsystems that benefit from interactive verification should be runnable in isolation under `harness/<subsystem>/` when the subsystem exists.
 
-```text
-harness/<subsystem>/
-```
-
-Examples as they become necessary:
-
-```text
-harness/gps/
-harness/world/
-harness/driving/
-harness/traffic/
-harness/police/
-```
-
-Do not create future harnesses before their subsystem exists.
-
-A harness:
-
-- uses the same production implementation as the game
-- may provide fixture inputs and debug controls
-- should use real runtime data where practical
-- may expose profiling/debug information
-- must not contain an alternate implementation of the subsystem
-
-Example:
-
-```text
-GPS problem     -> gps harness
-World problem   -> world harness
-Traffic problem -> traffic harness
-Police problem  -> police harness
-```
+A harness uses the same production implementation as the game, may provide fixture inputs/debug controls, should use real runtime data where practical, may expose profiling/debug information, and must never contain an alternate implementation of the subsystem.
 
 ---
 
@@ -201,102 +91,20 @@ Police problem  -> police harness
 >
 > **Anything objectively machine-verifiable should be caught automatically, not discovered during playtesting.**
 
-Validation is divided by responsibility and cost.
+The testing boundary is objectively verifiable vs. subjective perception, not visual vs. code.
 
-### Automated correctness vs. manual playtesting
+Use, in increasing integration cost:
 
-The testing boundary is **objectively verifiable vs. subjective perception**, not "visual vs. code". **You should never be a human assert-runner.**
+1. fast deterministic core tests for portable rules/state/algorithms/data contracts;
+2. headless Godot integration tests for real engine adapters, geometry, lifecycle and interaction-state contracts;
+3. real-data integration tests against production Sweden data where synthetic fixtures can hide failures;
+4. manual harness/playtesting only for feel, aesthetics, holistic UX, hardware-specific behavior or behavior that cannot reasonably be reduced to deterministic assertions.
 
-Any objectively observable runtime state or presentation invariant must be automated where reasonably possible. This includes spatial, structural, rendering-state and interaction-state invariants that can be asserted programmatically in headless Godot. The fact that a property exists in a rendered scene does not make it a manual test.
+Objective runtime invariants such as vehicle placement on the expected 3D drivable surface, camera/surface clearance, mesh bounds, UI overlap, route/control state transitions and LOD continuity must be automated where reasonably possible.
 
-Examples of objective invariants include:
+Prefer stable structural/geometric assertions over pixel-perfect screenshots unless pixels themselves are the behavior under test.
 
-- a vehicle spawn is on or above its expected drivable surface within tolerance, including terrain, bridges and tunnels
-- world chunks and route meshes exist and have sane bounds for the expected coordinates
-- a camera does not penetrate terrain or other surfaces according to its defined collision/clearance contract
-- follow-camera behavior keeps its target within a defined position or screen-space tolerance
-- UI rectangles remain inside the active viewport and do not overlap explicitly forbidden zones
-- state transitions such as manual driving takeover, GPS control release/reacquisition and reroute requests follow their defined contracts
-
-Manual playtesting should be reserved primarily for perception, feel, aesthetics, hardware-specific behavior, holistic UX, or other behavior that cannot reasonably be reduced to deterministic assertions. Examples include whether camera smoothing feels cinematic, vehicle handling feels rewarding, clouds look natural, or a layout feels intuitive.
-
-Do not create brittle or disproportionately expensive automation merely because a property is theoretically measurable. Prefer the smallest stable invariant that proves the behavior users depend on.
-
-### 1. Core tests
-
-Fast, deterministic tests for portable/domain behavior without SceneTree or presentation dependencies.
-
-Typical examples:
-
-- rules and algorithms
-- state transitions
-- coordinate conversion
-- routing semantics
-- protocol/data contracts
-- native/reference parity
-
-### 2. Godot integration and harness tests
-
-Headless Godot tests verify integration that requires the runtime while using the real production modules.
-
-Typical examples:
-
-- scene wiring
-- signals and adapters
-- input -> production API
-- lifecycle
-- generated meshes
-- visibility/state
-- runtime contracts
-
-Tests and harness controls should use existing public subsystem APIs, or a small harness-specific adapter/controller when that boundary is useful. Do not add test-specific APIs to production/domain code, and do not require a harness controller when the existing production API is sufficient.
-
-### 3. Real-data integration tests
-
-Use real production datasets and native processes where synthetic fixtures could hide integration failures.
-
-Typical examples:
-
-- real Sweden routing/world data
-- native process startup/shutdown
-- cross-boundary coordinate correctness
-- streaming/data-format compatibility
-- realistic data edge cases
-
-These tests may be slower and should run when relevant to the touched integration boundary rather than for every small change.
-
-### 4. Manual harness and playtesting
-
-Manual verification is primarily for human perception, interaction, hardware-specific behavior, or behavior that cannot reasonably be automated.
-
-Typical examples:
-
-- visual readability
-- camera feel
-- driving feel
-- animation
-- UX
-- gameplay/police feel
-- difficulty and presentation
-
-Repeated objective manual checks should be treated as candidates for automation.
-
-### Render validation
-
-Prefer deterministic state and geometric assertions for correctness, such as:
-
-- node/mesh existence
-- visibility/state
-- vertex and surface counts
-- sane bounding boxes
-- coordinate alignment
-- route length/endpoints
-- streamed tile counts
-- POI counts
-
-Avoid pixel-perfect screenshot comparison when structural assertions verify the same behavior more reliably. Screenshot regression tests may be used when rendered pixels themselves are the behavior under test.
-
-Do not replace deterministic tests with manual harness testing.
+Do not create brittle or disproportionately expensive automation merely because something is theoretically measurable.
 
 ---
 
@@ -304,161 +112,372 @@ Do not replace deterministic tests with manual harness testing.
 
 Gameplay systems must not independently recreate world truth.
 
-The source pipeline is:
+The source pipeline is conceptually:
 
 ```text
-Sweden OSM PBF
-      ↓
-offline build pipeline
-      ↓
-runtime datasets
+raw authoritative sources
+      -> source adapters
+      -> normalized source model
+      -> deterministic world semantics / solvers
+      -> versioned portable runtime artifacts
+      -> runtime adapters
+      -> simulation / physics / presentation
 ```
 
-The offline pipeline owns generation of runtime representations such as:
+OSM, elevation data and future approved source datasets are source facts. Runtime code must not parse provider/source schemas as its domain model.
 
-```text
-render data
-routing graph
-search index
-POI data
-metadata
-```
+Different optimized runtime representations are allowed when they serve genuinely different needs, but they must derive reproducibly from the same authoritative build pipeline and may not become competing world truths.
 
-Runtime systems consume the appropriate optimized representation.
-
-For example:
-
-```text
-WorldRenderer -> render data
-RoutingCore   -> routing graph
-SearchCore    -> search index
-Traffic       -> road/routing data through owned APIs
-Police        -> routing/observation APIs
-```
-
-Do not build another road graph inside Traffic or Police if Routing/World already owns the required representation.
-
-Different optimized representations are allowed when they serve genuinely different runtime needs, but they must derive from the same authoritative offline source/build pipeline.
+Traffic, police, pedestrians, GPS and presentation must not build private road, lane, surface or coordinate truths when World/Routing already owns them.
 
 ---
 
-## 9. Coordinate ownership
+## 9. Source schema is not runtime schema
 
-Projected absolute coordinates, Godot world coordinates and tile coordinates must have one shared conversion owner.
+Provider-specific schemas are confined to source adapters and normalized build inputs.
 
-Do not duplicate origin/sign/tile formulas across:
+Runtime systems should never need to ask questions such as whether a source OSM object carried a particular raw tag in order to decide gameplay behavior. The build pipeline translates source facts into provider-independent world semantics with explicit provenance.
 
-- world
-- GPS
-- POIs
-- search
-- traffic
-- police
+Changing or adding a source provider must not require rewriting traffic, GPS, physics or rendering rules when the normalized semantics remain equivalent.
+
+---
+
+## 10. Deterministic world build and portable artifacts
+
+The offline build is part of the product architecture, not disposable glue.
+
+For the same versioned source inputs and build configuration it must produce the same semantic world artifacts.
+
+Derived artifacts must be:
+
+- versioned and self-describing enough to fail closed on incompatible/corrupt input;
+- deterministic in semantic content and stable ordering where applicable;
+- portable/semantic rather than having a Godot scene or render mesh as the only truth;
+- streamable/chunkable where scale requires it;
+- reproducible/disposable from source data plus versioned build policy;
+- attributable to source identity, builder/schema version and inference policy.
+
+Runtime packaging consumes production artifacts. It must not become the owner of world semantics or compression policy.
+
+---
+
+## 11. Inference and provenance
+
+Missing/ambiguous source data is resolved through a centralized, deterministic and versioned inference/fallback policy.
+
+Do not scatter defaults such as lane width, bridge clearance, road class fallback or structure height across runtime consumers.
+
+When practical, derived facts retain provenance equivalent to:
+
+```text
+explicit source fact
+inferred from source context
+conservative fallback
+```
+
+Debug/validation must be able to trace a problematic derived fact back to its source object(s), build rule/version and inference decision without scene-tree spelunking.
+
+Known source truth always wins over heuristics. Contradictory/unknown source state fails conservatively rather than inventing a gameplay shortcut.
+
+---
+
+## 12. Spatial partitioning is implementation, not truth
+
+Tiles, chunks, cells, cache blocks and LOD partitions exist for build/runtime performance only.
+
+They do not own roads, structures, agents or world identity. Changing tile size or streaming strategy must not change domain identity, topology, elevation, collision outcome or simulation meaning.
+
+Adjacent partitions that share a physical boundary must derive matching boundary facts deterministically. Streaming/LOD transitions must not introduce cracks, duplicate surfaces, changed authoritative heights or changed gameplay relationships.
+
+---
+
+## 13. Coordinate ownership and floating origin
+
+Projected absolute coordinates, geodetic/source coordinates, Godot render-local coordinates and tile coordinates have one shared conversion owner.
+
+Do not duplicate origin/sign/tile/floating-origin formulas across world, GPS, POIs, traffic, pedestrians, police or physics.
 
 Coordinate math must remain deterministic and independent of rendering, camera state and routing policy.
 
-See issue #48.
+Floating origin is presentation/runtime positioning infrastructure; it must not create a second logical world coordinate truth.
 
 ---
 
-## 10. Native code boundaries
+## 14. Authoritative vertical world truth
+
+BRUR is a real 3D world from the first top-down playable milestone. Top-down is a camera/presentation choice, not a 2D simulation.
+
+> **Vertical world truth is authoritative. Terrain, roads, lanes, bridges, tunnels, buildings, railways, pedestrian infrastructure, collision and gameplay must share one coherent 3D elevation model. No presentation subsystem may invent its own height.**
+
+Conceptually:
+
+```text
+normalized elevation + topology/structure semantics
+        -> authoritative terrain/world surface
+        -> engineered road/structure surface profiles
+        -> 3D lane/walk/rail poses
+        -> collision + simulation + presentation adapters
+```
+
+A world-surface API may expose facts equivalent to terrain height at a world position. A drivable-surface API may expose position, heading, slope/surface normal and layer/structure relation along a road/lane. Exact type names are implementation details.
+
+The same XY coordinate may validly contain multiple gameplay surfaces at different Z. 2D overlap must never imply connectivity, occupancy conflict or collision when layers are physically separated.
+
+---
+
+## 15. Terrain, roads and engineered elevation
+
+Elevation/terrain data is an authoritative build input, not a cosmetic shader.
+
+Terrain must be tile/LOD/streaming friendly with bounded memory and work. LOD may reduce geometric fidelity but must not change authoritative surface relationships or gameplay outcomes in the active gameplay region.
+
+Roads must not blindly drape over every raw elevation sample. Roads are engineered surfaces. Build-time road profiles should use terrain plus road/structure semantics and deterministic constraints such as bounded grade, smooth vertical curvature and local cut/fill/embankment behavior.
+
+Road/terrain adjustment must have bounded spatial influence. A road corridor may alter its immediate engineered surface without deforming an entire landform. Bridge decks do not pull terrain up to deck height; tunnels do not push surface terrain down to tunnel elevation.
+
+Water bodies need a coherent surface-elevation contract sufficient for shorelines, bridges and collision/presentation alignment even before advanced water physics exists.
+
+---
+
+## 16. Bridges, tunnels, railways and grade separation
+
+Source `bridge`, `tunnel`, `layer` or equivalent facts express semantics/topology, not meters of elevation by themselves.
+
+Build-time structure solving must produce physically coherent 3D profiles and relationships. Use explicit source height/clearance facts when available; otherwise use deterministic conservative inference.
+
+Bridge profiles include approach continuity, deck elevation and required clearance. Tunnel profiles include approach/descent, underground section and exit/ascent. Rail and pedestrian/cycle grade separation participate in the same vertical truth even when their simulation is not yet implemented.
+
+Vertical clearance is a world semantic so future vehicle dimensions can determine whether a path is physically feasible.
+
+---
+
+## 17. Buildings and surface adaptation
+
+Buildings and other grounded structures consume authoritative world surface information rather than selecting their own Y values.
+
+A building footprint may sample the local surface and derive a stable foundation/base plus bounded foundation/skirt geometry so terrain slope does not leave obvious floating/sinking corners.
+
+More detailed foundations/interiors are future presentation work; the foundational relation to terrain and gameplay collision must not require an architectural rewrite.
+
+---
+
+## 18. Portable simulation by default
+
+For population, traffic, pedestrians, player-control policy, autonomous driving, gameplay physics policy and similar runtime systems, keep domain state, rules and decision logic portable whenever they do not intrinsically require Godot.
+
+Ask:
+
+> **Could this logic run without Godot?**
+
+If yes, it should normally live in core/domain state or policy and receive explicit data through a small API.
+
+Godot primarily provides composition, input adapters, engine collision-world integration, scene/node lifecycle and presentation.
+
+---
+
+## 19. Simulation truth vs. presentation fidelity
+
+World entities have one logical identity/state. Map, top-down driving, future Chase/Driver cameras, simulation LOD and presentation LOD must not create competing copies of world truth.
+
+Simulation fidelity may independently range from aggregate/virtual state to lightweight individual state to detailed nearby actors and gameplay-pinned actors. Presentation fidelity may range from full 3D to proxy/marker/aggregation.
+
+Changing either fidelity level must preserve continuity and gameplay-relevant facts. Performance degradation may reduce update rate, visual detail or distant density, but may not erase consequences, rewrite observed identity, violate known world/routing truth or introduce unbounded work/state growth.
+
+Population/LOD systems must use bounded work/storage. Gameplay relevance can override pure distance.
+
+---
+
+## 20. Player control is independent from camera/view
+
+World/gameplay state, player-control state and camera/view state are separate responsibilities.
+
+Manual Drive is a control mode, not a camera mode. GPS Auto Drive is a control mode, not a camera mode. Top-down, Map, future Chase and Driver cameras are presentation choices over the same running player vehicle/world state.
+
+The player vehicle has one persistent identity across camera changes, Manual/GPS control, named teleports and floating-origin shifts and is always gameplay-pinned while active.
+
+Input ownership is explicit. The same physical input must not simultaneously control a map camera and a vehicle because two modes happened to be active.
+
+---
+
+## 21. Top-down-first 3D presentation
+
+The first prioritized driving presentation is a configurable tilted perspective top-down camera over the real 3D world.
+
+Initial tuning may target roughly 60-100 m above the vehicle with a baseline near 75 m, but height, tilt, FOV, follow offset, look-ahead and smoothing are profile/configuration data and are finalized by playtesting rather than architecture.
+
+Camera height follows the player/local authoritative surface rather than absolute world Y and smooths elevation changes to avoid terrain-noise jitter. Camera motion never owns simulation/population existence.
+
+Future Chase/Driver/hood cameras must be addable without changing vehicle, routing, traffic, physics or control-domain state.
+
+---
+
+## 22. Autonomous player driving contract
+
+GPS Auto Drive must use the same world, lane, traffic, occupancy and vehicle-physics truth as ordinary gameplay.
+
+Conceptually:
+
+```text
+GPS destination/route
+    -> route intent
+    -> lane/maneuver planner
+    -> driver policy/profile
+    -> throttle / brake / steering / gear requests
+    -> shared VehicleDynamics / physics
+    -> actual vehicle motion
+```
+
+> **GPS Auto Drive may plan better, but it may never cheat world, routing, traffic, occupancy or physics truth.**
+
+> **Auto Drive may never do anything that a physical driver of the same car could not do with throttle, brake, steering and gear.**
+
+GPS decides where to go; lane/local-driving policy decides how to attempt it; physics decides what actually happens.
+
+No direct transform driving, teleport recovery, ghosting through traffic, impossible lane changes, instant U-turns or stale-route shortcuts.
+
+Physical feasibility outranks route obedience. A missed turn/exit and reroute is valid when the desired maneuver is no longer safely/physically available.
+
+---
+
+## 23. Driver state, handover and observability
+
+Autonomous driving has explicit state for route/version, committed maneuvers, rerouting, blockage/world-data wait, safe stop, completion and no-progress diagnosis.
+
+Manual/GPS handover is stateful and physically continuous. A Manual request may wait only long enough to complete the critical safe portion of a maneuver or reach a safe stop, while an explicit emergency manual takeover remains possible so automation cannot trap the player.
+
+Normal/Aggressive/Maniac are data-driven driver profiles over one implementation. They may affect speed preference, following distance, reaction latency, gap acceptance and maneuver willingness, but never vehicle grip, braking capability, power or physical geometry.
+
+Autonomous actions that physically affect the player vehicle must be traceable through:
+
+```text
+route/version -> decision/reason -> requested driver input -> actual vehicle response
+```
+
+Driver intent/reason/action/result is emitted as structured production state/events. Gameplay feed, debug UI, replay and tests consume that one source rather than inventing separate explanations.
+
+Requested control and actual vehicle response remain separately observable.
+
+---
+
+## 24. Gameplay physics and collision truth
+
+Gameplay-critical collision truth is separate from render geometry and visibility.
+
+A mesh being hidden, culled, replaced or simplified for presentation must not remove collision that active gameplay depends on. Physics simplification is allowed for performance, but inside the active gameplay region it must remain conservative enough that it cannot permit physically impossible pass-through or equivalent outcomes.
+
+Static world collision and dynamic actor collision have explicit ownership and bounded lifecycle. Physics queries use shared coordinate/floating-origin rules and authoritative 3D surface/layer relationships.
+
+Physical material facts needed by future systems such as ballistics belong to gameplay/world collision contracts or portable policy, not weapon-specific render code.
+
+---
+
+## 25. Performance, memory and graceful degradation
+
+Performance and memory are architecture constraints, not late polish.
+
+Every scalable subsystem must define bounded work/storage behavior appropriate to its scope: caches, nodes, actors, collision shapes, streamed tiles, build buffers, queues and per-frame updates may not grow without an explicit bound/lifecycle.
+
+Use hard caps, pooling/instancing, time slicing, spatial indexes, multi-rate simulation, streaming and bounded caches where they materially help.
+
+Measure stable behavior including p95/p99 frametime, not only average FPS. Build pipelines additionally measure wall-clock, peak/working memory, temporary disk and artifact size where relevant.
+
+Graceful degradation reduces distant fidelity/update frequency/density first and protects observed/gameplay-relevant state. It may never change authoritative world truth, erase gameplay consequences or allow impossible physical outcomes.
+
+Stress/soak tests must protect architectural bounds where objective automation is practical.
+
+---
+
+## 26. Determinism and time ownership
+
+Critical simulation and world-build behavior must be reproducible from explicit state/input/version/seed.
+
+Render frame rate must not become semantic decision input. Equivalent simulation state should not make different lane/route/driver decisions merely because rendering ran at 30 vs. 60 vs. 120 FPS.
+
+WorldClock/simulation time and wall-clock/system time are distinct. Pause/resume must not secretly advance portable driver/simulation decisions unless the owning simulation contract explicitly says so.
+
+---
+
+## 27. Real data and regression fixtures
+
+For world, routing, traffic, terrain/elevation and physics integration, prefer production data where synthetic fixtures could hide boundary errors.
+
+Maintain a small fixed real-Sweden regression corpus, including Lund, Malmö and Stockholm plus representative difficult geometry such as a multi-level interchange, bridge over road/water, tunnel, steep road, railway grade separation and dense urban intersection.
+
+Named player teleport anchors are resolved through authoritative road/lane/layer/elevation/occupancy truth and are also regression fixtures; they are not raw XYZ constants or an Auto Drive recovery mechanism.
+
+Synthetic fixtures remain appropriate for precise edge cases. There is no privileged alternate test world implementation.
+
+---
+
+## 28. UI/debug ownership
+
+Gameplay controls/status and debug tooling are separate presentation responsibilities.
+
+Gameplay UI has priority. No overlay may obscure another interactive overlay. Layout ownership is centralized enough to reserve regions/safe areas rather than letting every feature freely place floating controls.
+
+Debug information is consolidated before allocating new screen area, is collapsible/hideable and should group related telemetry (for example Vehicle, Routing, Population, Physics) rather than create one panel per metric.
+
+Objective no-overlap/viewport constraints are automated across representative viewport sizes/UI scales where reasonably possible. Manual review judges readability/feel.
+
+---
+
+## 29. Native code boundaries
 
 Performance-critical systems may move to portable C++.
 
-Native core code should consume explicit data structures / immutable byte views and produce structured results.
+Native core code consumes explicit data structures / immutable byte views and produces structured results. Transport/process/mmap/Godot concerns remain adapters.
 
-Example direction:
-
-```text
-portable C++ core
-      ↓
-TCP / CLI / mmap adapter
-      ↓
-Godot adapter
-      ↓
-presentation
-```
-
-The portable core must not know that Godot, TCP or mmap exists.
-
-Do not optimize by pushing presentation/transport concerns back into the core.
+Do not optimize by pushing presentation, source-provider or transport concerns back into portable core.
 
 ---
 
-## 11. Real data first
+## 30. File responsibility
 
-For world, routing, traffic and police integration, prefer real production runtime data.
-
-Useful repeatable scenarios may include:
-
-```text
-Stockholm centre
-dense urban roads
-E4 / motorway
-rural road
-large intersection
-motorway interchange
-```
-
-Synthetic fixtures remain appropriate for deterministic correctness tests and hard-to-reproduce edge cases.
-
-Do not build a separate fake world implementation for harness use.
-
----
-
-## 12. File responsibility
-
-Touched source files should begin with a short English comment describing:
-
-- what the file does in plain language
-- its important dependencies
-
-Example:
-
-```gdscript
-##
-## Routes vehicles over the loaded road graph.
-##
-## Dependencies:
-## - Reads immutable routing graph data.
-## - Does not depend on UI, rendering or player state.
-##
-```
+Touched source files should begin with a short English comment describing what the file does in plain language and its important dependencies.
 
 Keep descriptions short.
 
 ---
 
-## 13. Definition of done for a subsystem boundary
+## 31. Definition of done for a subsystem boundary
 
 When applicable, a subsystem is in good architectural shape when:
 
-- its core responsibility has one clear owner
-- consumers use a small explicit API
-- unrelated systems do not reach into its internals
-- portable logic has deterministic tests
-- Godot/rendering/UI are adapters rather than owners of domain rules
-- it can be run in isolation through a harness when runtime inspection is useful
-- the harness uses production code
-- performance-sensitive work can be measured independently
-- no duplicate world/routing truth has been introduced
+- its core responsibility has one clear owner;
+- consumers use a small explicit API;
+- unrelated systems do not reach into internals;
+- portable logic has deterministic tests;
+- Godot/rendering/UI are adapters rather than owners of domain rules;
+- production/harnesses use the same implementation;
+- real-data integration is exercised where synthetic tests can hide failures;
+- performance-sensitive work is independently measurable and bounded;
+- no duplicate world/routing/coordinate/elevation truth has been introduced;
+- derived data is versioned/reproducible/provenance-traceable where applicable;
+- objective correctness is automated before manual feel testing.
 
 ---
 
-## 14. Anti-patterns
+## 32. Anti-patterns
 
 Do not introduce:
 
-- giant `main.gd` / bootstrap-style implementation owners
-- sibling systems located through fragile NodePaths
-- global EventBus for ordinary component communication
-- one Resource type used as a universal service/interface abstraction
-- duplicate routing/world representations without a measured reason
-- mocks replacing real runtime world data in integration harnesses
-- Godot UI/rendering inside portable simulation logic
-- socket/JSON/process code inside routing/search cores
-- speculative abstraction for systems that do not exist yet
-- large inheritance hierarchies merely to share behavior
+- giant `main.gd` / bootstrap implementation owners;
+- sibling systems located through fragile NodePaths;
+- global EventBus for ordinary component communication;
+- one Resource type as a universal service/interface framework;
+- duplicate routing/world/elevation representations without measured reason and explicit derivation;
+- mocks replacing production world data in integration harnesses;
+- Godot UI/rendering inside portable simulation logic;
+- source-provider tags/types leaking directly into runtime gameplay policy;
+- Godot mesh/scene data as the only authoritative world artifact;
+- tile/chunk ownership becoming domain identity;
+- per-subsystem inference/defaults for shared world facts;
+- socket/JSON/process code inside portable domain cores;
+- camera/frustum-driven population existence;
+- autonomous vehicle motion by direct transform/teleport shortcuts;
+- unbounded caches/nodes/actors/build buffers justified as temporary;
+- speculative frameworks for systems that do not exist yet;
+- large inheritance hierarchies merely to share behavior.
 
 When in doubt:
 
@@ -466,60 +485,8 @@ When in doubt:
 
 ---
 
-## 15. AI guidance
-
-Before architectural or cross-module changes, read this file.
-
-New code must preserve these dependency rules. If an issue appears to conflict with this document, prefer the smallest change that satisfies the issue while preserving the architecture, and make the conflict explicit rather than silently introducing a new dependency direction.
-
-`ARCHITECTURE.md` is the canonical architecture contract. GitHub issue #45 tracks the incremental work needed to reach and preserve it, while issue #50 tracks the harness convention and first subsystem harnesses.
-
----
-
-## 16. Portable simulation by default
-
-For population, traffic, pedestrians, gameplay physics policy and similar runtime systems, keep domain state, rules and decision logic portable whenever they do not intrinsically require Godot.
-
-Use this question at subsystem boundaries:
-
-> **Could this logic run without Godot?**
-
-If yes, it should normally live in core/domain state or policy and receive explicit data through a small API. Godot should primarily provide composition, engine adapters, collision-world integration and presentation.
-
-This rule does not require speculative abstraction. Use the smallest explicit portable boundary that solves the current issue.
-
----
-
-## 17. Simulation truth vs. presentation fidelity
-
-World entities have one logical identity/state. Map, Drive, simulation LOD and presentation LOD must not create competing copies of world truth.
-
-Simulation fidelity may range from aggregate/virtual state to lightweight individual state to detailed nearby actors and gameplay-pinned actors. Presentation fidelity may independently range from full 3D to proxy/marker/aggregation.
-
-Changing either fidelity level must preserve the facts that matter to continuity and gameplay. Performance degradation may reduce update rate, visual detail or distant density, but it must not erase gameplay consequences, rewrite observed identity, violate known world/routing truth or introduce unbounded work/state growth.
-
-Population/LOD systems must use bounded work and storage. Gameplay relevance can override pure distance when deciding fidelity.
-
----
-
-## 18. Gameplay physics and collision truth
-
-Gameplay-critical collision truth is separate from render geometry and visibility.
-
-A mesh being hidden, culled, replaced or simplified for presentation must not remove collision that active gameplay depends on. Physics simplification is allowed for performance, but inside the active gameplay region it must remain conservative enough that it cannot permit physically impossible pass-through or equivalent gameplay outcomes.
-
-Static world collision and dynamic actor collision should have explicit ownership and bounded lifecycle. Physics queries must use shared coordinate/floating-origin conversion rules rather than inventing another coordinate path.
-
-Physical material facts needed by future systems such as ballistics belong to gameplay/world collision contracts or portable policy, not to weapon-specific render code.
-
----
-
-## 19. Deterministic living-world regression contracts
-
-Population, traffic and pedestrian systems should preserve stable identity/state across fidelity transitions and expose deterministic inputs sufficient to reproduce critical scenarios.
-
-Where applicable, automated coverage should include long-running bounded-state checks, promotion/demotion continuity, Map/Drive continuity, rapid observation-direction changes, world-boundary/dead-end distinctions, occupancy/queue persistence and gameplay collision behavior.
-
-Synthetic fixtures prove precise invariants; real-data fixtures prove integration with production world/routing data. Harnesses and presentation must consume the same production implementation rather than reproducing the rules under test.
+## 33. Living-world program
 
 Detailed living-world design and delivery dependencies are tracked by umbrella issue #286 and `docs/living_world_population_traffic_physics.md`.
+
+The living-world program must preserve all rules above, especially portability by default, one world truth across fidelity/view changes, authoritative vertical world truth, deterministic/reproducible build/simulation behavior, explicit physics truth, bounded performance/memory and automated objective correctness.
