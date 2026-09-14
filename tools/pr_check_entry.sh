@@ -76,11 +76,18 @@ if ! MERGE_DECISION="$(printf '%s' "$PR_BODY" | "$META_PYTHON" "$LAUNCHER_TMP/to
 fi
 case "$MERGE_DECISION" in
   check)
+    if ! MANUAL_CHECK="$(printf '%s' "$PR_BODY" | "$META_PYTHON" "$LAUNCHER_TMP/tools/pr_merge_decision.py" --field check)"; then
+      printf 'PR_CHECK=FAIL unable to parse authoritative PR manual CHECK\n' >&2
+      exit 70
+    fi
     export BRUR_PR_CHECK_MANUAL_REVIEW=required
+    export BRUR_PR_CHECK_MANUAL_CHECK="$MANUAL_CHECK"
     printf 'PR_CHECK=MANUAL_REVIEW required pr=%s source=pr-merge-decision\n' "$PR"
+    printf 'PR_CHECK=MANUAL_CHECK %s\n' "$MANUAL_CHECK"
     ;;
   merge)
     export BRUR_PR_CHECK_MANUAL_REVIEW=none
+    export BRUR_PR_CHECK_MANUAL_CHECK=""
     printf 'PR_CHECK=MANUAL_REVIEW none pr=%s source=pr-merge-decision\n' "$PR"
     ;;
   block)
