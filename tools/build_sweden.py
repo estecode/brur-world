@@ -86,33 +86,20 @@ def _is_geopackage(path: Path) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("source", type=Path, help="Path to Sweden .gpkg (preferred) or legacy .osm.pbf")
-    parser.add_argument("--address-pbf", type=Path, help="OSM PBF used only for address/coastline facts missing from free GeoPackage")
+    parser.add_argument("source", type=Path, help="Path to BRUR Sweden .gpkg (preferred) or legacy .osm.pbf")
+    parser.add_argument("--source-pbf", type=Path, help="Authoritative OSM PBF from which the BRUR GeoPackage was generated; used for source identity only")
+    parser.add_argument("--address-pbf", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--output", type=Path, default=Path("world_data"))
     parser.add_argument("--target", default="all", help="comma-separated: roads,routing,traffic,background,pois,buildings,search or all")
     parser.add_argument("--plan", action="store_true", help="print the resolved build plan and exit")
-    parser.add_argument(
-        "--source-stage-only",
-        action="store_true",
-        help="for a GDAL OSM GeoPackage, write all per-domain source-stage files and stop before BRUR normalization",
-    )
     args = parser.parse_args()
     if not args.source.is_file(): parser.error(f"source not found: {args.source}")
     if not _is_geopackage(args.source): ensure_pbf(args.source)
+    source_pbf = args.source_pbf or args.address_pbf
+    if _is_geopackage(args.source):
+        if source_pbf is None: parser.error("BRUR GeoPackage builds require --source-pbf for the authoritative PBF identity")
+        ensure_pbf(source_pbf)
     args.output.mkdir(parents=True, exist_ok=True)
-
-    if args.source_stage_only:
-        if not _is_geopackage(args.source):
-            parser.error("--source-stage-only requires a GDAL OSM .gpkg source")
-        from osm_gpkg_source_stage import stage_osm_geopackage
-
-        _section("STAGE GDAL OSM GEOPACKAGE SOURCE FACTS ONLY", args.source)
-        started = time.monotonic()
-        outputs = stage_osm_geopackage(args.source, args.output / "source_stage")
-        for domain, path in outputs.items():
-            _log(f"SOURCE-STAGE domain={domain} bytes={path.stat().st_size:,} path={path}")
-        _log(f"SOURCE-STAGE-DONE elapsed={time.monotonic()-started:.1f}s; downstream normalization intentionally not started")
-        return
 
     try: targets = parse_targets(args.target)
     except ValueError as exc: parser.error(str(exc))
@@ -121,8 +108,8 @@ def main() -> None:
     report_path = args.output / BUILD_REPORT
     total_started = time.monotonic()
     report: dict[str, object] = {
-        "started_at": _now(), "source": str(args.source), "address_pbf": str(args.address_pbf) if args.address_pbf else None,
-        "source_adapter": "geofabrik-gpkg" if _is_geopackage(args.source) else "legacy-osm-pbf",
+        "started_at": _now(), "source": str(args.source), "source_pbf": str(source_pbf) if source_pbf else None,
+        "source_adapter": "gdal-osm-gpkg-direct" if _is_geopackage(args.source) else "legacy-osm-pbf",
         "targets": list(targets), "source_blocks": list(routes), "status": "RUNNING", "target_results": {},
     }
     _write_report(report_path, report)
@@ -134,8 +121,9 @@ def main() -> None:
             sources = {route: cache_dir / str(route_entries.get(route, {}).get("file", "missing")) for route in routes}
         else:
             if _is_geopackage(args.source):
-                from geofabrik_source_cache import build_geofabrik_source_caches
-                sources = build_geofabrik_source_caches(args.source, args.address_pbf, cache_dir, routes)
+                from osm_gpkg_source_cache import build_osm_gpkg_source_caches
+                assert source_pbf is not None
+                sources = build_osm_gpkg_source_caches(args.source, source_pbf, cache_dir, routes)
             else:
                 sources = build_source_caches(args.source, cache_dir, routes)
             source_manifest = _load_json(cache_dir / "manifest.json")
