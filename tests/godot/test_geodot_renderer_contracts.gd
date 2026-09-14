@@ -11,10 +11,13 @@ var _failed := false
 class FakePolygonFeature:
 	extends RefCounted
 	var outer := PackedVector2Array()
+	var holes: Array = []
 	var attrs: Dictionary = {}
 	var feature_id := 1
 	func get_outer_vertices() -> PackedVector2Array:
 		return outer
+	func get_holes() -> Array:
+		return holes
 	func get_attributes() -> Dictionary:
 		return attrs
 	func get_id() -> int:
@@ -45,6 +48,7 @@ func _init() -> void:
 
 func _run() -> void:
 	_test_building_adapter()
+	_test_real_osm_feature_filtering()
 	_test_road_adapter()
 	_test_far_building_lod_preserves_feature()
 	_test_road_mesh_batching()
@@ -61,13 +65,39 @@ func _test_building_adapter() -> void:
 		Vector2(1000.0, 2000.0), Vector2(1020.0, 2000.0),
 		Vector2(1020.0, 2010.0), Vector2(1000.0, 2010.0),
 	])
+	feature.holes = [PackedVector2Array([
+		Vector2(1005.0, 2003.0), Vector2(1010.0, 2003.0),
+		Vector2(1010.0, 2007.0), Vector2(1005.0, 2007.0),
+	])]
 	feature.attrs = {"building": "yes", "other_tags": "\"building:levels\"=>\"4\",\"name\"=>\"Test\""}
 	var record: Dictionary = GeoDotWorldSourceScript.building_record(feature)
 	_assert(record.get("id") == "42", "GeoDot building source ID is retained")
 	_assert((record.get("geometry", []) as Array).size() == 1, "GeoDot polygon becomes one normalized building geometry")
+	var polygon: Dictionary = (record.get("geometry", []) as Array)[0]
+	_assert((polygon.get("holes", []) as Array).size() == 1, "GeoDot polygon holes are preserved")
 	var tags: Dictionary = record.get("tags", {})
 	_assert(tags.get("building:levels") == "4", "GDAL other_tags are normalized for BRUR height policy")
 	_assert(is_equal_approx(float(record.get("x", 0.0)), 1010.0), "building center remains in projected metres")
+
+func _test_real_osm_feature_filtering() -> void:
+	var landuse := FakePolygonFeature.new()
+	landuse.outer = PackedVector2Array([Vector2(0, 0), Vector2(50, 0), Vector2(50, 50), Vector2(0, 50)])
+	landuse.attrs = {"landuse": "residential", "building": ""}
+	_assert(GeoDotWorldSourceScript.building_record(landuse).is_empty(), "generic multipolygon without building tag is not rendered as a building")
+	var building_no := FakePolygonFeature.new()
+	building_no.outer = landuse.outer
+	building_no.attrs = {"building": "no"}
+	_assert(GeoDotWorldSourceScript.building_record(building_no).is_empty(), "building=no is not rendered as a building")
+	var railway := FakeLineFeature.new()
+	railway.curve.points = PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 0, -100)])
+	railway.attrs = {"railway": "rail", "highway": ""}
+	_assert(GeoDotWorldSourceScript.road_record(railway).is_empty(), "generic line without highway tag is not rendered as a road")
+	var highway_from_other_tags := FakeLineFeature.new()
+	highway_from_other_tags.curve.points = railway.curve.points
+	highway_from_other_tags.attrs = {"other_tags": "\"highway\"=>\"residential\",\"name\"=>\"Real street\""}
+	var road := GeoDotWorldSourceScript.road_record(highway_from_other_tags)
+	_assert(not road.is_empty(), "highway promoted only through GDAL other_tags is retained")
+	_assert(int(road.get("road_class", -1)) == 5, "residential other_tags road maps to local-road class")
 
 func _test_road_adapter() -> void:
 	var feature := FakeLineFeature.new()
