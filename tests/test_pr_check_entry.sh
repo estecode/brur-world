@@ -20,12 +20,15 @@ set -euo pipefail
 case "${FAKE_PR_DECISION:-MERGE}" in
   MERGE)
     recommendation=MERGE
+    check_line=''
     ;;
   CHECK)
     recommendation='CHECK THEN MERGE'
+    check_line='CHECK: confirm the road surface has no visible gaps at the E6 interchange'
     ;;
   BLOCK)
     recommendation='DO NOT MERGE'
+    check_line=''
     ;;
   *)
     printf 'unexpected FAKE_PR_DECISION=%s\n' "$FAKE_PR_DECISION" >&2
@@ -37,6 +40,7 @@ cat <<BODY
 
 **Merge recommendation**
 $recommendation
+$check_line
 BODY
 GH
 chmod +x "$FAKE_BIN/gh"
@@ -53,8 +57,18 @@ printf 'LAUNCHER=OLD pr=%s\n' "$1"
 SH
 cat > "$SEED/tools/pr_merge_decision.py" <<'PY'
 #!/usr/bin/env python3
+import argparse
 import sys
+parser = argparse.ArgumentParser()
+parser.add_argument("--field", choices=("decision", "check"), default="decision")
+args = parser.parse_args()
 body = sys.stdin.read()
+if args.field == "check":
+    for line in body.splitlines():
+        if line.startswith("CHECK:"):
+            print(line.split(":", 1)[1].strip())
+            raise SystemExit(0)
+    raise SystemExit(2)
 if "**Merge recommendation**\nMERGE" in body:
     print("merge")
 elif "**Merge recommendation**\nCHECK THEN MERGE" in body:
@@ -76,14 +90,14 @@ printf '{}\n' > "$MAPPED/world_data/manifest.json"
 
 cat > "$SEED/tools/pr_check.sh" <<'SH'
 #!/usr/bin/env bash
-printf 'LAUNCHER=NEW pr=%s manual=%s\n' "$1" "${BRUR_PR_CHECK_MANUAL_REVIEW:-missing}"
+printf 'LAUNCHER=NEW pr=%s manual=%s check=%s\n' "$1" "${BRUR_PR_CHECK_MANUAL_REVIEW:-missing}" "${BRUR_PR_CHECK_MANUAL_CHECK:-missing}"
 SH
 git -C "$SEED" add tools/pr_check.sh
 git -C "$SEED" commit -qm current-launcher
 git -C "$SEED" push -q origin main
 
 output="$(cd "$MAPPED" && PATH="$FAKE_BIN:$PATH" bash "$ENTRY" 97)"
-printf '%s\n' "$output" | grep -q 'LAUNCHER=NEW pr=97 manual=none'
+printf '%s\n' "$output" | grep -q 'LAUNCHER=NEW pr=97 manual=none check='
 if printf '%s\n' "$output" | grep -q 'LAUNCHER=OLD'; then
   printf 'stale mapped launcher was executed\n' >&2
   exit 1
@@ -92,9 +106,15 @@ SUCCESS_LOG="$MAPPED/safecommand-logs/pr-check-97.log"
 [[ -f "$SUCCESS_LOG" ]]
 grep -q 'PR_CHECK=LOG_STARTED pr=97' "$SUCCESS_LOG"
 grep -q 'PR_CHECK=MANUAL_REVIEW none pr=97 source=pr-merge-decision' "$SUCCESS_LOG"
-grep -q 'LAUNCHER=NEW pr=97 manual=none' "$SUCCESS_LOG"
+grep -q 'LAUNCHER=NEW pr=97 manual=none check=' "$SUCCESS_LOG"
 grep -q 'PR_CHECK=LOG_FINISHED pr=97 exit=0' "$SUCCESS_LOG"
 [[ ! -e "$MAPPED/.safecommand/logs/pr-check-97.log" ]]
+
+output="$(cd "$MAPPED" && FAKE_PR_DECISION=CHECK PATH="$FAKE_BIN:$PATH" bash "$ENTRY" 98)"
+printf '%s\n' "$output" | grep -q 'LAUNCHER=NEW pr=98 manual=required check=confirm the road surface has no visible gaps at the E6 interchange'
+CHECK_LOG="$MAPPED/safecommand-logs/pr-check-98.log"
+grep -q 'PR_CHECK=MANUAL_REVIEW required pr=98 source=pr-merge-decision' "$CHECK_LOG"
+grep -q 'PR_CHECK=MANUAL_CHECK confirm the road surface has no visible gaps at the E6 interchange' "$CHECK_LOG"
 
 rm "$SEED/tools/pr_check.sh"
 git -C "$SEED" add -u
@@ -134,7 +154,12 @@ set -euo pipefail
   printf 'FALLBACK_MANUAL_REVIEW_MISSING value=%s\n' "${BRUR_PR_CHECK_MANUAL_REVIEW:-missing}" >&2
   exit 24
 }
+[[ "${BRUR_PR_CHECK_MANUAL_CHECK:-}" == "confirm the road surface has no visible gaps at the E6 interchange" ]] || {
+  printf 'FALLBACK_MANUAL_CHECK_MISSING value=%s\n' "${BRUR_PR_CHECK_MANUAL_CHECK:-missing}" >&2
+  exit 25
+}
 printf 'FALLBACK_MANUAL_REVIEW=%s\n' "$BRUR_PR_CHECK_MANUAL_REVIEW"
+printf 'FALLBACK_MANUAL_CHECK=%s\n' "$BRUR_PR_CHECK_MANUAL_CHECK"
 "$GODOT_BIN" --path "$BRUR_PR_CHECK_WORKTREE" "$BRUR_PR_CHECK_WORKTREE/scenes/main.tscn"
 SH
 git -C "$FALLBACK_WORKTREE" add .
@@ -155,7 +180,7 @@ ORDER_LOG="$TMP/fallback-order.log"
 export ORDER_LOG
 : > "$ORDER_LOG"
 set +e
-env -u BRUR_PR_CHECK_LOG_PATH -u BRUR_PR_CHECK_MAPPED_ROOT -u BRUR_PR_CHECK_MANUAL_REVIEW \
+env -u BRUR_PR_CHECK_LOG_PATH -u BRUR_PR_CHECK_MAPPED_ROOT -u BRUR_PR_CHECK_MANUAL_REVIEW -u BRUR_PR_CHECK_MANUAL_CHECK \
   FAKE_PR_DECISION=CHECK PATH="$FAKE_BIN:$PATH" \
   bash "$OWNED_RUNNER" "$FALLBACK_WORKTREE" 98 "$FALLBACK_LAUNCHER/world_data" /usr/bin/python3 "$FALLBACK_GODOT" >/dev/null 2>&1
 fallback_status=$?
@@ -165,7 +190,13 @@ FALLBACK_LOG="$MAPPED/safecommand-logs/pr-check-98.log"
 [[ -f "$FALLBACK_LOG" ]]
 grep -q 'PR_CHECK=LOG_FALLBACK .*reason=stale-mapped-entrypoint' "$FALLBACK_LOG"
 grep -q 'PR_CHECK=MANUAL_REVIEW required pr=98 source=pr-merge-decision-fallback' "$FALLBACK_LOG"
+grep -q 'PR_CHECK=MANUAL_CHECK confirm the road surface has no visible gaps at the E6 interchange' "$FALLBACK_LOG"
 grep -q 'FALLBACK_MANUAL_REVIEW=required' "$FALLBACK_LOG"
+grep -q 'FALLBACK_MANUAL_CHECK=confirm the road surface has no visible gaps at the E6 interchange' "$FALLBACK_LOG"
+grep -q 'SAFE CHECK — MANUAL CHECK REQUIRED' "$FALLBACK_LOG"
+grep -q 'Inspect exactly this: confirm the road surface has no visible gaps at the E6 interchange' "$FALLBACK_LOG"
+grep -q 'PASS: close Godot, then report: test ok #98' "$FALLBACK_LOG"
+grep -q 'FAIL: close Godot, then report: test fail #98' "$FALLBACK_LOG"
 grep -q 'PR_CHECK=LOG_FALLBACK_FINISHED pr=98 exit=0' "$FALLBACK_LOG"
 grep -q 'FALLBACK_GODOT .*scenes/main.tscn' "$ORDER_LOG"
 if grep -q -- '--editor' "$ORDER_LOG"; then
