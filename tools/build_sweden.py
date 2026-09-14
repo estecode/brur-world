@@ -91,10 +91,29 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("world_data"))
     parser.add_argument("--target", default="all", help="comma-separated: roads,routing,traffic,background,pois,buildings,search or all")
     parser.add_argument("--plan", action="store_true", help="print the resolved build plan and exit")
+    parser.add_argument(
+        "--source-stage-only",
+        action="store_true",
+        help="for a GDAL OSM GeoPackage, write all per-domain source-stage files and stop before BRUR normalization",
+    )
     args = parser.parse_args()
     if not args.source.is_file(): parser.error(f"source not found: {args.source}")
     if not _is_geopackage(args.source): ensure_pbf(args.source)
     args.output.mkdir(parents=True, exist_ok=True)
+
+    if args.source_stage_only:
+        if not _is_geopackage(args.source):
+            parser.error("--source-stage-only requires a GDAL OSM .gpkg source")
+        from osm_gpkg_source_stage import stage_osm_geopackage
+
+        _section("STAGE GDAL OSM GEOPACKAGE SOURCE FACTS ONLY", args.source)
+        started = time.monotonic()
+        outputs = stage_osm_geopackage(args.source, args.output / "source_stage")
+        for domain, path in outputs.items():
+            _log(f"SOURCE-STAGE domain={domain} bytes={path.stat().st_size:,} path={path}")
+        _log(f"SOURCE-STAGE-DONE elapsed={time.monotonic()-started:.1f}s; downstream normalization intentionally not started")
+        return
+
     try: targets = parse_targets(args.target)
     except ValueError as exc: parser.error(str(exc))
     routes = required_source_routes(targets)
