@@ -25,9 +25,6 @@ POI_KEYS = (
     "public_transport", "railway", "aeroway", "craft", "historic", "sport", "club",
     "man_made", "information", "advertising",
 )
-SPECIAL_HIGHWAY_POIS = ("speed_camera", "services", "rest_area", "bus_stop", "elevator")
-# Current OSM usage normally couples camera:* tags with surveillance/man_made,
-# but retain known standalone camera keys as explicit source facts too.
 CAMERA_KEYS = (
     "camera:direction", "camera:mount", "camera:type", "camera:features",
     "camera:angle", "camera:orientation", "camera:zone",
@@ -67,7 +64,6 @@ def _sha256(path: Path) -> str:
 
 def _peak_rss_bytes() -> int:
     value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-    # macOS reports bytes; Linux/BSD generally report KiB.
     return value if platform.system() == "Darwin" else value * 1024
 
 
@@ -90,15 +86,16 @@ def _criteria(domain: str):
         ]
     if domain == "traffic_signals":
         return '["highway"="traffic_signals"]'
-    if domain == "background_areas":
+    if domain == "background":
         filters = [f'["natural"="{value}"]' for value in BACKGROUND_NATURAL]
         filters.extend(f'["landuse"="{value}"]' for value in BACKGROUND_LANDUSE)
-        filters.extend(['["waterway"="riverbank"]', '["water"]'])
+        filters.extend([
+            '["waterway"="riverbank"]',
+            '["water"]',
+            '["natural"="coastline"]',
+            '["boundary"="administrative"]["admin_level"="2"]',
+        ])
         return filters
-    if domain == "coastlines":
-        return '["natural"="coastline"]'
-    if domain == "admin_boundaries":
-        return '["boundary"="administrative"]["admin_level"="2"]'
     raise ValueError(f"unsupported pyrosm domain: {domain}")
 
 
@@ -109,10 +106,7 @@ def _extract(osm, domain: str):
             custom_filter='["highway"]',
             filter_type="keep",
         )
-    return osm.get_data_by_custom_criteria(
-        custom_filter=_criteria(domain),
-        filter_type="keep",
-    )
+    return osm.get_data_by_custom_criteria(custom_filter=_criteria(domain), filter_type="keep")
 
 
 def _counts(frame) -> dict[str, int]:
@@ -130,8 +124,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--domain", required=True, choices=(
-        "highways", "buildings", "pois", "addresses", "traffic_signals",
-        "background_areas", "coastlines", "admin_boundaries",
+        "highways", "buildings", "pois", "addresses", "traffic_signals", "background",
     ))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
@@ -161,7 +154,7 @@ def main() -> None:
 
     try:
         # BRUR owns the persistent cache. Never make correctness/performance depend
-        # on pyrosm's hidden GeoParquet cache from a previous process/session.
+        # on pyrosm's hidden GeoParquet cache from an earlier process/session.
         try:
             cleared = OSM.clear_cache(args.source)
         except Exception:
@@ -169,21 +162,13 @@ def main() -> None:
         if cleared:
             _log(f"CLEARED internal-pyrosm-cache files={cleared}")
 
-        osm = OSM(
-            args.source,
-            engine="out_of_core",
-            workers=args.workers,
-            keep_metadata=False,
-        )
+        osm = OSM(args.source, engine="out_of_core", workers=args.workers, keep_metadata=False)
         frame = _extract(osm, args.domain)
         if frame is None:
             raise RuntimeError(f"pyrosm returned no frame for domain {args.domain}")
         counts = _counts(frame)
         extract_elapsed = time.monotonic() - started
-        _log(
-            f"EXTRACTED domain={args.domain} records={counts['records']:,} "
-            f"elapsed={extract_elapsed:.1f}s"
-        )
+        _log(f"EXTRACTED domain={args.domain} records={counts['records']:,} elapsed={extract_elapsed:.1f}s")
 
         write_started = time.monotonic()
         osm.write_pbf(frame, temp, subset_only=True)
