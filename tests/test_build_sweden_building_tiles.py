@@ -87,12 +87,13 @@ class Tests(unittest.TestCase):
         self.assertIsNone(background_class({"boundary":"administrative","admin_level":"2"}))
 
     def test_directed_coastline_selects_land_side_not_whole_admin_domain(self):
-        domain=Polygon([(-10,-10),(10,-10),(10,10),(-10,10),(-10,-10)])
-        # OSM coastline direction: land is on the left. South->north means west.
-        coastline=LineString([(0,-10),(0,10)])
+        domain=Polygon([(-100,-100),(100,-100),(100,100),(-100,100),(-100,-100)])
+        # Projected coordinates are meters. OSM coastline direction says land is
+        # on the left; south->north therefore selects the west half only.
+        coastline=LineString([(0,-100),(0,100)])
         land=solve_coastline_land([domain],[coastline])
-        self.assertTrue(land.covers(Point(-5,0)))
-        self.assertFalse(land.covers(Point(5,0)))
+        self.assertTrue(land.covers(Point(-50,0)))
+        self.assertFalse(land.covers(Point(50,0)))
 
     def test_inland_natural_water_remains_water(self):
         self.assertEqual(background_class({"natural":"water"}),WATER)
