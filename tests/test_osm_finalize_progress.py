@@ -1,4 +1,4 @@
-"""Verify live route-cache finalization progress without extra source traversal."""
+"""Verify BOSC2 live direct-fanout progress and no obsolete finalize spool."""
 
 from __future__ import annotations
 
@@ -8,109 +8,44 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 import osmium
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOLS = ROOT / "tools"
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+ROOT=Path(__file__).resolve().parents[1]
+TOOLS=ROOT/"tools"
+if str(TOOLS) not in sys.path: sys.path.insert(0,str(TOOLS))
+from osm_source_cache import build_source_caches  # noqa: E402
 
-from osm_source_cache import (  # noqa: E402
-    SourceCacheHandler,
-    _FinalizeProgressDisplay,
-    build_source_caches,
-)
+FIXTURE='''<?xml version="1.0" encoding="UTF-8"?><osm version="0.6"><node id="1" lon="18" lat="59.3"/><node id="2" lon="18.001" lat="59.3"/><way id="10"><nd ref="1"/><nd ref="2"/><tag k="highway" v="residential"/></way></osm>'''
+class Copy(osmium.SimpleHandler):
+    def __init__(self,w): super().__init__(); self.w=w
+    def node(self,v): self.w.add_node(v)
+    def way(self,v): self.w.add_way(v)
+    def relation(self,v): self.w.add_relation(v)
 
+def write_pbf(xml,pbf):
+    with osmium.SimpleWriter(str(pbf),overwrite=True) as writer: Copy(writer).apply_file(str(xml))
 
-FIXTURE = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<osm version=\"0.6\">
-  <node id=\"1\" lon=\"18.0000\" lat=\"59.3000\"/>
-  <node id=\"2\" lon=\"18.0010\" lat=\"59.3000\"/>
-  <way id=\"10\">
-    <nd ref=\"1\"/><nd ref=\"2\"/>
-    <tag k=\"highway\" v=\"residential\"/>
-  </way>
-</osm>
-"""
-
-
-class FixtureCopyHandler(osmium.SimpleHandler):
-    def __init__(self, writer: osmium.SimpleWriter) -> None:
-        super().__init__()
-        self.writer = writer
-
-    def node(self, node) -> None:
-        self.writer.add_node(node)
-
-    def way(self, way) -> None:
-        self.writer.add_way(way)
-
-    def relation(self, relation) -> None:
-        self.writer.add_relation(relation)
-
-
-class TTYBuffer(io.StringIO):
-    def isatty(self) -> bool:
-        return True
-
-
-def write_pbf(source: Path, destination: Path) -> None:
-    with osmium.SimpleWriter(str(destination), overwrite=True) as writer:
-        FixtureCopyHandler(writer).apply_file(str(source))
-
-
-class OsmFinalizeProgressTests(unittest.TestCase):
-    def test_tty_finalization_progress_rewrites_compact_block(self) -> None:
-        stream = TTYBuffer()
-        progress = _FinalizeProgressDisplay(("highways", "areas"), stream=stream, interval=1)
-        progress.render(force=True)
-        progress.select("highways")
-        progress.record()
-        progress.select("areas", 2)
-        progress.record()
-        progress.set_phase("publishing highways")
-
-        output = stream.getvalue()
-        self.assertIn("route-cache finalization", output)
-        self.assertIn("spool records: 2", output)
-        self.assertIn("highways", output)
-        self.assertIn("areas", output)
-        self.assertIn("publishing highways", output)
-        self.assertIn("\x1b[", output)
-
-    def test_real_finalization_reports_progress_without_second_source_scan(self) -> None:
+class Tests(unittest.TestCase):
+    def test_direct_route_progress_has_start_scan_done_and_no_finalize_spool(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            source = root / "fixture.osm"
-            source.write_text(FIXTURE, encoding="utf-8")
-            pbf = root / "fixture.osm.pbf"
-            write_pbf(source, pbf)
-            cache = root / "cache"
+            root=Path(temp); xml=root/"f.osm"; xml.write_text(FIXTURE,encoding="utf-8"); pbf=root/"f.osm.pbf"; write_pbf(xml,pbf)
+            output=io.StringIO()
+            with contextlib.redirect_stdout(output): build_source_caches(pbf,root/"cache",("highways",))
+            text=output.getvalue()
+            self.assertIn("[plan] highways",text)
+            self.assertIn("[osm-source] START direct routes=highways",text)
+            self.assertIn("[osm-source] scanned:",text)
+            self.assertIn("[osm-source] DONE route=highways",text)
+            self.assertNotIn("finalizing: selecting spool records",text)
+            self.assertFalse((root/"cache"/"resume-spool").exists())
 
-            original = SourceCacheHandler.apply_file
-            calls = 0
+    def test_warm_reuse_reports_cache_hit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); xml=root/"f.osm"; xml.write_text(FIXTURE,encoding="utf-8"); pbf=root/"f.osm.pbf"; write_pbf(xml,pbf)
+            cache=root/"cache"; build_source_caches(pbf,cache,("highways",))
+            output=io.StringIO()
+            with contextlib.redirect_stdout(output): build_source_caches(pbf,cache,("highways",))
+            self.assertIn("CACHE HIT",output.getvalue())
 
-            def counted(handler, filename, *args, **kwargs):
-                nonlocal calls
-                calls += 1
-                return original(handler, filename, *args, **kwargs)
-
-            output = io.StringIO()
-            with mock.patch.object(SourceCacheHandler, "apply_file", counted):
-                with contextlib.redirect_stdout(output):
-                    build_source_caches(pbf, cache, ("highways",))
-
-            text = output.getvalue()
-            self.assertEqual(calls, 1)
-            self.assertIn("finalizing: selecting spool records", text)
-            self.assertIn("spool records: 1", text)
-            self.assertIn("routes: highways=1", text)
-            self.assertIn("finalizing: publishing highways", text)
-            self.assertIn("finalizing: complete", text)
-            self.assertNotIn("\x1b[", text)
-
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__=="__main__": unittest.main()
