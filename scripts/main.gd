@@ -1,21 +1,24 @@
 extends Node3D
 
-## Streams portable BRT1 road tiles and renders a configured BRM2 background map.
+## Streams prebuilt BRS1 road-surface tiles (with BRT1 fallback) and renders the configured BRM2 background map.
 ##
 ## Dependencies:
 ## - world_coordinates.gd owns projected/world/tile coordinate conversion.
-## - road_lod_policy.gd owns road widths, view-distance LOD, and build budgeting.
+## - road_lod_policy.gd owns view-distance LOD and bounded tile scheduling; widths remain only for legacy BRT1 fallback.
 ## - CameraRig supplies visible world bounds, zoom distance and explicit map/drive mode state.
 ## - city_light_renderer.gd consumes authoritative BRM2 urban geometry plus derived runtime POI density.
-## - world_data manifest, BRT1 tiles, BRM2 background, and city-light density provide runtime map data.
+## - world_data manifest, BRS1/BRT1 tiles, BRM2 background, and city-light density provide runtime map data.
 
 const WorldCoordinatesScript = preload("res://scripts/world_coordinates.gd")
 const RoadLodPolicyScript = preload("res://scripts/road_lod_policy.gd")
 const CityLightRendererScript = preload("res://scripts/city_light_renderer.gd")
 const WORLD_DIR: String = "res://world_data"
 const ROAD_MAGIC: String = "BRT1"
+const ROAD_SURFACE_MAGIC: String = "BRS1"
 const MAP_MAGIC: String = "BRM2"
 const ROAD_MESH_CACHE_LIMIT: int = 512
+# BRS1 grade is semantic only until authoritative vertical road profiles own physical Y.
+const ROAD_GRADE_STEP_M: float = 0.0
 const DRIVE_LAYER_SPACING_M: float = 0.01
 const DRIVE_BACKGROUND_LAYER_SPACING_M: float = 0.05
 
@@ -168,10 +171,6 @@ func _layer_spacing() -> float:
 	return clampf(camera_rig.get_distance() / 6000.0, 4.0, 240.0)
 
 func _background_height(kind: int) -> float:
-	# Drive keeps the physical road/player surface compact while pushing the
-	# decorative map stack below it at materially larger intervals. This avoids
-	# spending the chase-camera depth budget on centimetre-separated coplanar
-	# surfaces without making the vehicle or buildings float above the road.
 	if _is_driving_view():
 		match kind:
 			MAP_LAND:
@@ -184,9 +183,6 @@ func _background_height(kind: int) -> float:
 				return -DRIVE_BACKGROUND_LAYER_SPACING_M * 2.0
 			MAP_URBAN:
 				return -DRIVE_BACKGROUND_LAYER_SPACING_M
-	# Heights preserve the existing world-space relationship with roads and city
-	# lights. Background visual precedence is handled by render priority instead
-	# of relying on depth-buffer precision between these nearly coplanar layers.
 	match kind:
 		MAP_LAND:
 			return current_layer_spacing * 1.0
@@ -220,10 +216,6 @@ func _background_render_priority(kind: int) -> int:
 	return -5
 
 func _configure_background_material(mat: StandardMaterial3D, kind: int, ocean_base: bool, _drive_mode: bool) -> void:
-	# PR #155 established that overlapping BRM2/ocean surfaces must never decide
-	# visual precedence through the depth buffer. Drive keeps the larger physical
-	# separation introduced by #235, but uses the same deterministic compositor so
-	# camera movement cannot make ground classes fight or bleed into building bases.
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	mat.render_priority = BACKGROUND_OCEAN_PRIORITY if ocean_base else _background_render_priority(kind)
@@ -296,6 +288,17 @@ func _visible_tile_bounds() -> Array[Vector2i]:
 	var margin: int = 2
 	return [Vector2i(min_tx - margin, min_ty - margin), Vector2i(max_tx + margin, max_ty + margin)]
 
+func _road_tile_path(lod: int, tx: int, ty: int) -> String:
+	var surface_dir := String(manifest.get("road_surface_dir", "road_surfaces"))
+	if String(manifest.get("road_surface_format", "")) == ROAD_SURFACE_MAGIC:
+		var surface_path := "%s/%s/lod%d/%d_%d.brmesh" % [WORLD_DIR, surface_dir, lod, tx, ty]
+		if FileAccess.file_exists(surface_path):
+			return surface_path
+	var legacy_path := "%s/lod%d/%d_%d.brtile" % [WORLD_DIR, lod, tx, ty]
+	if FileAccess.file_exists(legacy_path):
+		return legacy_path
+	return ""
+
 func _refresh_tiles(force: bool) -> void:
 	var started_usec: int = Time.get_ticks_usec()
 	var distance: float = camera_rig.get_distance()
@@ -317,8 +320,8 @@ func _refresh_tiles(force: bool) -> void:
 	for ty in range(min_tile.y, max_tile.y + 1):
 		for tx in range(min_tile.x, max_tile.x + 1):
 			var key: String = "%d:%d:%d" % [lod, tx, ty]
-			var path: String = "%s/lod%d/%d_%d.brtile" % [WORLD_DIR, lod, tx, ty]
-			if not FileAccess.file_exists(path):
+			var path := _road_tile_path(lod, tx, ty)
+			if path.is_empty():
 				continue
 			pending_wanted[key] = true
 			if loaded.has(key):
@@ -404,10 +407,40 @@ func _build_tile_mesh(path: String, _lod: int) -> ArrayMesh:
 	if file == null or file.get_length() < 8:
 		return null
 	var magic: String = file.get_buffer(4).get_string_from_ascii()
-	if magic != ROAD_MAGIC:
-		push_error("Bad tile magic: " + path)
-		return null
 	var count: int = file.get_32()
+	if magic == ROAD_SURFACE_MAGIC:
+		return _build_prebuilt_surface_mesh(file, count)
+	if magic != ROAD_MAGIC:
+		push_error("Bad road tile magic: " + path)
+		return null
+	return _build_legacy_centerline_mesh(file, count)
+
+func _build_prebuilt_surface_mesh(file: FileAccess, count: int) -> ArrayMesh:
+	var vertices := PackedVector3Array()
+	var colors := PackedColorArray()
+	vertices.resize(count * 3)
+	colors.resize(count * 3)
+	var write_index := 0
+	for _i in range(count):
+		var road_class := file.get_8()
+		var grade_raw := file.get_8()
+		var grade := grade_raw - 256 if grade_raw > 127 else grade_raw
+		var y := float(grade) * ROAD_GRADE_STEP_M
+		var color := _road_color(road_class)
+		for _vertex in range(3):
+			vertices[write_index] = Vector3(file.get_float(), y, -file.get_float())
+			colors[write_index] = color
+			write_index += 1
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_COLOR] = colors
+	var mesh := ArrayMesh.new()
+	if not vertices.is_empty():
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+func _build_legacy_centerline_mesh(file: FileAccess, count: int) -> ArrayMesh:
 	var st: SurfaceTool = SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for _i in range(count):

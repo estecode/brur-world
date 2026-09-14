@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Build portable BRT1 road tiles from the shared OSM highway source route.
+"""Build portable BRT1 road centerlines plus derived BRS1 road-surface tiles.
 
 Dependencies:
 - osm_route_source.py redirects authoritative Sweden PBF input through the reusable OSM source cache.
+- road_surface_mesh.py derives deterministic render-only connected surfaces from the same OSM ways.
 - Reads cached highway OSM or small fixture OSM with pyosmium.
 """
 
@@ -18,6 +19,7 @@ from pathlib import Path
 import osmium
 
 from osm_route_source import resolve_route_source
+from road_surface_mesh import RoadSurfaceAccumulator, SurfaceWay, grade_from_tags
 from world_common import TILE_SIZE, ensure_pbf, project
 
 ROAD_CLASS = {
@@ -65,6 +67,7 @@ class RoadHandler(osmium.SimpleHandler):
         super().__init__()
         self.payloads: list[dict[tuple[int, int], bytearray]] = [defaultdict(bytearray) for _ in range(3)]
         self.counts: list[dict[tuple[int, int], int]] = [defaultdict(int) for _ in range(3)]
+        self.surfaces = [RoadSurfaceAccumulator(TILE_SIZE) for _ in range(3)]
         self.min_x = math.inf
         self.min_y = math.inf
         self.max_x = -math.inf
@@ -84,6 +87,7 @@ class RoadHandler(osmium.SimpleHandler):
             return
 
         self.ways += 1
+        grade = grade_from_tags(way.tags)
         for x, y in points:
             self.min_x = min(self.min_x, x)
             self.min_y = min(self.min_y, y)
@@ -94,6 +98,9 @@ class RoadHandler(osmium.SimpleHandler):
             if road_class > max_class:
                 continue
             lod_points = thin(points, LOD_MIN_SPACING[lod])
+            if len(lod_points) < 2:
+                continue
+            self.surfaces[lod].add_way(SurfaceWay(tuple(lod_points), road_class, grade))
             for (x1, y1), (x2, y2) in zip(lod_points, lod_points[1:]):
                 tx = math.floor(((x1 + x2) * 0.5) / TILE_SIZE)
                 ty = math.floor(((y1 + y2) * 0.5) / TILE_SIZE)
@@ -123,6 +130,7 @@ def build_roads(source: Path, output: Path) -> dict:
     if handler.ways == 0:
         raise SystemExit("No supported highway ways found")
 
+    surface_stats: list[dict[str, int]] = []
     for lod in range(3):
         lod_dir = output / f"lod{lod}"
         lod_dir.mkdir(parents=True, exist_ok=True)
@@ -130,6 +138,10 @@ def build_roads(source: Path, output: Path) -> dict:
             with (lod_dir / f"{tx}_{ty}.brtile").open("wb") as f:
                 f.write(HEADER.pack(b"BRT1", handler.counts[lod][(tx, ty)]))
                 f.write(payload)
+
+        surface_dir = output / "road_surfaces" / f"lod{lod}"
+        stats = handler.surfaces[lod].write(surface_dir)
+        surface_stats.append(stats)
 
     origin_x = (handler.min_x + handler.max_x) * 0.5
     origin_y = (handler.min_y + handler.max_y) * 0.5
@@ -140,6 +152,8 @@ def build_roads(source: Path, output: Path) -> dict:
     manifest.update(
         {
             "format": "BRT1",
+            "road_surface_format": "BRS1",
+            "road_surface_dir": "road_surfaces",
             "tile_size": TILE_SIZE,
             "origin_x": origin_x,
             "origin_y": origin_y,
@@ -152,13 +166,26 @@ def build_roads(source: Path, output: Path) -> dict:
                 {"lod": i, "tiles": len(handler.payloads[i]), "segments": handler.segments[i]}
                 for i in range(3)
             ],
+            "road_surface_lods": [
+                {
+                    "lod": i,
+                    "tiles": surface_stats[i]["tiles"],
+                    "triangles": surface_stats[i]["triangles"],
+                    "bytes": surface_stats[i]["bytes"],
+                }
+                for i in range(3)
+            ],
         }
     )
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     print(f"[roads] Road ways: {handler.ways:,}")
     for lod in range(3):
-        print(f"[roads] LOD {lod}: {len(handler.payloads[lod]):,} tiles, {handler.segments[lod]:,} segments")
+        print(f"[roads] LOD {lod}: {len(handler.payloads[lod]):,} centerline tiles, {handler.segments[lod]:,} segments")
+        print(
+            f"[roads] LOD {lod}: {surface_stats[lod]['tiles']:,} surface tiles, "
+            f"{surface_stats[lod]['triangles']:,} triangles, {surface_stats[lod]['bytes']:,} bytes"
+        )
     return manifest
 
 
