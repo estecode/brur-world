@@ -35,8 +35,8 @@ TARGET_OUTPUTS: dict[str, tuple[str, ...]] = {
 TARGET_BUILDERS: dict[str, tuple[str, ...]] = {
     "roads": ("build_roads.py", "road_surface_mesh.py"),
     "routing": ("build_routing_dataset.py", "routing_graph.py"),
-    "traffic": ("build_traffic_signals.py",),
-    "background": ("build_background.py",),
+    "traffic": ("build_traffic_signals.py", "build_traffic_signals_sources.py"),
+    "background": ("build_background.py", "build_background_sources.py"),
     "pois": ("build_features.py", "poi_filter.py", "build_city_light_density.py"),
     "buildings": ("build_features.py", "build_building_mesh_pyramid.py"),
     "search": ("build_search_index.py", "build_search_binary.py"),
