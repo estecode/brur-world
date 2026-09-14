@@ -22,7 +22,7 @@ func _init() -> void:
 		_assert(vertices.size() == 6, "two prebuilt triangles remain exactly six vertices")
 		_assert(colors.size() == 6, "class colors are stored per prebuilt vertex")
 		_assert(is_equal_approx(vertices[0].y, 0.0), "ground-grade triangle stays at road base height")
-		_assert(is_equal_approx(vertices[3].y, 0.25), "grade-separated triangle receives deterministic physical grade offset")
+		_assert(is_equal_approx(vertices[3].y, 0.0), "semantic grade does not invent physical Y before authoritative vertical profiles exist")
 		_assert(vertices[0].x == 1.0 and vertices[0].z == -2.0, "tile-local BRS1 coordinates map directly to GPU-local X/Z")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 	main.free()
