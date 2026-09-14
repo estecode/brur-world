@@ -90,6 +90,8 @@ func metadata() -> Dictionary:
 func query_cell(top_left_absolute: Vector2, size_m: float, max_buildings: int, max_roads: int) -> Dictionary:
 	if not is_ready():
 		return {"ok": false, "error": "GeoDot world source is not ready"}
+	var cell_min := Vector2(top_left_absolute.x, top_left_absolute.y - size_m)
+	var cell_max := Vector2(top_left_absolute.x + size_m, top_left_absolute.y)
 	var started := Time.get_ticks_usec()
 	var raw_buildings: Array = building_layer.call("get_features_in_square", top_left_absolute.x, top_left_absolute.y, size_m, max_buildings)
 	var building_query_ms := float(Time.get_ticks_usec() - started) / 1000.0
@@ -99,13 +101,17 @@ func query_cell(top_left_absolute: Vector2, size_m: float, max_buildings: int, m
 	var buildings: Array[Dictionary] = []
 	for feature in raw_buildings:
 		var record := building_record(feature)
-		if not record.is_empty():
-			buildings.append(record)
+		if record.is_empty() or not record_owned_by_cell(record, cell_min, cell_max):
+			continue
+		buildings.append(record)
 	var roads: Array[Dictionary] = []
 	for feature in raw_roads:
 		var record := road_record(feature)
-		if not record.is_empty():
-			roads.append(record)
+		if record.is_empty():
+			continue
+		record["clip_min"] = cell_min
+		record["clip_max"] = cell_max
+		roads.append(record)
 	return {
 		"ok": true,
 		"buildings": buildings,
@@ -117,6 +123,12 @@ func query_cell(top_left_absolute: Vector2, size_m: float, max_buildings: int, m
 		"raw_building_features": raw_buildings.size(),
 		"raw_road_features": raw_roads.size(),
 	}
+
+static func record_owned_by_cell(record: Dictionary, cell_min: Vector2, cell_max: Vector2) -> bool:
+	var point := Vector2(float(record.get("x", INF)), float(record.get("y", INF)))
+	if not point.is_finite():
+		return false
+	return point.x >= cell_min.x and point.x < cell_max.x and point.y >= cell_min.y and point.y < cell_max.y
 
 static func building_record(feature: Variant) -> Dictionary:
 	if feature == null or not feature.has_method("get_outer_vertices"):
