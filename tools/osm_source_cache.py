@@ -1,45 +1,43 @@
 #!/usr/bin/env python3
-"""Build independently rebuildable OSM source-cache blocks with pyrosm.
+"""Build independently reusable normalized OSM source-fact caches.
 
-The authoritative Sweden PBF is touched only when a requested block is missing,
-stale or incompatible. Downstream BRUR builders always consume these caches.
+Cold builds use two source-adapter units only:
+- one pyosmium/libosmium pass fans out simple facts (highways, POIs, addresses,
+  traffic signals) directly into BRUR framed caches;
+- one libosmium area pass assembles multipolygons/relations once into the shared
+  area cache consumed by buildings/background/relation POIs.
+
+No derived `.osm.pbf` files are written.
 """
-
 from __future__ import annotations
 
 import argparse
-import hashlib
-import importlib.util
 import json
 import os
-import shutil
-import subprocess
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from area_source_cache import area_source_cache_metadata, build_area_source_cache
+from fast_osm_facts import SCHEMAS, build_fast_facts
+from normalized_source_facts import validate as validate_facts
 from source_identity import compute_source_identity
 from world_common import ensure_pbf
 
-CACHE_FORMAT = "BOSC3-PYROSM"
+CACHE_FORMAT = "BOSC4-BRUR-FACTS"
 CACHE_DIR_NAME = "osm_source_cache"
-EXTRACTOR_VERSION = 1
-HEARTBEAT_SECONDS = 10.0
+EXTRACTOR_VERSION = 2
 ROUTE_VERSIONS = {
-    "highways": 3,
-    "buildings": 1,
-    "pois": 3,
-    "addresses": 3,
-    "traffic_signals": 3,
-    "background_areas": 1,
-    "coastlines": 1,
-    "admin_boundaries": 1,
+    "highways": 4,
+    "pois": 4,
+    "addresses": 4,
+    "traffic_signals": 4,
+    "areas": 1,
 }
 ALL_ROUTES = tuple(ROUTE_VERSIONS)
-TOOLS_DIR = Path(__file__).resolve().parent
-EXTRACTOR = TOOLS_DIR / "pyrosm_extract.py"
+FAST_ROUTES = tuple(name for name in ALL_ROUTES if name in SCHEMAS)
+AREA_ROUTE = "areas"
 
 
 def _now() -> str:
@@ -68,7 +66,7 @@ def _atomic_json(path: Path, value: dict) -> None:
 
 
 def _route_filename(route: str) -> str:
-    return f"{route}.osm.pbf"
+    return "areas.baf" if route == AREA_ROUTE else f"{route}.brfacts"
 
 
 def _artifact_metadata(path: Path) -> dict[str, int]:
@@ -82,123 +80,48 @@ def _artifact_metadata(path: Path) -> dict[str, int]:
     }
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _source_matches(manifest: dict, source_identity: dict[str, object]) -> bool:
-    source = manifest.get("source")
-    return isinstance(source, dict) and source == source_identity
+    return isinstance(manifest.get("source"), dict) and manifest["source"] == source_identity
 
 
 def _validate_route_entry(cache_dir: Path, route: str, entry: object) -> tuple[bool, dict | None]:
     if not isinstance(entry, dict):
         return False, None
-    if entry.get("version") != ROUTE_VERSIONS[route] or entry.get("complete") is not True:
+    if entry.get("version") != ROUTE_VERSIONS[route] or entry.get("extractor_version") != EXTRACTOR_VERSION:
         return False, None
-    if entry.get("extractor_version") != EXTRACTOR_VERSION:
-        return False, None
-    if entry.get("file") != _route_filename(route):
-        return False, None
-    checksum = entry.get("sha256")
-    if not isinstance(checksum, str) or len(checksum) != 64:
+    if entry.get("complete") is not True or entry.get("file") != _route_filename(route):
         return False, None
     path = cache_dir / _route_filename(route)
-    if not path.is_file() or path.stat().st_size <= 0:
+    if not path.is_file() or entry.get("size_bytes") != path.stat().st_size:
         return False, None
-    expected_size = entry.get("size_bytes")
-    if not isinstance(expected_size, int) or expected_size != path.stat().st_size:
+    try:
+        meta = area_source_cache_metadata(path) if route == AREA_ROUTE else validate_facts(path, SCHEMAS[route])
+    except (OSError, ValueError, TypeError):
         return False, None
-
-    metadata = _artifact_metadata(path)
-    if entry.get("artifact_metadata") == metadata:
-        return True, dict(entry)
-
-    # Strong artifact metadata changed. Fail closed by verifying the exact file
-    # checksum once, then refresh the shortcut metadata for later warm runs.
-    _log(f"VERIFY route={route} reason=artifact-metadata-changed bytes={path.stat().st_size:,}")
-    if _sha256(path) != checksum:
+    checksum = str(meta.get("sha256", ""))
+    if checksum != entry.get("sha256") or len(checksum) != 64:
         return False, None
     refreshed = dict(entry)
-    refreshed["artifact_metadata"] = metadata
+    refreshed["artifact_metadata"] = _artifact_metadata(path)
     return True, refreshed
 
 
-def _pyrosm_command() -> list[str]:
-    override = os.environ.get("BRUR_PYROSM_PYTHON", "").strip()
-    if override:
-        return [override, str(EXTRACTOR)]
-    if importlib.util.find_spec("pyrosm") is not None:
-        return [sys.executable, str(EXTRACTOR)]
-    micromamba = shutil.which("micromamba")
-    if micromamba:
-        env_name = os.environ.get("BRUR_PYROSM_ENV", "brur-pyrosm")
-        return [micromamba, "run", "-n", env_name, "python", str(EXTRACTOR)]
-    raise SystemExit(
-        "pyrosm is not available in this Python and micromamba was not found. "
-        "Install pyrosm>=0.13.1 or create `brur-pyrosm` with conda-forge."
-    )
-
-
-def _run_extractor(source: Path, cache_dir: Path, route: str) -> dict:
-    destination = cache_dir / _route_filename(route)
-    report_path = cache_dir / f".extract-{route}-{os.getpid()}-{time.time_ns()}.json"
-    command = _pyrosm_command() + [
-        str(source), "--domain", route, "--output", str(destination), "--report", str(report_path),
-    ]
-    _log(f"START route={route} source={source.name} output={destination.name}")
-    started = time.monotonic()
-    process = subprocess.Popen(command)
-    try:
-        while True:
-            try:
-                code = process.wait(timeout=HEARTBEAT_SECONDS)
-                break
-            except subprocess.TimeoutExpired:
-                _log(f"PROGRESS route={route} status=pyrosm-running elapsed={time.monotonic() - started:.1f}s")
-        if code != 0:
-            raise RuntimeError(f"pyrosm extractor failed for {route} with exit code {code}")
-        report = _load_json(report_path)
-        if report.get("domain") != route or not destination.is_file():
-            raise RuntimeError(f"pyrosm extractor produced incomplete report/output for {route}")
-        _log(
-            f"DONE route={route} records={int(report.get('records', 0)):,} "
-            f"bytes={destination.stat().st_size:,} sha256={str(report.get('sha256', ''))[:12]}... "
-            f"elapsed={time.monotonic() - started:.1f}s"
-        )
-        return report
-    finally:
-        try:
-            report_path.unlink()
-        except OSError:
-            pass
-
-
-def _entry_from_report(route: str, report: dict, path: Path) -> dict:
-    checksum = report.get("sha256")
-    if not isinstance(checksum, str) or len(checksum) != 64:
-        raise RuntimeError(f"missing exact cache checksum for {route}")
+def _entry(route: str, report: dict, path: Path, elapsed_s: float, build_unit: str) -> dict:
+    checksum = str(report.get("sha256", ""))
+    if len(checksum) != 64:
+        raise RuntimeError(f"missing normalized-cache checksum for {route}")
     return {
         "version": ROUTE_VERSIONS[route],
         "extractor_version": EXTRACTOR_VERSION,
-        "extractor": "pyrosm",
-        "pyrosm_version": report.get("pyrosm_version"),
+        "extractor": "pyosmium/libosmium",
+        "build_unit": build_unit,
         "complete": True,
         "file": _route_filename(route),
         "records": int(report.get("records", 0)),
-        "counts": report.get("counts", {}),
         "size_bytes": int(path.stat().st_size),
         "sha256": checksum,
         "artifact_metadata": _artifact_metadata(path),
-        "extract_seconds": report.get("extract_seconds"),
-        "write_seconds": report.get("write_seconds"),
-        "checksum_seconds": report.get("checksum_seconds"),
-        "elapsed_seconds": report.get("elapsed_seconds"),
-        "peak_rss_bytes": report.get("peak_rss_bytes"),
+        "elapsed_seconds": round(elapsed_s, 3),
     }
 
 
@@ -210,107 +133,99 @@ def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = A
         raise ValueError(f"Unknown OSM source cache route(s): {', '.join(unknown)}")
     cache_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = cache_dir / "manifest.json"
-    run_report_path = cache_dir / "last_run.json"
-
-    run_report: dict[str, object] = {
+    report_path = cache_dir / "last_run.json"
+    run: dict[str, object] = {
         "format": CACHE_FORMAT,
+        "status": "RUNNING",
         "started_at": _now(),
         "requested": list(requested),
         "blocks": {},
-        "status": "RUNNING",
     }
-    _atomic_json(run_report_path, run_report)
+    _atomic_json(report_path, run)
 
     identity_started = time.monotonic()
     source_identity = compute_source_identity(source, cache_dir / "source_identity.json")
     identity_elapsed = time.monotonic() - identity_started
-    manifest = _load_json(manifest_path)
-    same_source = _source_matches(manifest, source_identity)
-    old_routes = manifest.get("routes", {}) if same_source and isinstance(manifest.get("routes"), dict) else {}
-    route_entries: dict[str, dict] = {}
+    old_manifest = _load_json(manifest_path)
+    same_source = _source_matches(old_manifest, source_identity)
+    old_routes = old_manifest.get("routes", {}) if same_source and isinstance(old_manifest.get("routes"), dict) else {}
+    entries: dict[str, dict] = {}
     stale: set[str] = set()
 
-    for route in requested:
-        valid, refreshed = _validate_route_entry(cache_dir, route, old_routes.get(route)) if same_source else (False, None)
-        if valid and refreshed is not None:
-            route_entries[route] = refreshed
-        else:
-            stale.add(route)
     if same_source:
-        for route, entry in old_routes.items():
-            if route not in requested and route in ROUTE_VERSIONS and isinstance(entry, dict):
-                valid, refreshed = _validate_route_entry(cache_dir, route, entry)
-                if valid and refreshed is not None:
-                    route_entries[route] = refreshed
+        for route in ALL_ROUTES:
+            valid, refreshed = _validate_route_entry(cache_dir, route, old_routes.get(route))
+            if valid and refreshed is not None:
+                entries[route] = refreshed
+    for route in requested:
+        if route not in entries:
+            stale.add(route)
 
     outputs = {route: cache_dir / _route_filename(route) for route in requested}
+    blocks = run["blocks"]
+    assert isinstance(blocks, dict)
     _log(
         f"PLAN routes={','.join(requested)} source-sha256={str(source_identity['digest'])[:12]}... "
         f"identity={identity_elapsed:.3f}s"
     )
-    blocks = run_report["blocks"]
-    assert isinstance(blocks, dict)
     for route in requested:
-        if route in stale:
-            _log(f"PLAN route={route} status=REBUILD reason=missing/stale/incompatible")
-            blocks[route] = {"status": "REBUILD", "started_at": None}
-        else:
-            checksum = str(route_entries[route].get("sha256", ""))
-            _log(f"PLAN route={route} status=CACHE-HIT checksum={checksum[:12]}...")
-            blocks[route] = {"status": "CACHE HIT", "sha256": checksum, "bytes": route_entries[route].get("size_bytes")}
-    _atomic_json(run_report_path, run_report)
-
-    if not stale:
-        run_report.update({"status": "DONE", "completed_at": _now(), "source": source_identity})
-        _atomic_json(run_report_path, run_report)
-        # Refresh strong artifact metadata if it was verified above.
-        _atomic_json(manifest_path, {"format": CACHE_FORMAT, "source": source_identity, "routes": route_entries})
-        _log(f"CACHE HIT routes={','.join(requested)}")
-        return outputs
+        status = "REBUILD" if route in stale else "CACHE HIT"
+        block: dict[str, object] = {"status": status}
+        if route not in stale:
+            block["sha256"] = entries[route]["sha256"]
+            block["bytes"] = entries[route]["size_bytes"]
+        blocks[route] = block
+        _log(f"PLAN route={route} status={status}")
+    _atomic_json(report_path, run)
 
     try:
-        for route in requested:
-            if route not in stale:
-                continue
-            block = blocks[route]
-            assert isinstance(block, dict)
-            block["started_at"] = _now()
-            _atomic_json(run_report_path, run_report)
+        stale_fast = tuple(route for route in FAST_ROUTES if route in stale)
+        if stale_fast:
+            _log(f"START unit=fast-facts routes={','.join(stale_fast)}")
             started = time.monotonic()
-            try:
-                report = _run_extractor(source, cache_dir, route)
-                entry = _entry_from_report(route, report, outputs[route])
-                route_entries[route] = entry
-                block.update({
-                    "status": "DONE",
-                    "completed_at": _now(),
-                    "elapsed_seconds": round(time.monotonic() - started, 3),
-                    "records": entry["records"],
-                    "bytes": entry["size_bytes"],
-                    "sha256": entry["sha256"],
-                    "peak_rss_bytes": entry.get("peak_rss_bytes"),
-                })
-                # Publish each completed block independently so a later failure
-                # never discards useful completed work.
-                _atomic_json(manifest_path, {
-                    "format": CACHE_FORMAT,
-                    "source": source_identity,
-                    "routes": route_entries,
-                })
-                _atomic_json(run_report_path, run_report)
-            except Exception as exc:
-                block.update({"status": "ERROR", "completed_at": _now(), "error": f"{type(exc).__name__}: {exc}"})
-                run_report.update({"status": "ERROR", "completed_at": _now(), "source": source_identity})
-                _atomic_json(run_report_path, run_report)
-                _log(f"ERROR route={route} error={type(exc).__name__}: {exc}")
-                raise
-    except Exception:
-        raise
+            reports = build_fast_facts(
+                source,
+                {route: cache_dir / _route_filename(route) for route in stale_fast},
+            )
+            elapsed = time.monotonic() - started
+            for route in stale_fast:
+                path = cache_dir / _route_filename(route)
+                entries[route] = _entry(route, reports[route], path, elapsed, "fast-facts")
+                blocks[route] = {"status": "DONE", **entries[route]}
+            _atomic_json(manifest_path, {"format": CACHE_FORMAT, "source": source_identity, "routes": entries})
+            _atomic_json(report_path, run)
+            _log(f"DONE unit=fast-facts elapsed={elapsed:.1f}s")
 
-    run_report.update({"status": "DONE", "completed_at": _now(), "source": source_identity})
-    _atomic_json(run_report_path, run_report)
-    _log(f"DONE routes={','.join(requested)}")
-    return outputs
+        if AREA_ROUTE in stale:
+            _log("START unit=areas route=areas")
+            started = time.monotonic()
+            path = cache_dir / _route_filename(AREA_ROUTE)
+            report = build_area_source_cache(source, path)
+            elapsed = time.monotonic() - started
+            entries[AREA_ROUTE] = _entry(AREA_ROUTE, report, path, elapsed, "areas")
+            blocks[AREA_ROUTE] = {"status": "DONE", **entries[AREA_ROUTE]}
+            _atomic_json(manifest_path, {"format": CACHE_FORMAT, "source": source_identity, "routes": entries})
+            _atomic_json(report_path, run)
+            _log(f"DONE unit=areas elapsed={elapsed:.1f}s")
+
+        _atomic_json(manifest_path, {"format": CACHE_FORMAT, "source": source_identity, "routes": entries})
+        run.update({"status": "DONE", "completed_at": _now(), "source": source_identity})
+        _atomic_json(report_path, run)
+        if not stale:
+            _log(f"CACHE HIT routes={','.join(requested)}")
+        else:
+            _log(f"DONE routes={','.join(requested)}")
+        return outputs
+    except BaseException as exc:
+        run.update({
+            "status": "ERROR",
+            "completed_at": _now(),
+            "source": source_identity,
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+        _atomic_json(report_path, run)
+        _log(f"ERROR {type(exc).__name__}: {exc}")
+        raise
 
 
 def main() -> None:
