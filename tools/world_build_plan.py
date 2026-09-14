@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-PLAN_VERSION = 3
+PLAN_VERSION = 4
 STATE_FILE = "build_state.json"
 TARGET_SOURCES: dict[str, tuple[str, ...]] = {
     "roads": ("highways",),
@@ -127,17 +127,18 @@ def target_fingerprint(tools_dir: Path, source_manifest: dict, target: str, sour
             return None
         if not _source_artifact_valid(source_cache_dir, route, entry):
             return None
+        route_source = entry.get("source_identity") if isinstance(entry.get("source_identity"), dict) else source
         dependencies[route] = {
             "version": entry.get("version"),
             "extractor_version": entry.get("extractor_version"),
             "file": entry.get("file"),
             "size_bytes": entry.get("size_bytes"),
             "sha256": entry.get("sha256"),
+            "source_identity": route_source,
         }
     payload = {
         "plan_version": PLAN_VERSION,
         "target": target,
-        "source": source,
         "dependencies": dependencies,
         "builder_sha256": _builder_digest(tools_dir, target),
     }
