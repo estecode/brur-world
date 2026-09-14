@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Compose selectively rebuildable Sweden world-data targets.
-
-Dataset builders keep their own semantics. This file only resolves source-cache
-dependencies, prints a plan, executes stale requested targets, and records the
-fingerprints used for directed invalidation.
-"""
+"""Compose selectively rebuildable Sweden world-data targets from source caches."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
-from build_background import build_background
+from build_background_sources import build_background_sources
 from build_building_mesh_pyramid import build_building_mesh_pyramid
 from build_city_light_density import build_city_light_density
 from build_features import build_buildings, build_pois
@@ -21,7 +17,7 @@ from build_roads import build_roads
 from build_routing_dataset import build_routing_dataset
 from build_search_binary import build_search_binary
 from build_search_index import build_search_index
-from build_traffic_signals import build_traffic_signals
+from build_traffic_signals_sources import build_traffic_signals_sources
 from osm_source_cache import CACHE_DIR_NAME, build_source_caches
 from world_build_plan import (
     make_plan,
@@ -34,14 +30,23 @@ from world_common import ensure_pbf
 
 SEPARATOR = "=" * 72
 TOOLS_DIR = Path(__file__).resolve().parent
+BUILD_REPORT = "last_build.json"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def _log(message: str) -> None:
+    print(f"[{_now()}] [sweden-build] {message}", flush=True)
 
 
 def _section(title: str, source: Path | None = None) -> None:
     print()
     print(SEPARATOR)
-    print(f"=== {title} ===")
+    _log(title)
     if source is not None:
-        print(f"source: {source}")
+        _log(f"source={source}")
     print(SEPARATOR)
 
 
@@ -55,10 +60,16 @@ def _load_json(path: Path) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _write_report(path: Path, report: dict) -> None:
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    temp.replace(path)
+
+
 def _print_plan(plan) -> None:
-    print("[plan] Sweden build")
+    _log("PLAN")
     for item in plan:
-        print(f"[plan] {item.target:<12} {item.status:<9} reason={item.reason}")
+        _log(f"PLAN target={item.target} status={item.status} reason={item.reason}")
 
 
 def _run_target(target: str, sources: dict[str, Path], output: Path) -> None:
@@ -67,14 +78,20 @@ def _run_target(target: str, sources: dict[str, Path], output: Path) -> None:
     elif target == "routing":
         build_routing_dataset(sources["highways"], output)
     elif target == "traffic":
-        build_traffic_signals(sources["traffic_signals"], output)
+        build_traffic_signals_sources(sources["traffic_signals"], sources["highways"], output)
     elif target == "background":
-        build_background(sources["areas"], output)
+        build_background_sources(
+            sources["background_areas"],
+            sources["coastlines"],
+            sources["admin_boundaries"],
+            output,
+        )
     elif target == "pois":
-        build_pois(sources["pois"], output, sources["areas"])
+        # The POI cache already contains node/way/relation POI source facts.
+        build_pois(sources["pois"], output, sources["pois"])
         build_city_light_density(output)
     elif target == "buildings":
-        build_buildings(sources["areas"], output)
+        build_buildings(sources["buildings"], output)
         # BMC2 is the canonical production building representation. Legacy
         # building_tiles are intentionally not rebuilt or shipped here.
         build_building_mesh_pyramid(output)
@@ -104,51 +121,101 @@ def main() -> None:
         parser.error(str(exc))
     routes = required_source_routes(targets)
     cache_dir = args.output / CACHE_DIR_NAME
-
+    report_path = args.output / BUILD_REPORT
     total_started = time.monotonic()
-    _section("PREPARE REQUIRED OSM SOURCE CACHES", args.pbf)
-    if args.plan:
-        # Planning never performs an expensive source traversal. Existing source
-        # artifacts are inspected fail-closed; missing/incompatible dependencies
-        # surface as BLOCKED in the target plan.
-        source_manifest = _load_json(cache_dir / "manifest.json")
-        sources = {route: cache_dir / ("areas.baf" if route == "areas" else f"{route}.osm") for route in routes}
-    else:
-        sources = build_source_caches(args.pbf, cache_dir, routes)
-        source_manifest = _load_json(cache_dir / "manifest.json")
+    report: dict[str, object] = {
+        "started_at": _now(),
+        "source": str(args.pbf),
+        "targets": list(targets),
+        "source_blocks": list(routes),
+        "status": "RUNNING",
+        "target_results": {},
+    }
+    _write_report(report_path, report)
 
-    plan = make_plan(TOOLS_DIR, args.output, source_manifest, targets, cache_dir)
-    _print_plan(plan)
-    if args.plan:
-        return
+    try:
+        _section("PREPARE REQUIRED OSM SOURCE CACHES", args.pbf)
+        if args.plan:
+            source_manifest = _load_json(cache_dir / "manifest.json")
+            sources = {route: cache_dir / f"{route}.osm.pbf" for route in routes}
+        else:
+            sources = build_source_caches(args.pbf, cache_dir, routes)
+            source_manifest = _load_json(cache_dir / "manifest.json")
 
-    summaries: list[tuple[str, str, float, int]] = []
-    for item in plan:
-        if item.target not in targets or item.status == "SKIP":
-            continue
-        if item.status == "BLOCKED" or item.fingerprint is None:
-            raise SystemExit(f"[{item.target}] BLOCKED: {item.reason}")
-        if item.status == "CACHE HIT":
-            summaries.append((item.target, "HIT", 0.0, target_output_bytes(args.output, item.target)))
-            continue
-        print(f"[{item.target}] START reason={item.reason}", flush=True)
-        started = time.monotonic()
-        try:
-            _run_target(item.target, sources, args.output)
-        except Exception as exc:
-            print(f"[{item.target}] ERROR {type(exc).__name__}: {exc}", flush=True)
-            raise
-        elapsed = time.monotonic() - started
-        record_target(args.output, item.target, item.fingerprint, elapsed)
-        size = target_output_bytes(args.output, item.target)
-        summaries.append((item.target, "REBUILT", elapsed, size))
-        print(f"[{item.target}] DONE elapsed={elapsed:.1f}s runtime-bytes={size:,}", flush=True)
+        plan = make_plan(TOOLS_DIR, args.output, source_manifest, targets, cache_dir)
+        _print_plan(plan)
+        report["plan"] = [
+            {"target": item.target, "status": item.status, "reason": item.reason, "fingerprint": item.fingerprint}
+            for item in plan
+        ]
+        report["source_cache_run"] = _load_json(cache_dir / "last_run.json")
+        _write_report(report_path, report)
+        if args.plan:
+            report.update({"status": "PLAN", "completed_at": _now()})
+            _write_report(report_path, report)
+            return
 
-    print()
-    for target, status, elapsed, size in summaries:
-        print(f"[summary] {target:<12} {status:<7} {elapsed:>8.1f}s {size:>14,} bytes")
-    print(f"[summary] total                 {time.monotonic() - total_started:>8.1f}s")
-    print(f"[summary] manifest={args.output / 'manifest.json'}")
+        summaries: list[tuple[str, str, float, int]] = []
+        target_results = report["target_results"]
+        assert isinstance(target_results, dict)
+        for item in plan:
+            if item.target not in targets or item.status == "SKIP":
+                continue
+            if item.status == "BLOCKED" or item.fingerprint is None:
+                raise RuntimeError(f"[{item.target}] BLOCKED: {item.reason}")
+            if item.status == "CACHE HIT":
+                size = target_output_bytes(args.output, item.target)
+                summaries.append((item.target, "HIT", 0.0, size))
+                target_results[item.target] = {"status": "CACHE HIT", "bytes": size}
+                _log(f"TARGET target={item.target} status=CACHE-HIT bytes={size:,}")
+                _write_report(report_path, report)
+                continue
+
+            _log(f"TARGET-START target={item.target} reason={item.reason}")
+            started = time.monotonic()
+            try:
+                _run_target(item.target, sources, args.output)
+            except Exception as exc:
+                target_results[item.target] = {
+                    "status": "ERROR",
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                _write_report(report_path, report)
+                _log(f"TARGET-ERROR target={item.target} error={type(exc).__name__}: {exc}")
+                raise
+            elapsed = time.monotonic() - started
+            record_target(args.output, item.target, item.fingerprint, elapsed)
+            size = target_output_bytes(args.output, item.target)
+            summaries.append((item.target, "REBUILT", elapsed, size))
+            target_results[item.target] = {
+                "status": "REBUILT",
+                "elapsed_seconds": round(elapsed, 3),
+                "bytes": size,
+                "fingerprint": item.fingerprint,
+            }
+            _write_report(report_path, report)
+            _log(f"TARGET-DONE target={item.target} elapsed={elapsed:.1f}s bytes={size:,}")
+
+        for target, status, elapsed, size in summaries:
+            _log(f"SUMMARY target={target} status={status} elapsed={elapsed:.1f}s bytes={size:,}")
+        report.update({
+            "status": "DONE",
+            "completed_at": _now(),
+            "elapsed_seconds": round(time.monotonic() - total_started, 3),
+        })
+        _write_report(report_path, report)
+        _log(f"DONE elapsed={time.monotonic() - total_started:.1f}s report={report_path}")
+    except Exception as exc:
+        report.update({
+            "status": "ERROR",
+            "completed_at": _now(),
+            "elapsed_seconds": round(time.monotonic() - total_started, 3),
+            "error": f"{type(exc).__name__}: {exc}",
+        })
+        _write_report(report_path, report)
+        _log(f"ERROR error={type(exc).__name__}: {exc} report={report_path}")
+        raise
 
 
 if __name__ == "__main__":
