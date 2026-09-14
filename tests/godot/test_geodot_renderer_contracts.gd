@@ -5,6 +5,7 @@ extends SceneTree
 
 const GeoDotWorldSourceScript = preload("res://scripts/geodot_world_source.gd")
 const GeoDotWorldMeshBuilderScript = preload("res://scripts/geodot_world_mesh_builder.gd")
+const GeoDotWorldRendererScript = preload("res://scripts/geodot_world_renderer.gd")
 
 var _failed := false
 
@@ -52,6 +53,7 @@ func _run() -> void:
 	_test_cell_ownership_is_unique()
 	_test_road_adapter()
 	_test_road_cell_clipping_is_seam_safe()
+	_test_stale_cell_eviction_prefers_replaced_outer_cell()
 	_test_far_building_lod_preserves_feature()
 	_test_road_mesh_batching()
 	if _failed:
@@ -140,6 +142,14 @@ func _test_road_cell_clipping_is_seam_safe() -> void:
 		_assert(right[0].x - left[1].x <= 0.0011, "cell clipping leaves no visually meaningful road gap")
 	var outside := GeoDotWorldMeshBuilderScript.clip_segment_to_cell(Vector2(0.0, 20.0), Vector2(20.0, 20.0), Vector2(0.0, 0.0), Vector2(10.0, 10.0))
 	_assert(outside.is_empty(), "road segment outside a cell emits no duplicate geometry")
+
+func _test_stale_cell_eviction_prefers_replaced_outer_cell() -> void:
+	var active := {"0:0": {}, "1:0": {}, "2:0": {}}
+	var desired := {"1:0": 1, "2:0": 1, "3:0": 1}
+	var stale := GeoDotWorldRendererScript.choose_stale_eviction_key(active, desired, "3:0")
+	_assert(stale == "0:0", "publishing a new desired cell evicts a stale outer cell rather than a still-desired cell")
+	var no_stale := GeoDotWorldRendererScript.choose_stale_eviction_key(active, {"0:0": 1, "1:0": 1, "2:0": 1}, "3:0")
+	_assert(no_stale.is_empty(), "resident bound never sacrifices a desired cell when no stale slot exists")
 
 func _test_far_building_lod_preserves_feature() -> void:
 	var record := {
