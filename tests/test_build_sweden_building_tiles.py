@@ -1,5 +1,4 @@
-"""Guard BMC2 production output, semantic cache composition and coastline truth."""
-
+"""Guard BMC2 production output, normalized cache composition and coastline truth."""
 from __future__ import annotations
 
 import sys
@@ -13,7 +12,7 @@ TOOLS = ROOT / "tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-from benchmark_issue_220 import (  # noqa: E402
+from benchmark_issue_220 import (
     BASELINE_FINALIZE_SECONDS,
     EXPECTED_HIGHWAY_NODES,
     EXPECTED_HIGHWAY_WAYS,
@@ -22,33 +21,33 @@ from benchmark_issue_220 import (  # noqa: E402
     MAX_COLD_SECONDS,
     MAX_WARM_SECONDS,
 )
-from build_background import WATER, background_class, solve_coastline_land  # noqa: E402
-from world_build_plan import parse_targets, required_source_routes  # noqa: E402
+from build_background import WATER, background_class, solve_coastline_land
+from world_build_plan import parse_targets, required_source_routes
 
 
 class Tests(unittest.TestCase):
-    def test_buildings_use_dedicated_cache_then_bmc2(self):
+    def test_buildings_use_shared_assembled_area_cache_then_bmc2(self):
         text = (TOOLS / "build_sweden.py").read_text(encoding="utf-8")
         run = text[text.index("def _run_target") : text.index("def main()")]
-        buildings = run.index('build_buildings(sources["buildings"], output)')
+        buildings = run.index('build_buildings(sources["areas"], output)')
         mesh = run.index("build_building_mesh_pyramid(output)")
         self.assertLess(buildings, mesh)
         self.assertNotIn("build_building_tiles", text)
-        self.assertIn("BMC2 is the canonical production building representation", text)
 
-    def test_pois_and_background_use_independent_cache_blocks(self):
+    def test_pois_and_background_share_finished_area_facts_without_reassembly(self):
         text = (TOOLS / "build_sweden.py").read_text(encoding="utf-8")
-        self.assertIn('build_pois(sources["pois"], output, sources["pois"])', text)
-        self.assertIn('sources["background_areas"]', text)
-        self.assertIn('sources["coastlines"]', text)
-        self.assertIn('sources["admin_boundaries"]', text)
-        self.assertNotIn('sources["areas"]', text)
+        self.assertIn('build_pois(sources["pois"], output, sources["areas"])', text)
+        self.assertIn('build_background_sources(sources["areas"], output)', text)
+        self.assertIn('build_buildings(sources["areas"], output)', text)
+        self.assertNotIn('sources["background_areas"]', text)
+        self.assertNotIn('sources["buildings"]', text)
 
     def test_target_dependency_closure_is_minimal(self):
         self.assertEqual(required_source_routes(parse_targets("routing")), ("highways",))
-        self.assertEqual(required_source_routes(parse_targets("buildings")), ("buildings",))
-        self.assertEqual(required_source_routes(parse_targets("pois")), ("pois",))
+        self.assertEqual(required_source_routes(parse_targets("buildings")), ("areas",))
+        self.assertEqual(required_source_routes(parse_targets("pois")), ("pois", "areas"))
         self.assertEqual(required_source_routes(parse_targets("traffic")), ("traffic_signals", "highways"))
+        self.assertEqual(required_source_routes(parse_targets("background")), ("areas",))
 
     def test_admin_boundary_is_not_land_truth(self):
         self.assertIsNone(background_class({"boundary": "administrative", "admin_level": "2"}))
@@ -73,4 +72,5 @@ class Tests(unittest.TestCase):
         self.assertEqual(MAX_WARM_SECONDS, 30.0)
 
 
-if __name__ == "__main__": unittest.main()
+if __name__ == "__main__":
+    unittest.main()
