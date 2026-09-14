@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Verifies the external Windows runtime resource pack exposes production world data at res://world_data.
+## Verifies the external Windows runtime resource pack exposes seekable production world data at res://world_data.
 ##
 ## Dependencies:
 ## - Starts from the exported game PCK, which must not contain world_data itself.
@@ -8,6 +8,11 @@ extends SceneTree
 
 const DELIVERY_MANIFEST := "windows_runtime_manifest.json"
 const WORLD_MANIFEST := "res://world_data/manifest.json"
+const RANDOM_ACCESS_FILES := [
+	"routing.brg",
+	"routing_snap.brs",
+	"routing_geometry.brh",
+]
 
 const REQUIRED_FILES := [
 	"manifest.json",
@@ -73,7 +78,8 @@ func _initialize() -> void:
 	if typeof(parsed) != TYPE_DICTIONARY:
 		_fail("invalid %s" % delivery_path)
 		return
-	var files_value: Variant = (parsed as Dictionary).get("files", [])
+	var delivery := parsed as Dictionary
+	var files_value: Variant = delivery.get("files", [])
 	if typeof(files_value) != TYPE_ARRAY:
 		_fail("invalid file list in %s" % delivery_path)
 		return
@@ -87,8 +93,46 @@ func _initialize() -> void:
 			_fail("selected runtime file missing from mounted pack: %s" % relative)
 			return
 
-	print("WINDOWS_PACK_DATA=OK files=%d" % files.size())
+	var storage_value: Variant = delivery.get("storage", {})
+	if typeof(storage_value) != TYPE_DICTIONARY:
+		_fail("missing storage policy in %s" % delivery_path)
+		return
+	var stored_value: Variant = (storage_value as Dictionary).get("stored_random_access", [])
+	if typeof(stored_value) != TYPE_ARRAY:
+		_fail("invalid stored_random_access policy")
+		return
+	var stored_files: Array = stored_value as Array
+	for name in RANDOM_ACCESS_FILES:
+		if not stored_files.has(name):
+			_fail("random-access file is not declared stored: %s" % name)
+			return
+		if not _probe_random_access("res://world_data/%s" % name):
+			return
+
+	print("WINDOWS_PACK_DATA=OK files=%d random_access=%d" % [files.size(), RANDOM_ACCESS_FILES.size()])
 	quit(0)
+
+func _probe_random_access(path: String) -> bool:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		_fail("could not open random-access file: %s" % path)
+		return false
+	var length := file.get_length()
+	if length <= 0:
+		_fail("random-access file is empty: %s" % path)
+		return false
+	var offsets := [0, length / 2, maxi(0, length - mini(16, length))]
+	for offset_value in offsets:
+		var offset := int(offset_value)
+		file.seek(offset)
+		if file.get_position() != offset:
+			_fail("seek failed for %s at %d" % [path, offset])
+			return false
+		var wanted := mini(16, length - offset)
+		if wanted > 0 and file.get_buffer(wanted).size() != wanted:
+			_fail("short random-access read for %s at %d" % [path, offset])
+			return false
+	return true
 
 func _fail(message: String) -> void:
 	push_error("WINDOWS_PACK_DATA=FAIL %s" % message)
