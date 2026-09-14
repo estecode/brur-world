@@ -119,7 +119,7 @@ func _refresh_desired(force: bool) -> void:
 				lod = GeoDotWorldMeshBuilderScript.LOD_FAR
 			candidates.append({"cell": cell, "lod": lod, "distance": distance_cells})
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["distance"]) < int(b["distance"]))
-	var limit := mini(max_resident_cells, candidates.size())
+	var limit := mini(maxi(1, max_resident_cells), candidates.size())
 	for index in range(limit):
 		var request: Dictionary = candidates[index]
 		var cell: Vector2i = request["cell"]
@@ -130,13 +130,10 @@ func _refresh_desired(force: bool) -> void:
 	if not changed:
 		return
 	_generation += 1
-	for key in _active.keys().duplicate():
-		if _desired.has(key):
-			continue
-		var node: Node = (_active[key] as Dictionary).get("node")
-		if node != null:
-			node.queue_free()
-		_active.erase(key)
+	# Keep stale outer cells visible until a replacement cell is fully queried and
+	# built. A stale cell is evicted only at publish time, one-for-one, so the
+	# presentation never exceeds max_resident_cells and a slow worker cannot open
+	# deterministic holes merely because the camera crossed a cell boundary.
 	for key in _desired.keys():
 		var wanted_lod := int(_desired[key])
 		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == wanted_lod:
@@ -233,17 +230,50 @@ func _publish_cell(request: Dictionary, result: Dictionary) -> void:
 		road_instance.position.y = 0.02
 		road_instance.material_override = _road_material
 		group.add_child(road_instance)
-	add_child(group)
+	if not _prepare_resident_slot(key):
+		group.free()
+		push_error("GeoDot resident bound prevented publishing desired cell %s" % key)
+		return
 	if _active.has(key):
-		var old: Node = (_active[key] as Dictionary).get("node")
-		if old != null:
-			old.queue_free()
+		_evict_active_key(key)
+	add_child(group)
 	_active[key] = {"node": group, "lod": lod, "buildings": int(result.get("building_features", 0)), "roads": int(result.get("road_features", 0))}
 	group.visible = true
 	var build_ms := float(Time.get_ticks_usec() - started) / 1000.0
 	_perf_build_ms += build_ms
 	_perf_build_max_ms = maxf(_perf_build_max_ms, build_ms)
 	_perf_publishes += 1
+
+func _prepare_resident_slot(publishing_key: String) -> bool:
+	if _active.has(publishing_key):
+		return true
+	var bound := maxi(1, max_resident_cells)
+	while _active.size() >= bound:
+		var stale_key := choose_stale_eviction_key(_active, _desired, publishing_key)
+		if stale_key.is_empty():
+			return false
+		_evict_active_key(stale_key)
+	return true
+
+static func choose_stale_eviction_key(active: Dictionary, desired: Dictionary, publishing_key: String) -> String:
+	var keys: Array = active.keys()
+	keys.sort()
+	for value in keys:
+		var key := String(value)
+		if key == publishing_key or desired.has(key):
+			continue
+		return key
+	return ""
+
+func _evict_active_key(key: String) -> void:
+	if not _active.has(key):
+		return
+	var node: Node = (_active[key] as Dictionary).get("node")
+	if node is Node3D:
+		(node as Node3D).visible = false
+	if node != null:
+		node.queue_free()
+	_active.erase(key)
 
 func _setup_materials() -> void:
 	_building_material = StandardMaterial3D.new()
@@ -264,12 +294,20 @@ func _clear_active() -> void:
 			node.queue_free()
 	_active.clear()
 
+func _stale_active_count() -> int:
+	var count := 0
+	for key in _active.keys():
+		if not _desired.has(key):
+			count += 1
+	return count
+
 func debug_snapshot() -> Dictionary:
 	return {
 		"enabled": _enabled,
 		"ready": _ready,
 		"active_cells": _active.size(),
 		"desired_cells": _desired.size(),
+		"stale_cells": _stale_active_count(),
 		"pending_cells": _queue.size() + (1 if _query_thread != null else 0),
 		"max_resident_cells": max_resident_cells,
 		"max_pending_cells": max_pending_cells,
@@ -287,6 +325,7 @@ func consume_perf_metrics() -> Dictionary:
 		"geodot_building_features": _perf_building_features,
 		"geodot_road_features": _perf_road_features,
 		"geodot_active_cells": _active.size(),
+		"geodot_stale_cells": _stale_active_count(),
 		"geodot_pending_cells": _queue.size() + (1 if _query_thread != null else 0),
 	}
 	_perf_query_ms = 0.0
