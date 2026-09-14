@@ -1,113 +1,56 @@
 #!/usr/bin/env python3
-"""Build reusable OSM route caches without a full-Sweden Python spool.
+"""Build independently rebuildable OSM source-cache blocks with pyrosm.
 
-Fast routes are written directly to route-local staging. The source reader keeps
-node-location enrichment inside libosmium and pre-filters tagless objects before
-crossing the Python boundary. Assembled areas use libosmium's area engine and a
-separate streamed BAF cache.
+The authoritative Sweden PBF is touched only when a requested block is missing,
+stale or incompatible. Downstream BRUR builders always consume these caches.
 """
 
 from __future__ import annotations
 
 import argparse
-from collections import OrderedDict
+import hashlib
+import importlib.util
 import json
-import math
 import os
 import shutil
-import struct
+import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import BinaryIO, Iterable, Iterator, TextIO
-from xml.sax.saxutils import quoteattr
+from typing import Iterable
 
-import osmium
-
-from area_source_cache import area_source_cache_valid, build_area_source_cache
 from source_identity import compute_source_identity
 from world_common import ensure_pbf
 
-CACHE_FORMAT = "BOSC2"
+CACHE_FORMAT = "BOSC3-PYROSM"
 CACHE_DIR_NAME = "osm_source_cache"
-SPOOL_DIR_NAME = "resume-spool"
-SPOOL_MARKER_NAME = "complete.json"
+EXTRACTOR_VERSION = 1
+HEARTBEAT_SECONDS = 10.0
 ROUTE_VERSIONS = {
-    "highways": 2,
-    "traffic_signals": 2,
-    "pois": 2,
-    "addresses": 2,
-    "areas": 2,
+    "highways": 3,
+    "buildings": 1,
+    "pois": 3,
+    "addresses": 3,
+    "traffic_signals": 3,
+    "background_areas": 1,
+    "coastlines": 1,
+    "admin_boundaries": 1,
 }
 ALL_ROUTES = tuple(ROUTE_VERSIONS)
-NODE_PROGRESS_INTERVAL = 5_000_000
-WAY_PROGRESS_INTERVAL = 250_000
-RELATION_PROGRESS_INTERVAL = 50_000
-NODE_BUCKETS = 64
-MAX_OPEN_NODE_BUCKETS = 8
-NODE_RECORD = struct.Struct("<qdd")
-
-POI_KEYS = {
-    "amenity", "shop", "tourism", "leisure", "office", "healthcare", "emergency",
-    "public_transport", "railway", "aeroway", "craft", "historic", "sport", "club",
-    "man_made", "information", "advertising",
-}
-SPECIAL_HIGHWAY_POIS = {"speed_camera", "services", "rest_area", "bus_stop", "elevator"}
+TOOLS_DIR = Path(__file__).resolve().parent
+EXTRACTOR = TOOLS_DIR / "pyrosm_extract.py"
 
 
-def _tags_dict(tags: osmium.osm.TagList) -> dict[str, str]:
-    return {str(tag.k): str(tag.v) for tag in tags}
+def _now() -> str:
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
-def _is_poi(tags: dict[str, str]) -> bool:
-    if any(key in tags for key in POI_KEYS):
-        return True
-    if tags.get("highway") in SPECIAL_HIGHWAY_POIS:
-        return True
-    if "enforcement" in tags or "surveillance" in tags:
-        return True
-    return any(key.startswith("camera:") for key in tags)
+def _log(message: str) -> None:
+    print(f"[{_now()}] [osm-source] {message}", flush=True)
 
 
-def _is_address(tags: dict[str, str]) -> bool:
-    return bool(tags.get("addr:housenumber") and (tags.get("addr:street") or tags.get("addr:place")))
-
-
-def _source_matches(manifest: dict, source_identity: dict[str, object]) -> bool:
-    source = manifest.get("source")
-    return isinstance(source, dict) and source == source_identity
-
-
-def _route_filename(route: str) -> str:
-    return "areas.baf" if route == "areas" else f"{route}.osm"
-
-
-def _route_cache_valid(cache_dir: Path, manifest: dict, route: str) -> bool:
-    routes = manifest.get("routes")
-    if not isinstance(routes, dict):
-        return False
-    entry = routes.get(route)
-    if not isinstance(entry, dict):
-        return False
-    if entry.get("version") != ROUTE_VERSIONS[route] or entry.get("complete") is not True:
-        return False
-    filename = entry.get("file")
-    if filename != _route_filename(route):
-        return False
-    path = cache_dir / filename
-    if route == "areas":
-        return area_source_cache_valid(path)
-    if not path.is_file() or path.stat().st_size < 32:
-        return False
-    try:
-        with path.open("rb") as handle:
-            handle.seek(max(0, path.stat().st_size - 128))
-            return b"</osm>" in handle.read()
-    except OSError:
-        return False
-
-
-def _load_manifest(path: Path) -> dict:
+def _load_json(path: Path) -> dict:
     if not path.is_file():
         return {}
     try:
@@ -118,315 +61,145 @@ def _load_manifest(path: Path) -> dict:
 
 
 def _atomic_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + f".tmp-{os.getpid()}")
     temp.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
     temp.replace(path)
 
 
-def _node_record_iter(path: Path) -> Iterator[tuple[int, float, float]]:
-    if not path.is_file():
-        return
+def _route_filename(route: str) -> str:
+    return f"{route}.osm.pbf"
+
+
+def _artifact_metadata(path: Path) -> dict[str, int]:
+    stat = path.stat()
+    return {
+        "device": int(getattr(stat, "st_dev", 0)),
+        "inode": int(getattr(stat, "st_ino", 0)),
+        "size_bytes": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+        "ctime_ns": int(getattr(stat, "st_ctime_ns", 0)),
+    }
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        while raw := handle.read(NODE_RECORD.size):
-            if len(raw) != NODE_RECORD.size:
-                raise ValueError(f"Corrupt compact node staging record: {path}")
-            node_id, lon, lat = NODE_RECORD.unpack(raw)
-            yield int(node_id), float(lon), float(lat)
+        for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def _tagged_node_iter(path: Path) -> Iterator[tuple[int, float, float, dict[str, str]]]:
-    if not path.is_file():
-        return
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, 1):
-            if not line.strip():
-                continue
+def _source_matches(manifest: dict, source_identity: dict[str, object]) -> bool:
+    source = manifest.get("source")
+    return isinstance(source, dict) and source == source_identity
+
+
+def _validate_route_entry(cache_dir: Path, route: str, entry: object) -> tuple[bool, dict | None]:
+    if not isinstance(entry, dict):
+        return False, None
+    if entry.get("version") != ROUTE_VERSIONS[route] or entry.get("complete") is not True:
+        return False, None
+    if entry.get("extractor_version") != EXTRACTOR_VERSION:
+        return False, None
+    if entry.get("file") != _route_filename(route):
+        return False, None
+    checksum = entry.get("sha256")
+    if not isinstance(checksum, str) or len(checksum) != 64:
+        return False, None
+    path = cache_dir / _route_filename(route)
+    if not path.is_file() or path.stat().st_size <= 0:
+        return False, None
+    expected_size = entry.get("size_bytes")
+    if not isinstance(expected_size, int) or expected_size != path.stat().st_size:
+        return False, None
+
+    metadata = _artifact_metadata(path)
+    if entry.get("artifact_metadata") == metadata:
+        return True, dict(entry)
+
+    # Strong artifact metadata changed. Fail closed by verifying the exact file
+    # checksum once, then refresh the shortcut metadata for later warm runs.
+    _log(f"VERIFY route={route} reason=artifact-metadata-changed bytes={path.stat().st_size:,}")
+    if _sha256(path) != checksum:
+        return False, None
+    refreshed = dict(entry)
+    refreshed["artifact_metadata"] = metadata
+    return True, refreshed
+
+
+def _pyrosm_command() -> list[str]:
+    override = os.environ.get("BRUR_PYROSM_PYTHON", "").strip()
+    if override:
+        return [override, str(EXTRACTOR)]
+    if importlib.util.find_spec("pyrosm") is not None:
+        return [sys.executable, str(EXTRACTOR)]
+    micromamba = shutil.which("micromamba")
+    if micromamba:
+        env_name = os.environ.get("BRUR_PYROSM_ENV", "brur-pyrosm")
+        return [micromamba, "run", "-n", env_name, "python", str(EXTRACTOR)]
+    raise SystemExit(
+        "pyrosm is not available in this Python and micromamba was not found. "
+        "Install pyrosm>=0.13.1 or create `brur-pyrosm` with conda-forge."
+    )
+
+
+def _run_extractor(source: Path, cache_dir: Path, route: str) -> dict:
+    destination = cache_dir / _route_filename(route)
+    report_path = cache_dir / f".extract-{route}-{os.getpid()}-{time.time_ns()}.json"
+    command = _pyrosm_command() + [
+        str(source), "--domain", route, "--output", str(destination), "--report", str(report_path),
+    ]
+    _log(f"START route={route} source={source.name} output={destination.name}")
+    started = time.monotonic()
+    process = subprocess.Popen(command)
+    try:
+        while True:
             try:
-                node_id, lon, lat, tags = json.loads(line)
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                raise ValueError(f"Corrupt tagged-node staging record {path}:{line_number}") from exc
-            if not isinstance(tags, dict):
-                raise ValueError(f"Corrupt tagged-node tags {path}:{line_number}")
-            yield int(node_id), float(lon), float(lat), {str(k): str(v) for k, v in tags.items()}
-
-
-def _valid_location(node: osmium.osm.NodeRef) -> tuple[float, float] | None:
-    if not node.location.valid():
-        return None
-    return float(node.lon), float(node.lat)
-
-
-def _way_record(way: osmium.osm.Way, tags: dict[str, str]) -> tuple[int, list[tuple[int, float, float]], dict[str, str]]:
-    nodes: list[tuple[int, float, float]] = []
-    for ref in way.nodes:
-        location = _valid_location(ref)
-        if location is None:
-            nodes.append((int(ref.ref), math.nan, math.nan))
-        else:
-            nodes.append((int(ref.ref), location[0], location[1]))
-    return int(way.id), nodes, tags
-
-
-def _progress_count(current: int, total: int | None) -> str:
-    if isinstance(total, int) and total >= current and total > 0:
-        return f"{current:,} / {total:,}"
-    return f"{current:,}"
-
-
-class _ProgressDisplay:
-    def __init__(
-        self,
-        source: Path,
-        source_identity: dict[str, object],
-        routes: Iterable[str],
-        known_totals: dict[str, int],
-        stream: TextIO | None = None,
-    ) -> None:
-        self.source = source
-        self.digest = str(source_identity.get("digest", "unknown"))
-        self.routes = tuple(sorted(routes))
-        self.route_counts = {route: 0 for route in self.routes}
-        self.total_items = sum(known_totals.values()) if len(known_totals) == 3 else None
-        self.stream = stream if stream is not None else sys.stdout
-        self.tty = bool(getattr(self.stream, "isatty", lambda: False)())
-        self._rendered_lines = 0
-
-    def hit(self, route: str, count: int = 1) -> None:
-        if route in self.route_counts:
-            self.route_counts[route] += count
-
-    def render(self, counts: dict[str, int], elapsed: float) -> None:
-        visible = sum(counts.values())
-        rate = visible / max(0.001, elapsed)
-        scan_text = f"{visible:,} tagged objects"
-        if not self.tty:
-            routes = ", ".join(f"{route}={self.route_counts[route]:,}" for route in self.routes)
-            print(f"[osm-source] python-visible: {scan_text} | {rate:,.0f}/s | routes: {routes}", file=self.stream, flush=True)
-            return
-        lines = [
-            "[osm-source] native-prefiltered route fan-out",
-            f"source: {self.source.name}",
-            f"sha256: {self.digest}",
-            f"python-visible: {scan_text} | {rate:,.0f}/s",
-            "",
-            "routes (matched source items):",
-        ]
-        lines.extend(f"  {route:<16} {self.route_counts[route]:>12,}" for route in self.routes)
-        if self._rendered_lines:
-            self.stream.write(f"\x1b[{self._rendered_lines}A")
-        for line in lines:
-            self.stream.write(f"\x1b[2K{line}\n")
-        self.stream.flush()
-        self._rendered_lines = len(lines)
-
-
-class _RouteWriter:
-    def __init__(self, route: str, work_dir: Path, destination: Path) -> None:
-        self.route = route
-        self.work_dir = work_dir / f"route-{route}"
-        self.work_dir.mkdir(parents=True, exist_ok=True)
-        self.destination = destination
-        self.ways_path = self.work_dir / "ways.xml"
-        self.ways_file: TextIO = self.ways_path.open("w", encoding="utf-8")
-        self.bucket_handles: OrderedDict[int, BinaryIO] = OrderedDict()
-        self.tagged_bucket_handles: OrderedDict[int, TextIO] = OrderedDict()
-        self.counts = {"nodes": 0, "ways": 0, "relations": 0}
-
-    def _open_binary_bucket(self, bucket: int) -> BinaryIO:
-        handle = self.bucket_handles.get(bucket)
-        if handle is not None:
-            self.bucket_handles.move_to_end(bucket)
-            return handle
-        if len(self.bucket_handles) >= MAX_OPEN_NODE_BUCKETS:
-            _, old = self.bucket_handles.popitem(last=False)
-            old.close()
-        handle = (self.work_dir / f"nodes-{bucket:02d}.bin").open("ab")
-        self.bucket_handles[bucket] = handle
-        return handle
-
-    def _open_tagged_bucket(self, bucket: int) -> TextIO:
-        handle = self.tagged_bucket_handles.get(bucket)
-        if handle is not None:
-            self.tagged_bucket_handles.move_to_end(bucket)
-            return handle
-        if len(self.tagged_bucket_handles) >= MAX_OPEN_NODE_BUCKETS:
-            _, old = self.tagged_bucket_handles.popitem(last=False)
-            old.close()
-        handle = (self.work_dir / f"nodes-{bucket:02d}.tags.jsonl").open("a", encoding="utf-8")
-        self.tagged_bucket_handles[bucket] = handle
-        return handle
-
-    def add_node(self, node_id: int, lon: float, lat: float, tags: dict[str, str] | None = None) -> None:
-        if not math.isfinite(lon) or not math.isfinite(lat):
-            return
-        bucket = node_id % NODE_BUCKETS
-        node_tags = tags or {}
-        if node_tags:
-            self._open_tagged_bucket(bucket).write(
-                json.dumps([node_id, lon, lat, node_tags], ensure_ascii=False, separators=(",", ":")) + "\n"
-            )
-        else:
-            self._open_binary_bucket(bucket).write(NODE_RECORD.pack(node_id, lon, lat))
-
-    def add_way(self, record: tuple[int, list[tuple[int, float, float]], dict[str, str]]) -> None:
-        way_id, nodes, tags = record
-        for node_id, lon, lat in nodes:
-            self.add_node(node_id, lon, lat)
-        self.ways_file.write(f"  <way id={quoteattr(str(way_id))}>\n")
-        for node_id, _lon, _lat in nodes:
-            self.ways_file.write(f"    <nd ref={quoteattr(str(node_id))}/>\n")
-        _write_tags(self.ways_file, tags, "    ")
-        self.ways_file.write("  </way>\n")
-        self.counts["ways"] += 1
-
-    def close_inputs(self) -> None:
-        if not self.ways_file.closed:
-            self.ways_file.close()
-        for handles in (self.bucket_handles, self.tagged_bucket_handles):
-            for handle in handles.values():
-                handle.close()
-            handles.clear()
-
-    def publish(self) -> dict[str, int]:
-        self.close_inputs()
-        temp = self.destination.with_suffix(self.destination.suffix + f".tmp-{os.getpid()}")
-        with temp.open("w", encoding="utf-8") as output:
-            output.write('<?xml version="1.0" encoding="UTF-8"?>\n')
-            output.write('<osm version="0.6" generator="brur-world-osm-source-cache">\n')
-            for bucket in range(NODE_BUCKETS):
-                compact_path = self.work_dir / f"nodes-{bucket:02d}.bin"
-                tagged_path = self.work_dir / f"nodes-{bucket:02d}.tags.jsonl"
-                if not compact_path.is_file() and not tagged_path.is_file():
-                    continue
-                unique: dict[int, tuple[float, float, dict[str, str]]] = {}
-                for node_id, lon, lat in _node_record_iter(compact_path):
-                    if node_id not in unique:
-                        unique[node_id] = (lon, lat, {})
-                for node_id, lon, lat, tags in _tagged_node_iter(tagged_path):
-                    unique[node_id] = (lon, lat, tags)
-                for node_id in sorted(unique):
-                    lon, lat, tags = unique[node_id]
-                    output.write(f"  <node id={quoteattr(str(node_id))} lon={quoteattr(repr(lon))} lat={quoteattr(repr(lat))}")
-                    if not tags:
-                        output.write("/>\n")
-                    else:
-                        output.write(">\n")
-                        _write_tags(output, tags, "    ")
-                        output.write("  </node>\n")
-                    self.counts["nodes"] += 1
-            with self.ways_path.open("r", encoding="utf-8") as ways:
-                shutil.copyfileobj(ways, output)
-            output.write("</osm>\n")
-        temp.replace(self.destination)
-        return dict(self.counts)
-
-
-class SourceCacheHandler(osmium.SimpleHandler):
-    """Route tagged nodes/ways after libosmium-native pre-filtering."""
-
-    def __init__(
-        self,
-        work_dir: Path,
-        stale_routes: set[str],
-        known_totals: dict[str, int],
-        progress: _ProgressDisplay | None = None,
-        writers: dict[str, _RouteWriter] | None = None,
-    ) -> None:
-        super().__init__()
-        self.work_dir = work_dir
-        self.stale_routes = set(stale_routes) - {"areas"}
-        self.known_totals = known_totals
-        self.progress = progress
-        self.counts = {"nodes": 0, "ways": 0, "relations": 0}
-        self.started = time.perf_counter()
-        self.signal_ids: set[int] = set()
-        self.writers = writers or {}
-
-    def apply_file(self, filename: str, *args, **kwargs) -> None:
-        """Read with native location enrichment and drop tagless objects pre-Python.
-
-        ``with_locations()`` must run before the filters so the C++ location cache
-        still sees every node. ``EmptyTagFilter`` then prevents the overwhelmingly
-        common tagless nodes from becoming Python objects. EntityFilter removes
-        relations because fast routes only consume nodes and ways.
-        """
-        processor = (
-            osmium.FileProcessor(filename)
-            .with_locations()
-            .with_filter(osmium.filter.EmptyTagFilter())
-            .with_filter(osmium.filter.EntityFilter(osmium.osm.NODE | osmium.osm.WAY))
+                code = process.wait(timeout=HEARTBEAT_SECONDS)
+                break
+            except subprocess.TimeoutExpired:
+                _log(f"PROGRESS route={route} status=pyrosm-running elapsed={time.monotonic() - started:.1f}s")
+        if code != 0:
+            raise RuntimeError(f"pyrosm extractor failed for {route} with exit code {code}")
+        report = _load_json(report_path)
+        if report.get("domain") != route or not destination.is_file():
+            raise RuntimeError(f"pyrosm extractor produced incomplete report/output for {route}")
+        _log(
+            f"DONE route={route} records={int(report.get('records', 0)):,} "
+            f"bytes={destination.stat().st_size:,} sha256={str(report.get('sha256', ''))[:12]}... "
+            f"elapsed={time.monotonic() - started:.1f}s"
         )
-        for obj in processor:
-            if isinstance(obj, osmium.osm.Node):
-                self.node(obj)
-            elif isinstance(obj, osmium.osm.Way):
-                self.way(obj)
-
-    def close(self) -> None:
-        for writer in self.writers.values():
-            writer.close_inputs()
-
-    def _hit(self, route: str) -> None:
-        if self.progress is not None:
-            self.progress.hit(route)
-
-    def _print_progress(self, kind: str, interval: int) -> None:
-        current = self.counts[kind]
-        if current == 0 or current % interval != 0:
-            return
-        elapsed = max(0.001, time.perf_counter() - self.started)
-        if self.progress is not None:
-            self.progress.render(self.counts, elapsed)
-        else:
-            print(f"[osm-source] {kind}: {_progress_count(current, self.known_totals.get(kind))} | {current / elapsed:,.0f}/s", flush=True)
-
-    def node(self, node: osmium.osm.Node) -> None:
-        self.counts["nodes"] += 1
-        if node.location.valid():
-            tags = _tags_dict(node.tags)
-            node_id = int(node.id)
-            lon, lat = float(node.lon), float(node.lat)
-            if "traffic_signals" in self.stale_routes and tags.get("highway") == "traffic_signals":
-                self.signal_ids.add(node_id)
-                self.writers["traffic_signals"].add_node(node_id, lon, lat, tags)
-                self._hit("traffic_signals")
-            if "pois" in self.stale_routes and _is_poi(tags):
-                self.writers["pois"].add_node(node_id, lon, lat, tags)
-                self._hit("pois")
-            if "addresses" in self.stale_routes and _is_address(tags):
-                self.writers["addresses"].add_node(node_id, lon, lat, tags)
-                self._hit("addresses")
-        self._print_progress("nodes", NODE_PROGRESS_INTERVAL)
-
-    def way(self, way: osmium.osm.Way) -> None:
-        self.counts["ways"] += 1
-        tags = _tags_dict(way.tags)
-        is_highway = bool(tags.get("highway"))
-        is_signal_way = is_highway and any(int(ref.ref) in self.signal_ids for ref in way.nodes)
-        selected: list[str] = []
-        if "highways" in self.stale_routes and is_highway:
-            selected.append("highways")
-        if "traffic_signals" in self.stale_routes and is_signal_way:
-            selected.append("traffic_signals")
-        if "pois" in self.stale_routes and _is_poi(tags):
-            selected.append("pois")
-        if "addresses" in self.stale_routes and _is_address(tags):
-            selected.append("addresses")
-        if selected:
-            record = _way_record(way, tags)
-            for route in selected:
-                self.writers[route].add_way(record)
-                self._hit(route)
-        self._print_progress("ways", WAY_PROGRESS_INTERVAL)
-
-    def relation(self, relation: osmium.osm.Relation) -> None:
-        self.counts["relations"] += 1
-        self._print_progress("relations", RELATION_PROGRESS_INTERVAL)
+        return report
+    finally:
+        try:
+            report_path.unlink()
+        except OSError:
+            pass
 
 
-def _write_tags(output: TextIO, tags: dict[str, str], indent: str) -> None:
-    for key in sorted(tags):
-        output.write(f"{indent}<tag k={quoteattr(str(key))} v={quoteattr(str(tags[key]))}/>\n")
+def _entry_from_report(route: str, report: dict, path: Path) -> dict:
+    checksum = report.get("sha256")
+    if not isinstance(checksum, str) or len(checksum) != 64:
+        raise RuntimeError(f"missing exact cache checksum for {route}")
+    return {
+        "version": ROUTE_VERSIONS[route],
+        "extractor_version": EXTRACTOR_VERSION,
+        "extractor": "pyrosm",
+        "pyrosm_version": report.get("pyrosm_version"),
+        "complete": True,
+        "file": _route_filename(route),
+        "records": int(report.get("records", 0)),
+        "counts": report.get("counts", {}),
+        "size_bytes": int(path.stat().st_size),
+        "sha256": checksum,
+        "artifact_metadata": _artifact_metadata(path),
+        "extract_seconds": report.get("extract_seconds"),
+        "write_seconds": report.get("write_seconds"),
+        "checksum_seconds": report.get("checksum_seconds"),
+        "elapsed_seconds": report.get("elapsed_seconds"),
+        "peak_rss_bytes": report.get("peak_rss_bytes"),
+    }
 
 
 def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = ALL_ROUTES) -> dict[str, Path]:
@@ -437,75 +210,106 @@ def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = A
         raise ValueError(f"Unknown OSM source cache route(s): {', '.join(unknown)}")
     cache_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = cache_dir / "manifest.json"
+    run_report_path = cache_dir / "last_run.json"
+
+    run_report: dict[str, object] = {
+        "format": CACHE_FORMAT,
+        "started_at": _now(),
+        "requested": list(requested),
+        "blocks": {},
+        "status": "RUNNING",
+    }
+    _atomic_json(run_report_path, run_report)
 
     identity_started = time.monotonic()
     source_identity = compute_source_identity(source, cache_dir / "source_identity.json")
     identity_elapsed = time.monotonic() - identity_started
-    manifest = _load_manifest(manifest_path)
+    manifest = _load_json(manifest_path)
     same_source = _source_matches(manifest, source_identity)
-    stale = {route for route in requested if not same_source or not _route_cache_valid(cache_dir, manifest, route)}
-    outputs = {route: cache_dir / _route_filename(route) for route in requested}
-
-    if not stale:
-        print(f"[osm-source] CACHE HIT routes={','.join(requested)} identity={identity_elapsed:.3f}s sha256={str(source_identity['digest'])[:12]}...", flush=True)
-        return outputs
+    old_routes = manifest.get("routes", {}) if same_source and isinstance(manifest.get("routes"), dict) else {}
+    route_entries: dict[str, dict] = {}
+    stale: set[str] = set()
 
     for route in requested:
-        status = "REBUILD" if route in stale else "CACHE HIT"
-        reason = "source/format/missing" if route in stale else "compatible"
-        print(f"[plan] {route:<16} {status:<9} reason={reason}", flush=True)
+        valid, refreshed = _validate_route_entry(cache_dir, route, old_routes.get(route)) if same_source else (False, None)
+        if valid and refreshed is not None:
+            route_entries[route] = refreshed
+        else:
+            stale.add(route)
+    if same_source:
+        for route, entry in old_routes.items():
+            if route not in requested and route in ROUTE_VERSIONS and isinstance(entry, dict):
+                valid, refreshed = _validate_route_entry(cache_dir, route, entry)
+                if valid and refreshed is not None:
+                    route_entries[route] = refreshed
 
-    work_dir = cache_dir / f".direct-build-{os.getpid()}-{time.time_ns()}"
-    fast_stale = set(stale) - {"areas"}
-    scan_counts: dict[str, int] | None = None
-    route_entries = dict(manifest.get("routes", {})) if same_source and isinstance(manifest.get("routes"), dict) else {}
+    outputs = {route: cache_dir / _route_filename(route) for route in requested}
+    _log(
+        f"PLAN routes={','.join(requested)} source-sha256={str(source_identity['digest'])[:12]}... "
+        f"identity={identity_elapsed:.3f}s"
+    )
+    blocks = run_report["blocks"]
+    assert isinstance(blocks, dict)
+    for route in requested:
+        if route in stale:
+            _log(f"PLAN route={route} status=REBUILD reason=missing/stale/incompatible")
+            blocks[route] = {"status": "REBUILD", "started_at": None}
+        else:
+            checksum = str(route_entries[route].get("sha256", ""))
+            _log(f"PLAN route={route} status=CACHE-HIT checksum={checksum[:12]}...")
+            blocks[route] = {"status": "CACHE HIT", "sha256": checksum, "bytes": route_entries[route].get("size_bytes")}
+    _atomic_json(run_report_path, run_report)
+
+    if not stale:
+        run_report.update({"status": "DONE", "completed_at": _now(), "source": source_identity})
+        _atomic_json(run_report_path, run_report)
+        # Refresh strong artifact metadata if it was verified above.
+        _atomic_json(manifest_path, {"format": CACHE_FORMAT, "source": source_identity, "routes": route_entries})
+        _log(f"CACHE HIT routes={','.join(requested)}")
+        return outputs
+
     try:
-        if fast_stale:
-            work_dir.mkdir(parents=True, exist_ok=False)
-            writers = {route: _RouteWriter(route, work_dir, cache_dir / _route_filename(route)) for route in sorted(fast_stale)}
-            progress = _ProgressDisplay(source, source_identity, fast_stale, {})
-            handler = SourceCacheHandler(work_dir, fast_stale, {}, progress, writers)
-            print(f"[osm-source] START native-prefiltered routes={','.join(sorted(fast_stale))}", flush=True)
+        for route in requested:
+            if route not in stale:
+                continue
+            block = blocks[route]
+            assert isinstance(block, dict)
+            block["started_at"] = _now()
+            _atomic_json(run_report_path, run_report)
             started = time.monotonic()
             try:
-                handler.apply_file(str(source), locations=True)
-                elapsed_scan = time.monotonic() - started
-                progress.render(handler.counts, max(0.001, elapsed_scan))
-                scan_counts = dict(handler.counts)
-                for route in sorted(fast_stale):
-                    publish_started = time.monotonic()
-                    counts = writers[route].publish()
-                    route_entries[route] = {
-                        "version": ROUTE_VERSIONS[route],
-                        "complete": True,
-                        "file": _route_filename(route),
-                        "counts": counts,
-                        "size_bytes": (cache_dir / _route_filename(route)).stat().st_size,
-                    }
-                    print(f"[osm-source] DONE route={route} ways={counts['ways']:,} nodes={counts['nodes']:,} bytes={route_entries[route]['size_bytes']:,} elapsed={time.monotonic() - publish_started:.1f}s", flush=True)
-            finally:
-                handler.close()
+                report = _run_extractor(source, cache_dir, route)
+                entry = _entry_from_report(route, report, outputs[route])
+                route_entries[route] = entry
+                block.update({
+                    "status": "DONE",
+                    "completed_at": _now(),
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "records": entry["records"],
+                    "bytes": entry["size_bytes"],
+                    "sha256": entry["sha256"],
+                    "peak_rss_bytes": entry.get("peak_rss_bytes"),
+                })
+                # Publish each completed block independently so a later failure
+                # never discards useful completed work.
+                _atomic_json(manifest_path, {
+                    "format": CACHE_FORMAT,
+                    "source": source_identity,
+                    "routes": route_entries,
+                })
+                _atomic_json(run_report_path, run_report)
+            except Exception as exc:
+                block.update({"status": "ERROR", "completed_at": _now(), "error": f"{type(exc).__name__}: {exc}"})
+                run_report.update({"status": "ERROR", "completed_at": _now(), "source": source_identity})
+                _atomic_json(run_report_path, run_report)
+                _log(f"ERROR route={route} error={type(exc).__name__}: {exc}")
+                raise
+    except Exception:
+        raise
 
-        if "areas" in stale:
-            report = build_area_source_cache(source, cache_dir / _route_filename("areas"))
-            route_entries["areas"] = {
-                "version": ROUTE_VERSIONS["areas"],
-                "complete": True,
-                "file": _route_filename("areas"),
-                "records": int(report["records"]),
-                "size_bytes": int(report["bytes"]),
-            }
-
-        new_manifest = {"format": CACHE_FORMAT, "source": source_identity, "routes": route_entries}
-        if scan_counts is not None:
-            new_manifest["source_scan"] = scan_counts
-        elif same_source and isinstance(manifest.get("source_scan"), dict):
-            new_manifest["source_scan"] = manifest["source_scan"]
-        _atomic_json(manifest_path, new_manifest)
-    finally:
-        if work_dir.exists():
-            shutil.rmtree(work_dir, ignore_errors=True)
-
+    run_report.update({"status": "DONE", "completed_at": _now(), "source": source_identity})
+    _atomic_json(run_report_path, run_report)
+    _log(f"DONE routes={','.join(requested)}")
     return outputs
 
 
