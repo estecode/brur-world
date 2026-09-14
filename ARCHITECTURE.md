@@ -473,3 +473,53 @@ Before architectural or cross-module changes, read this file.
 New code must preserve these dependency rules. If an issue appears to conflict with this document, prefer the smallest change that satisfies the issue while preserving the architecture, and make the conflict explicit rather than silently introducing a new dependency direction.
 
 `ARCHITECTURE.md` is the canonical architecture contract. GitHub issue #45 tracks the incremental work needed to reach and preserve it, while issue #50 tracks the harness convention and first subsystem harnesses.
+
+---
+
+## 16. Portable simulation by default
+
+For population, traffic, pedestrians, gameplay physics policy and similar runtime systems, keep domain state, rules and decision logic portable whenever they do not intrinsically require Godot.
+
+Use this question at subsystem boundaries:
+
+> **Could this logic run without Godot?**
+
+If yes, it should normally live in core/domain state or policy and receive explicit data through a small API. Godot should primarily provide composition, engine adapters, collision-world integration and presentation.
+
+This rule does not require speculative abstraction. Use the smallest explicit portable boundary that solves the current issue.
+
+---
+
+## 17. Simulation truth vs. presentation fidelity
+
+World entities have one logical identity/state. Map, Drive, simulation LOD and presentation LOD must not create competing copies of world truth.
+
+Simulation fidelity may range from aggregate/virtual state to lightweight individual state to detailed nearby actors and gameplay-pinned actors. Presentation fidelity may independently range from full 3D to proxy/marker/aggregation.
+
+Changing either fidelity level must preserve the facts that matter to continuity and gameplay. Performance degradation may reduce update rate, visual detail or distant density, but it must not erase gameplay consequences, rewrite observed identity, violate known world/routing truth or introduce unbounded work/state growth.
+
+Population/LOD systems must use bounded work and storage. Gameplay relevance can override pure distance when deciding fidelity.
+
+---
+
+## 18. Gameplay physics and collision truth
+
+Gameplay-critical collision truth is separate from render geometry and visibility.
+
+A mesh being hidden, culled, replaced or simplified for presentation must not remove collision that active gameplay depends on. Physics simplification is allowed for performance, but inside the active gameplay region it must remain conservative enough that it cannot permit physically impossible pass-through or equivalent gameplay outcomes.
+
+Static world collision and dynamic actor collision should have explicit ownership and bounded lifecycle. Physics queries must use shared coordinate/floating-origin conversion rules rather than inventing another coordinate path.
+
+Physical material facts needed by future systems such as ballistics belong to gameplay/world collision contracts or portable policy, not to weapon-specific render code.
+
+---
+
+## 19. Deterministic living-world regression contracts
+
+Population, traffic and pedestrian systems should preserve stable identity/state across fidelity transitions and expose deterministic inputs sufficient to reproduce critical scenarios.
+
+Where applicable, automated coverage should include long-running bounded-state checks, promotion/demotion continuity, Map/Drive continuity, rapid observation-direction changes, world-boundary/dead-end distinctions, occupancy/queue persistence and gameplay collision behavior.
+
+Synthetic fixtures prove precise invariants; real-data fixtures prove integration with production world/routing data. Harnesses and presentation must consume the same production implementation rather than reproducing the rules under test.
+
+Detailed living-world design and delivery dependencies are tracked by umbrella issue #286 and `docs/living_world_population_traffic_physics.md`.
