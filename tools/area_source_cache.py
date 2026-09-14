@@ -6,9 +6,9 @@ consumers. Polygon areas are assembled by libosmium; directed coastline ways
 are retained separately so coastline, not an administrative polygon, owns the
 land/ocean split. This is rebuild-only source data, not runtime world truth.
 """
-
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import struct
@@ -21,11 +21,11 @@ import osmium
 from world_common import ensure_pbf, project
 
 MAGIC = b"BAF1"
-VERSION = 2
+VERSION = 3
 HEADER = struct.Struct("<4sI")
 FRAME = struct.Struct("<I")
 FOOTER_MAGIC = b"BAFE"
-FOOTER = struct.Struct("<4sQQ")
+FOOTER = struct.Struct("<4sQQ32s")
 PROGRESS_INTERVAL_S = 10.0
 
 POI_KEYS = {
@@ -56,8 +56,6 @@ def is_area_candidate_tags(tags: dict[str, str]) -> bool:
         return True
     if is_poi_tags(tags):
         return True
-    # Administrative geometry is retained only as an outer clipping boundary
-    # for coastline solving. It is never itself classified as land.
     if tags.get("boundary") == "administrative" and tags.get("admin_level") == "2":
         return True
     if tags.get("natural") in BACKGROUND_NATURAL:
@@ -91,17 +89,19 @@ def _way_points(nodes: osmium.osm.WayNodeList) -> list[list[float]]:
     return points
 
 
-def _write_frame(handle: BinaryIO, value: dict) -> int:
+def _write_frame(handle: BinaryIO, digest: "hashlib._Hash", value: dict) -> int:
     payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    handle.write(FRAME.pack(len(payload)))
-    handle.write(payload)
-    return FRAME.size + len(payload)
+    framed = FRAME.pack(len(payload)) + payload
+    handle.write(framed)
+    digest.update(framed)
+    return len(framed)
 
 
 class AreaFactHandler(osmium.SimpleHandler):
-    def __init__(self, handle: BinaryIO) -> None:
+    def __init__(self, handle: BinaryIO, digest: "hashlib._Hash") -> None:
         super().__init__()
         self.handle = handle
+        self.digest = digest
         self.records = 0
         self.coastlines = 0
         self.payload_bytes = 0
@@ -110,7 +110,7 @@ class AreaFactHandler(osmium.SimpleHandler):
         self.last_progress = self.started
 
     def _write(self, record: dict) -> None:
-        frame_bytes = _write_frame(self.handle, record)
+        frame_bytes = _write_frame(self.handle, self.digest, record)
         self.bytes_written += frame_bytes
         self.payload_bytes += frame_bytes
         self.records += 1
@@ -136,11 +136,8 @@ class AreaFactHandler(osmium.SimpleHandler):
             return
         self.coastlines += 1
         self._write({
-            "osm_type": "way",
-            "osm_id": int(way.id),
-            "geometry_type": "coastline",
-            "tags": {"natural": "coastline"},
-            "geometry": points,
+            "osm_type": "way", "osm_id": int(way.id), "geometry_type": "coastline",
+            "tags": {"natural": "coastline"}, "geometry": points,
         })
 
     def area(self, area: osmium.osm.Area) -> None:
@@ -161,15 +158,12 @@ class AreaFactHandler(osmium.SimpleHandler):
             return
         self._write({
             "osm_type": "way" if area.from_way() else "relation",
-            "osm_id": int(area.orig_id()),
-            "area_id": int(area.id),
-            "geometry_type": "area",
-            "tags": tags,
-            "geometry": polygons,
+            "osm_id": int(area.orig_id()), "area_id": int(area.id),
+            "geometry_type": "area", "tags": tags, "geometry": polygons,
         })
 
 
-def build_area_source_cache(source: Path, destination: Path) -> dict[str, int | float]:
+def build_area_source_cache(source: Path, destination: Path) -> dict[str, int | float | str]:
     ensure_pbf(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp = destination.with_suffix(destination.suffix + f".tmp-{os.getpid()}-{time.time_ns()}")
@@ -177,15 +171,19 @@ def build_area_source_cache(source: Path, destination: Path) -> dict[str, int | 
     print(f"[area-facts] START source={source}", flush=True)
     try:
         with temp.open("wb") as handle:
-            handle.write(HEADER.pack(MAGIC, VERSION))
-            handler = AreaFactHandler(handle)
+            digest = hashlib.sha256()
+            header = HEADER.pack(MAGIC, VERSION)
+            handle.write(header)
+            digest.update(header)
+            handler = AreaFactHandler(handle, digest)
             handler.apply_file(str(source), locations=True)
-            handle.write(FOOTER.pack(FOOTER_MAGIC, handler.records, handler.payload_bytes))
+            content_digest = digest.digest()
+            handle.write(FOOTER.pack(FOOTER_MAGIC, handler.records, handler.payload_bytes, content_digest))
             handler.bytes_written += FOOTER.size
             handle.flush()
             os.fsync(handle.fileno())
         temp.replace(destination)
-    except Exception:
+    except BaseException:
         try:
             temp.unlink()
         except OSError:
@@ -194,33 +192,41 @@ def build_area_source_cache(source: Path, destination: Path) -> dict[str, int | 
     elapsed = time.monotonic() - started
     print(
         f"[area-facts] DONE records={handler.records:,} coastlines={handler.coastlines:,} "
-        f"bytes={handler.bytes_written:,} elapsed={elapsed:.1f}s",
+        f"bytes={handler.bytes_written:,} sha256={content_digest.hex()[:12]}... elapsed={elapsed:.1f}s",
         flush=True,
     )
     return {
-        "records": handler.records,
-        "coastlines": handler.coastlines,
-        "bytes": handler.bytes_written,
-        "elapsed_s": elapsed,
+        "records": handler.records, "coastlines": handler.coastlines,
+        "size_bytes": handler.bytes_written, "sha256": content_digest.hex(), "elapsed_s": elapsed,
     }
 
 
-def _footer(path: Path) -> tuple[int, int]:
+def _footer(path: Path) -> tuple[int, int, bytes]:
     if path.stat().st_size < HEADER.size + FOOTER.size:
         raise ValueError(f"truncated area source cache: {path}")
     with path.open("rb") as handle:
         handle.seek(-FOOTER.size, os.SEEK_END)
-        magic, records, payload_bytes = FOOTER.unpack(handle.read(FOOTER.size))
+        magic, records, payload_bytes, digest = FOOTER.unpack(handle.read(FOOTER.size))
     if magic != FOOTER_MAGIC:
         raise ValueError(f"missing area cache completion footer: {path}")
     expected = HEADER.size + int(payload_bytes) + FOOTER.size
     if path.stat().st_size != expected:
         raise ValueError(f"area cache size mismatch: expected={expected} actual={path.stat().st_size}")
-    return int(records), int(payload_bytes)
+    return int(records), int(payload_bytes), digest
+
+
+def area_source_cache_metadata(path: Path) -> dict[str, int | str]:
+    records, payload_bytes, digest = _footer(path)
+    with path.open("rb") as handle:
+        raw = handle.read(HEADER.size)
+    magic, version = HEADER.unpack(raw)
+    if magic != MAGIC or version != VERSION:
+        raise ValueError(f"unsupported area source cache: magic={magic!r} version={version}")
+    return {"records": records, "payload_bytes": payload_bytes, "size_bytes": path.stat().st_size, "sha256": digest.hex()}
 
 
 def iter_area_facts(path: Path) -> Iterator[dict]:
-    records_expected, payload_bytes = _footer(path)
+    records_expected, payload_bytes, _ = _footer(path)
     with path.open("rb") as handle:
         raw_header = handle.read(HEADER.size)
         if len(raw_header) != HEADER.size:
@@ -253,11 +259,7 @@ def area_source_cache_valid(path: Path) -> bool:
     if not path.is_file():
         return False
     try:
-        with path.open("rb") as handle:
-            raw = handle.read(HEADER.size)
-        if len(raw) != HEADER.size or HEADER.unpack(raw) != (MAGIC, VERSION):
-            return False
-        _footer(path)
+        area_source_cache_metadata(path)
         return True
     except (OSError, ValueError, struct.error):
         return False
