@@ -271,3 +271,22 @@ The full architecture contract is in `ARCHITECTURE.md`; it remains canonical. In
 - Do not introduce speculative frameworks, universal service abstractions, giant bootstrap owners, or unrelated cleanup.
 
 When reviewing code, actively flag violations of these rules.
+
+## Wave execution contract
+
+A project-leader request such as `Starta Wave B` means execute the complete wave currently defined by the canonical roadmap/umbrella issue, not merely start its first child.
+
+For `Starta Wave <X>`:
+
+1. Read current `AGENTS.md`, canonical `ARCHITECTURE.md`, the roadmap/umbrella wave definition, and every candidate child issue/dependency before implementation.
+2. Synchronize current GitHub state. Detect existing branches/PRs/active implementations and do not create competing work for occupied children.
+3. Build the ready set from the dependency graph. Start only children whose required dependencies are satisfied or whose issue explicitly permits safe integration-sensitive work.
+4. Use one isolated `issue/<number>-<short-name>` branch/PR per tracked child. Never replace a wave with one giant implementation branch.
+5. Execute ready children with the maximum safe parallelism actually supported by the current environment. Do not claim or assume unavailable background workers, concurrent agents or Work-mode capabilities. Sequential execution in an ordinary chat is valid when that is the available execution model.
+6. For each child, follow its complete objective validation, PR decision and merge-safety contract. Green `MERGE` work is agent-owned and should be merged after the required fail-closed recheck; human-only checks and decisions go through `BRUR — Needs You`.
+7. After each merge or dependency-state change, recompute the ready set and continue automatically. Do not ask the project leader which child to do next when the DAG already determines safe work.
+8. Continue until every child in the requested wave is merged/explicitly satisfied, or a genuine human/external blocker prevents further progress. Dependency waiting, red agent-fixable tests, ordinary conflicts, stale branches, CI progress and routine merge administration are not reasons to stop.
+9. If blocked, persist the exact required project-leader action in `BRUR — Needs You` when applicable and continue any other independent ready work in the same wave before stopping.
+10. Report `Wave <X> COMPLETE` only when the canonical wave definition is actually satisfied on current `main`; otherwise report the concrete blocker and remaining children without implying background continuation.
+
+This command is orchestration over existing issue/PR workflow. It must not introduce a new dashboard, scheduler, database, branch hierarchy or orchestration framework merely to make the phrase work.

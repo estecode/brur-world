@@ -490,3 +490,38 @@ When in doubt:
 Detailed living-world design and delivery dependencies are tracked by umbrella issue #286 and `docs/living_world_population_traffic_physics.md`.
 
 The living-world program must preserve all rules above, especially portability by default, one world truth across fidelity/view changes, authoritative vertical world truth, deterministic/reproducible build/simulation behavior, explicit physics truth, bounded performance/memory and automated objective correctness.
+
+---
+
+## 34. Future gameplay extensibility contract
+
+Current living-world work must leave room for richer gameplay without making those future systems dependencies of Waves B-G.
+
+The architectural boundary is:
+
+```text
+world entities + persistent gameplay state
+        -> owned subsystem APIs / structured gameplay events
+        -> scenario/mission orchestration
+        -> cinematic/dialogue/UI/audio presentation
+```
+
+Rules:
+
+- People, Vehicles, Places and future Items use stable logical identities. Gameplay-relevant state that may outlive a scene/view/session must be designed so it can become versioned persistent state rather than being owned only by transient Godot nodes.
+- Future inventory/equipment/ownership/containment must be representable as gameplay/domain state. Items may later be carried by People, stored in Vehicles/Places/containers or exist in the world without requiring separate incompatible item models.
+- A Person or Vehicle is not a special "mission actor" type. Scenario participation, player control, AI control, cinematic focus, passenger/driver role, witness role or similar responsibilities are roles/state over the same logical entity.
+- Generic gameplay actions/interactions and their results should cross subsystem boundaries through small owned APIs and structured events. Scenario code must not directly mutate private traffic, physics, inventory, police, communication or world internals.
+- Scenario/mission systems orchestrate intentions, conditions, timers, branches and consequences; they do not become owners of world truth. A future visual editor must author the same runtime scenario data/contracts rather than define a second runtime model.
+- Hand-authored scenarios and template-driven scenarios may resolve actors, routes and locations through authoritative People/Vehicle/POI/world semantics. Template variation must not invent raw coordinates or bypass world constraints merely to satisfy a mission beat.
+- Cinematics/cutscenes are presentation/control orchestration over the same live world entities where practical. Camera changes or cinematic control handover must not require duplicate actors, a duplicate world, or state reset.
+- Timed decisions use explicit simulation/gameplay-time deadlines, choices and defined timeout outcomes. UI presentation of a decision is not the decision's source of truth, and consequences may be immediate or delayed.
+- Future communications such as SMS, calls, contacts, multiple phones or burner phones remain an owned gameplay subsystem. Exact phone UX/schema is intentionally not fixed by this contract.
+- Dialogue content is referenced through stable dialogue/event identity rather than hardcoded presentation strings in gameplay logic. Spoken audio, subtitles and closed captions are separate presentation assets. Spoken dialogue may initially be Swedish-only without preventing later text/caption localization. Closed captions may include speaker and meaningful non-speech audio cues.
+- Knowledge, relationships/factions/reputation, crime/police response, health/damage, economy, interiors, schedules, weather and audio-awareness may be added later through owned subsystem contracts. Current waves must not create hard dependencies on speculative implementations of them.
+- Gameplay code must not assume a scripted happy path. Future scenarios must be able to observe timeout, failure, death/incapacitation, arrest, missing actor/item, route failure or other alternate results without forcing world state back to the script.
+- Persistence/save format, scenario file format, mission editor, phone behavior, inventory UX and exact future gameplay mechanics are intentionally deferred until their own scoped work exists.
+
+When extending gameplay, preserve the same principle used elsewhere in this architecture:
+
+> **Orchestration may request and observe gameplay; it may not replace the subsystem that owns the truth.**
