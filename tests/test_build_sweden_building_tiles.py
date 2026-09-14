@@ -60,7 +60,9 @@ class Tests(unittest.TestCase):
         self.assertEqual(MAX_WARM_SECONDS, 30.0)
         benchmark = (TOOLS / "benchmark_issue_220.py").read_text(encoding="utf-8")
         self.assertIn('parser.add_argument("gpkg"', benchmark)
-        self.assertIn('parser.add_argument("--address-pbf"', benchmark)
+        self.assertIn('parser.add_argument("--source-pbf"', benchmark)
+        self.assertIn('"gpkg_and_pbf_hashes_recorded"', benchmark)
+        self.assertIn('"no_provider_stage_cache"', benchmark)
         self.assertIn('"building_records_match_source"', benchmark)
         self.assertIn('"traffic_signals_match_source"', benchmark)
 
