@@ -30,7 +30,15 @@ trap cleanup EXIT INT TERM
 
 resolve_manual_review_contract() {
   case "${BRUR_PR_CHECK_MANUAL_REVIEW:-}" in
-    required|none)
+    required)
+      [[ -n "${BRUR_PR_CHECK_MANUAL_CHECK:-}" ]] || {
+        printf 'PR_CHECK=FAIL manual review is required but BRUR_PR_CHECK_MANUAL_CHECK is empty\n' >&2
+        return 70
+      }
+      return 0
+      ;;
+    none)
+      export BRUR_PR_CHECK_MANUAL_CHECK=""
       return 0
       ;;
     "") ;;
@@ -44,7 +52,7 @@ resolve_manual_review_contract() {
     printf 'PR_CHECK=FAIL GitHub CLI (gh) is required to recover the PR merge decision\n' >&2
     return 69
   }
-  local parser pr_body merge_decision
+  local parser pr_body merge_decision manual_check
   parser="$ROOT/tools/pr_merge_decision.py"
   [[ -f "$parser" ]] || {
     printf 'PR_CHECK=FAIL current main has no tools/pr_merge_decision.py\n' >&2
@@ -60,11 +68,18 @@ resolve_manual_review_contract() {
   fi
   case "$merge_decision" in
     check)
+      if ! manual_check="$(printf '%s' "$pr_body" | "$PYTHON_BIN" "$parser" --field check)"; then
+        printf 'PR_CHECK=FAIL unable to parse authoritative PR manual CHECK for stale bootstrap\n' >&2
+        return 70
+      fi
       export BRUR_PR_CHECK_MANUAL_REVIEW=required
+      export BRUR_PR_CHECK_MANUAL_CHECK="$manual_check"
       printf 'PR_CHECK=MANUAL_REVIEW required pr=%s source=pr-merge-decision-fallback\n' "$PR"
+      printf 'PR_CHECK=MANUAL_CHECK %s\n' "$manual_check"
       ;;
     merge)
       export BRUR_PR_CHECK_MANUAL_REVIEW=none
+      export BRUR_PR_CHECK_MANUAL_CHECK=""
       printf 'PR_CHECK=MANUAL_REVIEW none pr=%s source=pr-merge-decision-fallback\n' "$PR"
       ;;
     block)
@@ -86,6 +101,27 @@ for arg in "$@"; do
     exec "$BRUR_PR_CHECK_REAL_GODOT" "$@"
   fi
 done
+
+case "${BRUR_PR_CHECK_MANUAL_REVIEW:-}" in
+  none)
+    printf '\nSAFE CHECK — NO MANUAL CHECK REQUIRED\n'
+    printf 'No manual check is required. You do not need to test or inspect anything in Godot — just close Godot so Safe Check can finish.\n\n'
+    ;;
+  required)
+    [[ -n "${BRUR_PR_CHECK_MANUAL_CHECK:-}" ]] || {
+      printf 'PR_CHECK=FAIL manual review is required but the concrete CHECK is missing\n' >&2
+      exit 70
+    }
+    printf '\nSAFE CHECK — MANUAL CHECK REQUIRED\n'
+    printf 'Inspect exactly this: %s\n' "$BRUR_PR_CHECK_MANUAL_CHECK"
+    printf 'PASS: close Godot, then report: test ok #%s\n' "$BRUR_PR_CHECK_PR"
+    printf 'FAIL: close Godot, then report: test fail #%s — <what failed>\n\n' "$BRUR_PR_CHECK_PR"
+    ;;
+  *)
+    printf 'PR_CHECK=FAIL missing/invalid manual-review contract before Godot launch\n' >&2
+    exit 70
+    ;;
+esac
 
 if [[ ! -f "$BRUR_PR_CHECK_SUCCESS_MARKER" ]]; then
   "$BRUR_PR_CHECK_PYTHON" "$BRUR_PR_CHECK_STATUS_HELPER" record \
@@ -116,6 +152,8 @@ run_wrapped_godot() {
   BRUR_PR_CHECK_SUCCESS_MARKER="$SUCCESS_MARKER" \
   BRUR_PR_CHECK_STATUS_HELPER="$STATUS_HELPER" \
   BRUR_PR_CHECK_PYTHON="$PYTHON_BIN" \
+  BRUR_PR_CHECK_MANUAL_REVIEW="$BRUR_PR_CHECK_MANUAL_REVIEW" \
+  BRUR_PR_CHECK_MANUAL_CHECK="${BRUR_PR_CHECK_MANUAL_CHECK:-}" \
   "$GODOT_WRAPPER" "$@"
 }
 
@@ -151,6 +189,7 @@ run_owned_hook() {
     BRUR_PR_CHECK_WORLD_DATA="$WORLD_DATA" \
     BRUR_PR_CHECK_HEAD="$WORKTREE_HEAD" \
     BRUR_PR_CHECK_MANUAL_REVIEW="$BRUR_PR_CHECK_MANUAL_REVIEW" \
+    BRUR_PR_CHECK_MANUAL_CHECK="${BRUR_PR_CHECK_MANUAL_CHECK:-}" \
     BRUR_PR_CHECK_REAL_GODOT="$GODOT_BIN" \
     BRUR_PR_CHECK_SUCCESS_MARKER="$SUCCESS_MARKER" \
     BRUR_PR_CHECK_STATUS_HELPER="$STATUS_HELPER" \

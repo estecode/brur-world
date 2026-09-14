@@ -86,11 +86,16 @@ set -euo pipefail
 printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "$BRUR_PR_CHECK_PR"
 HOOK
 : > "$ORDER_LOG"
-output="$(BRUR_PR_CHECK_MANUAL_REVIEW=required bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT" 2>&1)"
+manual_check='confirm the route line remains visually continuous through the interchange'
+output="$(BRUR_PR_CHECK_MANUAL_REVIEW=required BRUR_PR_CHECK_MANUAL_CHECK="$manual_check" bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT" 2>&1)"
 grep -q 'PR_CHECK=SKIP_VISUAL_REVIEW pr=123 reason=no-subjective-check-remains' <<<"$output"
 grep -q 'PR_CHECK=FORCE_VISUAL_REVIEW pr=123 reason=authoritative-manual-review-not-launched-by-pr-hook' <<<"$output"
 grep -q 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=manual-review-contract-fallback' <<<"$output"
 grep -q 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=editor' <<<"$output"
+grep -q 'SAFE CHECK — MANUAL CHECK REQUIRED' <<<"$output"
+grep -Fq "Inspect exactly this: $manual_check" <<<"$output"
+grep -q 'PASS: close Godot, then report: test ok #123' <<<"$output"
+grep -q 'FAIL: close Godot, then report: test fail #123' <<<"$output"
 visual_count="$(grep -c '^GODOT_VISUAL ' "$ORDER_LOG")"
 [[ "$visual_count" -eq 1 ]] || { printf 'expected exactly one forced production visual launch, got %s\n' "$visual_count" >&2; cat "$ORDER_LOG" >&2; exit 1; }
 grep -Fq "$WORKTREE/scenes/main.tscn" "$ORDER_LOG"
@@ -106,9 +111,10 @@ visual_line="$(grep -n '^GODOT_VISUAL ' "$ORDER_LOG" | head -n 1 | cut -d: -f1)"
 # A required review must also survive an exact PR revision with no PR-owned hook.
 rm "$WORKTREE/tools/pr_check_local.sh"
 : > "$ORDER_LOG"
-output="$(BRUR_PR_CHECK_MANUAL_REVIEW=required bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT" 2>&1)"
+output="$(BRUR_PR_CHECK_MANUAL_REVIEW=required BRUR_PR_CHECK_MANUAL_CHECK="$manual_check" bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT" 2>&1)"
 grep -q 'PR_CHECK=SKIP_PR_OWNED_OBJECTIVE_CHECKS pr=123 reason=no-hook' <<<"$output"
 grep -q 'PR_CHECK=FORCE_VISUAL_REVIEW pr=123 reason=authoritative-manual-review-not-launched-by-pr-hook' <<<"$output"
+grep -q 'SAFE CHECK — MANUAL CHECK REQUIRED' <<<"$output"
 [[ "$(grep -c '^GODOT_VISUAL ' "$ORDER_LOG")" -eq 1 ]]
 
 cat > "$WORKTREE/tools/pr_check_local.sh" <<'HOOK'
@@ -123,6 +129,12 @@ HOOK
 output="$(BRUR_PR_CHECK_MANUAL_REVIEW=none bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 123 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT" 2>&1)"
 grep -q 'PR_CHECK=STATUS success pr=123' <<<"$output"
 grep -q 'PR_CHECK=VISUAL_REVIEW_WARNING Godot exited status=42 after objective success' <<<"$output"
+grep -q 'SAFE CHECK — NO MANUAL CHECK REQUIRED' <<<"$output"
+grep -Fq 'No manual check is required. You do not need to test or inspect anything in Godot — just close Godot so Safe Check can finish.' <<<"$output"
+if grep -q 'test ok #123' <<<"$output"; then
+  printf 'close-only Safe Check must not ask for a perceptual result\n' >&2
+  exit 1
+fi
 status_count="$(grep -c '^STATUS .*--state success .*--stage objective-checks-complete' "$ORDER_LOG")"
 [[ "$status_count" -eq 1 ]] || { printf 'expected exactly one pre-visual success status, got %s\n' "$status_count" >&2; cat "$ORDER_LOG" >&2; exit 1; }
 status_line="$(grep -n '^STATUS ' "$ORDER_LOG" | cut -d: -f1)"
