@@ -78,7 +78,8 @@ def _other_tags_contains(columns: set[str], key: str, value: str | None = None) 
     if "other_tags" not in columns:
         return None
     needle = f'"{key}"=>"' if value is None else f'"{key}"=>"{value}"'
-    return f"other_tags LIKE '%{needle.replace("'", "''")}%'"
+    escaped = needle.replace("'", "''")
+    return f"other_tags LIKE '%{escaped}%'"
 
 
 def _or(*parts: str | None) -> str | None:
