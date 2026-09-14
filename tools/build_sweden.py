@@ -80,14 +80,20 @@ def _run_target(target: str, sources: dict[str, Path], output: Path) -> None:
         raise ValueError(f"unsupported target: {target}")
 
 
+def _is_geopackage(path: Path) -> bool:
+    return path.suffix.lower() == ".gpkg"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("pbf", type=Path, help="Path to an .osm.pbf file")
+    parser.add_argument("source", type=Path, help="Path to Sweden .gpkg (preferred) or legacy .osm.pbf")
+    parser.add_argument("--address-pbf", type=Path, help="OSM PBF used only for address/coastline facts missing from free GeoPackage")
     parser.add_argument("--output", type=Path, default=Path("world_data"))
     parser.add_argument("--target", default="all", help="comma-separated: roads,routing,traffic,background,pois,buildings,search or all")
     parser.add_argument("--plan", action="store_true", help="print the resolved build plan and exit")
     args = parser.parse_args()
-    ensure_pbf(args.pbf)
+    if not args.source.is_file(): parser.error(f"source not found: {args.source}")
+    if not _is_geopackage(args.source): ensure_pbf(args.source)
     args.output.mkdir(parents=True, exist_ok=True)
     try: targets = parse_targets(args.target)
     except ValueError as exc: parser.error(str(exc))
@@ -96,18 +102,23 @@ def main() -> None:
     report_path = args.output / BUILD_REPORT
     total_started = time.monotonic()
     report: dict[str, object] = {
-        "started_at": _now(), "source": str(args.pbf), "targets": list(targets),
-        "source_blocks": list(routes), "status": "RUNNING", "target_results": {},
+        "started_at": _now(), "source": str(args.source), "address_pbf": str(args.address_pbf) if args.address_pbf else None,
+        "source_adapter": "geofabrik-gpkg" if _is_geopackage(args.source) else "legacy-osm-pbf",
+        "targets": list(targets), "source_blocks": list(routes), "status": "RUNNING", "target_results": {},
     }
     _write_report(report_path, report)
     try:
-        _section("PREPARE REQUIRED OSM SOURCE FACTS", args.pbf)
+        _section("PREPARE REQUIRED SOURCE FACTS", args.source)
         if args.plan:
             source_manifest = _load_json(cache_dir / "manifest.json")
             route_entries = source_manifest.get("routes", {}) if isinstance(source_manifest.get("routes"), dict) else {}
             sources = {route: cache_dir / str(route_entries.get(route, {}).get("file", "missing")) for route in routes}
         else:
-            sources = build_source_caches(args.pbf, cache_dir, routes)
+            if _is_geopackage(args.source):
+                from geofabrik_source_cache import build_geofabrik_source_caches
+                sources = build_geofabrik_source_caches(args.source, args.address_pbf, cache_dir, routes)
+            else:
+                sources = build_source_caches(args.source, cache_dir, routes)
             source_manifest = _load_json(cache_dir / "manifest.json")
         plan = make_plan(TOOLS_DIR, args.output, source_manifest, targets, cache_dir)
         _print_plan(plan)
