@@ -97,14 +97,11 @@ def git_revision() -> str:
 
 
 def print_version() -> None: print(f"build_features {EXPORTER_VERSION} | git {git_revision()}", flush=True)
-
 def tags_dict(tags: osmium.osm.TagList) -> dict[str, str]: return {tag.k: tag.v for tag in tags}
 def is_poi(tags: osmium.osm.TagList) -> bool: return is_poi_tags(tags_dict(tags))
 def write_jsonl(file: TextIO, record: dict) -> None: file.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
-
 def runtime_poi_record(record: dict, category: str) -> dict:
     return {"osm_type": record["osm_type"], "osm_id": record["osm_id"], "x": record["x"], "y": record["y"], "category": category, "tags": record["tags"]}
-
 def point_average(points: list[list[float]]) -> tuple[float, float]: return (sum(p[0] for p in points)/len(points), sum(p[1] for p in points)/len(points))
 
 
@@ -207,9 +204,12 @@ def _consume_poi_facts(source: Path, pois_file: TextIO, poi_tiles: TileJsonlWrit
     validate_facts(source, POI_FACT_SCHEMA)
     nodes = ways = 0
     for index, record in enumerate(iter_facts(source, POI_FACT_SCHEMA), 1):
-        if record.get("osm_type") not in {"node", "way"}: raise ValueError(f"invalid POI source fact type: {record.get('osm_type')}")
+        osm_type = record.get("osm_type")
+        if osm_type == "relation":
+            continue
+        if osm_type not in {"node", "way"}: raise ValueError(f"invalid POI source fact type: {osm_type}")
         write_jsonl(pois_file, record); poi_tiles.write(record)
-        if record["osm_type"] == "node": nodes += 1
+        if osm_type == "node": nodes += 1
         else: ways += 1
         if index % POI_PROGRESS_INTERVAL == 0: print(f"[pois] source-facts={index:,} nodes={nodes:,} ways={ways:,}", flush=True)
     return nodes, ways
