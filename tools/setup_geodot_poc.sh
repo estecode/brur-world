@@ -67,29 +67,70 @@ pin_godot_cpp() {
   printf 'GEODOT_SETUP=GODOT_CPP sha=%s\n' "$GODOT_CPP_PIN"
 }
 
+patch_geopackage_crs() {
+  # GeoDot's pinned NativeDataset::get_epsg_code() only calls GDALDataset::GetSpatialRef().
+  # Vector-only GeoPackages commonly expose their SRS on each OGRLayer instead, so GeoDot
+  # returns -1 even though gpkg_contents/gpkg_geometry_columns correctly declare the CRS.
+  # Keep this POC patch narrow and deterministic: fall back to the first vector layer SRS.
+  python3 - "$SRC/src/vector-extractor/NativeDataset.cpp" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+old = '''int NativeDataset::get_epsg_code() const {
+    if (!dataset) return -1;
+    const OGRSpatialReference* sr = dataset->GetSpatialRef();
+    if (!sr) return -1;
+
+    // Attempt to compute EPSG codes
+    
+    OGRSpatialReference srCopy(*sr);
+    srCopy.AutoIdentifyEPSG();
+    const char* authName = srCopy.GetAuthorityName(nullptr);
+    const char* authCode = srCopy.GetAuthorityCode(nullptr);
+
+    if (authName && authCode && std::string(authName) == "EPSG")
+        return std::stoi(authCode);
+    return -1;
+}
+'''
+new = '''int NativeDataset::get_epsg_code() const {
+    if (!dataset) return -1;
+    const OGRSpatialReference* sr = dataset->GetSpatialRef();
+    if (!sr) {
+        const int layer_count = dataset->GetLayerCount();
+        for (int i = 0; i < layer_count && !sr; ++i) {
+            OGRLayer* vector_layer = dataset->GetLayer(i);
+            if (vector_layer) sr = vector_layer->GetSpatialRef();
+        }
+    }
+    if (!sr) return -1;
+
+    // Attempt to compute EPSG codes
+    OGRSpatialReference srCopy(*sr);
+    srCopy.AutoIdentifyEPSG();
+    const char* authName = srCopy.GetAuthorityName(nullptr);
+    const char* authCode = srCopy.GetAuthorityCode(nullptr);
+
+    if (authName && authCode && std::string(authName) == "EPSG")
+        return std::stoi(authCode);
+    return -1;
+}
+'''
+if old not in text:
+    if new in text:
+        raise SystemExit(0)
+    raise SystemExit("GEODOT_SETUP=FAIL pinned GeoDot CRS patch context changed")
+path.write_text(text.replace(old, new, 1), encoding="utf-8")
+PY
+  printf 'GEODOT_SETUP=CRS_PATCH vector-layer-fallback\n'
+}
+
 try_artifact() {
-  # Upstream artifacts follow GeoDot's own godot-cpp submodule and can therefore
-  # move ahead of BRUR's engine ABI. Only use artifacts when the source revision's
-  # godot-cpp already matches our pinned BRUR-compatible binding revision.
-  prepare_source
-  git -C "$SRC" submodule update --init godot-cpp
-  if [[ "$(git -C "$SRC/godot-cpp" rev-parse HEAD)" != "$GODOT_CPP_PIN" ]]; then
-    return 1
-  fi
-  command -v gh >/dev/null 2>&1 || return 1
-  local row run_id head_sha
-  row="$(gh run list -R "$REPO" --workflow "$workflow" --branch master --status success --limit 10 \
-    --json databaseId,headSha --jq ".[] | select(.headSha == \"$PIN\") | [.databaseId,.headSha] | @tsv" | head -n1)"
-  [[ -n "$row" ]] || return 1
-  run_id="${row%%$'\t'*}"
-  head_sha="${row#*$'\t'}"
-  [[ "$head_sha" == "$PIN" ]] || return 1
-  gh run download "$run_id" -R "$REPO" --name "$artifact" --dir "$ARTIFACT"
-  [[ -d "$ARTIFACT/demo/addons/geodot" ]] || return 1
-  mkdir -p "$ROOT/addons"
-  rm -rf "$TARGET"
-  cp -R "$ARTIFACT/demo/addons/geodot" "$TARGET"
-  printf 'GEODOT_SETUP=ARTIFACT sha=%s run=%s platform=%s\n' "$PIN" "$run_id" "$platform"
+  # Upstream artifacts follow GeoDot's own godot-cpp submodule and also lack the
+  # vector-only GeoPackage CRS fallback required by this POC. Use a source build
+  # until both compatibility fixes are available in an upstream artifact.
+  return 1
 }
 
 build_from_source() {
@@ -97,6 +138,7 @@ build_from_source() {
   prepare_source
   git -C "$SRC" submodule update --init --recursive
   pin_godot_cpp
+  patch_geopackage_crs
 
   case "$platform" in
     Darwin)
@@ -126,7 +168,7 @@ build_from_source() {
 if try_artifact; then
   :
 else
-  printf 'GEODOT_SETUP=ARTIFACT_UNAVAILABLE sha=%s; building against BRUR-compatible host dependencies\n' "$PIN"
+  printf 'GEODOT_SETUP=ARTIFACT_UNAVAILABLE sha=%s; building patched source against BRUR-compatible host dependencies\n' "$PIN"
   build_from_source
 fi
 
