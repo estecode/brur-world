@@ -3,7 +3,7 @@ extends SceneTree
 ## Headless regression tests for player Map-mode presentation scaling and vehicle integrity.
 ##
 ## Dependencies:
-## - player_map_marker.gd owns visual car geometry and zoom scaling.
+## - player_map_marker.gd owns zoom scaling and reuses player_car_visual.gd for geometry.
 ## - scenes/main.tscn supplies the production CameraRig used for projected-size regression coverage.
 ## - player_vehicle.tscn/vehicle.gd own the unchanged production vehicle dimensions.
 ## - gps_route_layer.gd composes the marker without scaling the simulation vehicle.
@@ -67,10 +67,10 @@ func _test_scale_is_monotonic_and_continuous() -> void:
 func _test_marker_is_recognizable_car_shape() -> void:
 	var marker := PlayerMapMarkerScript.new() as Node3D
 	get_root().add_child(marker)
-	_assert(marker.get_node_or_null("Body") is MeshInstance3D, "marker has a passenger-car body")
-	_assert(marker.get_node_or_null("Cabin") is MeshInstance3D, "marker has a distinct cabin")
-	_assert(marker.get_node_or_null("Windshield") is MeshInstance3D, "marker exposes a contrasting windshield for orientation")
-	_assert(marker.get_node_or_null("RearWindow") is MeshInstance3D, "marker exposes a contrasting rear window")
+	_assert(marker.get_node_or_null("CarVisual/Body") is MeshInstance3D, "marker has a passenger-car body")
+	_assert(marker.get_node_or_null("CarVisual/Cabin") is MeshInstance3D, "marker has a distinct cabin")
+	_assert(marker.get_node_or_null("CarVisual/Windshield") is MeshInstance3D, "marker exposes a contrasting windshield for orientation")
+	_assert(marker.get_node_or_null("CarVisual/RearWindow") is MeshInstance3D, "marker exposes a contrasting rear window")
 	marker.call("set_view_state", 200.0, false, 0.75)
 	_assert(_approx(marker.scale.x, 1.0) and _approx(marker.scale.z, 1.0), "near marker remains at physical scale")
 	_assert(_approx(marker.rotation.y, 0.75), "marker follows vehicle heading")
