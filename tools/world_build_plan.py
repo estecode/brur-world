@@ -99,7 +99,43 @@ def _builder_digest(tools_dir: Path, target: str) -> str:
     return digest.hexdigest()
 
 
-def target_fingerprint(tools_dir: Path, source_manifest: dict, target: str) -> str | None:
+def _source_artifact_valid(cache_dir: Path | None, route: str, entry: dict) -> bool:
+    if cache_dir is None:
+        return True
+    filename = entry.get("file")
+    if not isinstance(filename, str) or not filename:
+        return False
+    path = cache_dir / filename
+    if not path.is_file():
+        return False
+    expected_size = entry.get("size_bytes")
+    if not isinstance(expected_size, int) or expected_size <= 0 or path.stat().st_size != expected_size:
+        return False
+    if route == "areas":
+        try:
+            with path.open("rb") as handle:
+                if handle.read(4) != b"BAF1":
+                    return False
+                handle.seek(-20, 2)
+                if handle.read(4) != b"BAFE":
+                    return False
+        except (OSError, ValueError):
+            return False
+        return True
+    try:
+        with path.open("rb") as handle:
+            handle.seek(max(0, path.stat().st_size - 128))
+            return b"</osm>" in handle.read()
+    except OSError:
+        return False
+
+
+def target_fingerprint(
+    tools_dir: Path,
+    source_manifest: dict,
+    target: str,
+    source_cache_dir: Path | None = None,
+) -> str | None:
     routes = source_manifest.get("routes")
     source = source_manifest.get("source")
     if not isinstance(routes, dict) or not isinstance(source, dict):
@@ -108,6 +144,8 @@ def target_fingerprint(tools_dir: Path, source_manifest: dict, target: str) -> s
     for route in TARGET_SOURCES[target]:
         entry = routes.get(route)
         if not isinstance(entry, dict) or entry.get("complete") is not True:
+            return None
+        if not _source_artifact_valid(source_cache_dir, route, entry):
             return None
         dependencies[route] = {
             "version": entry.get("version"),
@@ -136,7 +174,24 @@ def outputs_exist(world_dir: Path, target: str) -> bool:
     return True
 
 
-def make_plan(tools_dir: Path, world_dir: Path, source_manifest: dict, requested: tuple[str, ...]) -> tuple[PlanItem, ...]:
+def target_output_bytes(world_dir: Path, target: str) -> int:
+    total = 0
+    for relative in TARGET_OUTPUTS[target]:
+        path = world_dir / relative
+        if path.is_file():
+            total += path.stat().st_size
+        elif path.is_dir():
+            total += sum(child.stat().st_size for child in path.rglob("*") if child.is_file())
+    return total
+
+
+def make_plan(
+    tools_dir: Path,
+    world_dir: Path,
+    source_manifest: dict,
+    requested: tuple[str, ...],
+    source_cache_dir: Path | None = None,
+) -> tuple[PlanItem, ...]:
     state = load_state(world_dir)
     target_state = state.get("targets", {}) if isinstance(state.get("targets"), dict) else {}
     requested_set = set(requested)
@@ -145,7 +200,7 @@ def make_plan(tools_dir: Path, world_dir: Path, source_manifest: dict, requested
         if target not in requested_set:
             items.append(PlanItem(target, "SKIP", "not requested", None))
             continue
-        fingerprint = target_fingerprint(tools_dir, source_manifest, target)
+        fingerprint = target_fingerprint(tools_dir, source_manifest, target, source_cache_dir)
         if fingerprint is None:
             items.append(PlanItem(target, "BLOCKED", "source dependency missing/incomplete", None))
             continue
