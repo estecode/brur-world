@@ -41,6 +41,9 @@ class FakeSpeedQuery:
 	func speed_limit_kmh_at(_position: Vector3) -> Variant: return limit
 
 func _init() -> void:
+	call_deferred("_run_tests")
+
+func _run_tests() -> void:
 	_test_patrol_policy_uses_only_valid_directed_roads()
 	_test_police_vehicle_patrols_with_shared_dynamics()
 	_test_observation_range_and_visibility_gate_speeding()
