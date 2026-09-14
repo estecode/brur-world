@@ -112,12 +112,18 @@ func query_cell(top_left_absolute: Vector2, size_m: float, max_buildings: int, m
 		"roads": roads,
 		"building_query_ms": building_query_ms,
 		"road_query_ms": road_query_ms,
-		"building_features": raw_buildings.size(),
-		"road_features": raw_roads.size(),
+		"building_features": buildings.size(),
+		"road_features": roads.size(),
+		"raw_building_features": raw_buildings.size(),
+		"raw_road_features": raw_roads.size(),
 	}
 
 static func building_record(feature: Variant) -> Dictionary:
 	if feature == null or not feature.has_method("get_outer_vertices"):
+		return {}
+	var attrs := _feature_attributes(feature)
+	var tags := _normalized_tags(attrs)
+	if not _is_present_osm_tag(tags, "building"):
 		return {}
 	var outer_value: Variant = feature.call("get_outer_vertices")
 	if typeof(outer_value) != TYPE_PACKED_VECTOR2_ARRAY:
@@ -125,23 +131,35 @@ static func building_record(feature: Variant) -> Dictionary:
 	var outer: PackedVector2Array = outer_value
 	if outer.size() < 3:
 		return {}
-	var ring: Array = []
+	var ring := _packed_ring_to_array(outer)
+	var holes: Array = []
+	if feature.has_method("get_holes"):
+		var raw_holes: Variant = feature.call("get_holes")
+		if typeof(raw_holes) == TYPE_ARRAY:
+			for hole_value in raw_holes:
+				if typeof(hole_value) != TYPE_PACKED_VECTOR2_ARRAY:
+					continue
+				var hole: PackedVector2Array = hole_value
+				if hole.size() >= 3:
+					holes.append(_packed_ring_to_array(hole))
 	var center := Vector2.ZERO
 	for point in outer:
-		ring.append([point.x, point.y])
 		center += point
 	center /= float(outer.size())
-	var attrs := _feature_attributes(feature)
 	return {
 		"id": _feature_id(feature),
 		"x": center.x,
 		"y": center.y,
-		"geometry": [{"outer": ring, "holes": []}],
-		"tags": _normalized_tags(attrs),
+		"geometry": [{"outer": ring, "holes": holes}],
+		"tags": tags,
 	}
 
 static func road_record(feature: Variant) -> Dictionary:
 	if feature == null or not feature.has_method("get_curve3d"):
+		return {}
+	var attrs := _feature_attributes(feature)
+	var tags := _normalized_tags(attrs)
+	if not _is_present_osm_tag(tags, "highway"):
 		return {}
 	var curve_value: Variant = feature.call("get_curve3d")
 	if curve_value == null or not curve_value.has_method("get_point_count"):
@@ -153,8 +171,6 @@ static func road_record(feature: Variant) -> Dictionary:
 	for index in range(count):
 		var p: Vector3 = curve_value.call("get_point_position", index)
 		points.append(Vector2(p.x, -p.z))
-	var attrs := _feature_attributes(feature)
-	var tags := _normalized_tags(attrs)
 	return {
 		"id": _feature_id(feature),
 		"points": points,
@@ -242,6 +258,18 @@ static func _normalized_tags(attributes: Dictionary) -> Dictionary:
 		elif typeof(raw) == TYPE_STRING:
 			_merge_tag_string(tags, String(raw))
 	return tags
+
+static func _is_present_osm_tag(tags: Dictionary, key: String) -> bool:
+	if not tags.has(key):
+		return false
+	var value := String(tags.get(key, "")).strip_edges().to_lower()
+	return not value.is_empty() and value != "no" and value != "false" and value != "0"
+
+static func _packed_ring_to_array(points: PackedVector2Array) -> Array:
+	var ring: Array = []
+	for point in points:
+		ring.append([point.x, point.y])
+	return ring
 
 static func _merge_tag_string(tags: Dictionary, raw: String) -> void:
 	var text := raw.strip_edges()
