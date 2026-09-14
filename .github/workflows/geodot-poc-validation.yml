@@ -40,6 +40,9 @@ jobs:
       - name: Run plugin-independent renderer contracts
         run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_renderer_contracts.gd
 
+      - name: Parse real-data performance harness
+        run: BRUR_PARSE_ONLY=1 timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_fps_real_data.gd
+
       - name: Install pinned GeoDot addon
         env:
           GH_TOKEN: ${{ github.token }}
