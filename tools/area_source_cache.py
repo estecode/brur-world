@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Build/read a small streamed assembled-area source cache.
+"""Build/read the streamed assembled-area/background source cache.
 
-The cache stores only area facts used by current building/background consumers.
-It is rebuild-only source data, not runtime world truth.
+The cache stores only source facts used by current building/background
+consumers. Polygon areas are assembled by libosmium; directed coastline ways
+are retained separately so coastline, not an administrative polygon, owns the
+land/ocean split. This is rebuild-only source data, not runtime world truth.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import osmium
 from world_common import ensure_pbf, project
 
 MAGIC = b"BAF1"
-VERSION = 1
+VERSION = 2
 HEADER = struct.Struct("<4sI")
 FRAME = struct.Struct("<I")
 FOOTER_MAGIC = b"BAFE"
@@ -54,6 +56,8 @@ def is_area_candidate_tags(tags: dict[str, str]) -> bool:
         return True
     if is_poi_tags(tags):
         return True
+    # Administrative geometry is retained only as an outer clipping boundary
+    # for coastline solving. It is never itself classified as land.
     if tags.get("boundary") == "administrative" and tags.get("admin_level") == "2":
         return True
     if tags.get("natural") in BACKGROUND_NATURAL:
@@ -77,6 +81,16 @@ def _ring_points(ring: osmium.osm.NodeRefList) -> list[list[float]]:
     return points
 
 
+def _way_points(nodes: osmium.osm.WayNodeList) -> list[list[float]]:
+    points: list[list[float]] = []
+    for node in nodes:
+        if not node.location.valid():
+            continue
+        x, y = project(node.lon, node.lat)
+        points.append([x, y])
+    return points
+
+
 def _write_frame(handle: BinaryIO, value: dict) -> int:
     payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     handle.write(FRAME.pack(len(payload)))
@@ -89,10 +103,45 @@ class AreaFactHandler(osmium.SimpleHandler):
         super().__init__()
         self.handle = handle
         self.records = 0
+        self.coastlines = 0
         self.payload_bytes = 0
         self.bytes_written = HEADER.size
         self.started = time.monotonic()
         self.last_progress = self.started
+
+    def _write(self, record: dict) -> None:
+        frame_bytes = _write_frame(self.handle, record)
+        self.bytes_written += frame_bytes
+        self.payload_bytes += frame_bytes
+        self.records += 1
+        now = time.monotonic()
+        if now - self.last_progress >= PROGRESS_INTERVAL_S:
+            elapsed = max(0.001, now - self.started)
+            print(
+                f"[area-facts] records={self.records:,} coastlines={self.coastlines:,} "
+                f"bytes={self.bytes_written:,} rate={self.records / elapsed:,.0f}/s elapsed={elapsed:.1f}s",
+                flush=True,
+            )
+            self.last_progress = now
+
+    def way(self, way: osmium.osm.Way) -> None:
+        tags = {str(tag.k): str(tag.v) for tag in way.tags}
+        if tags.get("natural") != "coastline":
+            return
+        try:
+            points = _way_points(way.nodes)
+        except osmium.InvalidLocationError:
+            return
+        if len(points) < 2:
+            return
+        self.coastlines += 1
+        self._write({
+            "osm_type": "way",
+            "osm_id": int(way.id),
+            "geometry_type": "coastline",
+            "tags": {"natural": "coastline"},
+            "geometry": points,
+        })
 
     def area(self, area: osmium.osm.Area) -> None:
         tags = {str(tag.k): str(tag.v) for tag in area.tags}
@@ -110,26 +159,14 @@ class AreaFactHandler(osmium.SimpleHandler):
             polygons.append({"outer": shell, "holes": [hole for hole in holes if len(hole) >= 3]})
         if not polygons:
             return
-        record = {
+        self._write({
             "osm_type": "way" if area.from_way() else "relation",
             "osm_id": int(area.orig_id()),
             "area_id": int(area.id),
+            "geometry_type": "area",
             "tags": tags,
             "geometry": polygons,
-        }
-        frame_bytes = _write_frame(self.handle, record)
-        self.bytes_written += frame_bytes
-        self.payload_bytes += frame_bytes
-        self.records += 1
-        now = time.monotonic()
-        if now - self.last_progress >= PROGRESS_INTERVAL_S:
-            elapsed = max(0.001, now - self.started)
-            print(
-                f"[area-facts] records={self.records:,} bytes={self.bytes_written:,} "
-                f"rate={self.records / elapsed:,.0f}/s elapsed={elapsed:.1f}s",
-                flush=True,
-            )
-            self.last_progress = now
+        })
 
 
 def build_area_source_cache(source: Path, destination: Path) -> dict[str, int | float]:
@@ -156,10 +193,16 @@ def build_area_source_cache(source: Path, destination: Path) -> dict[str, int | 
         raise
     elapsed = time.monotonic() - started
     print(
-        f"[area-facts] DONE records={handler.records:,} bytes={handler.bytes_written:,} elapsed={elapsed:.1f}s",
+        f"[area-facts] DONE records={handler.records:,} coastlines={handler.coastlines:,} "
+        f"bytes={handler.bytes_written:,} elapsed={elapsed:.1f}s",
         flush=True,
     )
-    return {"records": handler.records, "bytes": handler.bytes_written, "elapsed_s": elapsed}
+    return {
+        "records": handler.records,
+        "coastlines": handler.coastlines,
+        "bytes": handler.bytes_written,
+        "elapsed_s": elapsed,
+    }
 
 
 def _footer(path: Path) -> tuple[int, int]:
