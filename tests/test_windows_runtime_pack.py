@@ -92,6 +92,7 @@ class WindowsRuntimePackTests(unittest.TestCase):
             self.assertIn("[runtime-pack] hashing", cold)
             self.assertIn("[runtime-pack] packing", cold)
             self.assertIn("[runtime-pack] verifying", cold)
+            self.assertIn("WINDOWS_RUNTIME_STORAGE random_access=stored", cold)
             self.assertIn("WINDOWS_RUNTIME_PACK=MISS", cold)
 
             warm_output = io.StringIO()
@@ -145,13 +146,43 @@ class WindowsRuntimePackTests(unittest.TestCase):
                 self.assertIn("world_data/building_mesh_lod/0_0.bin", names)
                 self.assertNotIn("world_data/building_tiles/0_0.jsonl", names)
                 manifest = json.loads(archive.read("world_data/windows_runtime_manifest.json"))
-            self.assertEqual(report["pack_format_version"], 3)
+            self.assertEqual(report["pack_format_version"], runtime_pack.PACK_FORMAT_VERSION)
             self.assertEqual(manifest["fingerprint"], report["fingerprint"])
             self.assertEqual(manifest["sha256"], report["runtime_files"])
             self.assertEqual(
                 manifest["transforms"]["building_mesh_lod"],
                 "BMC2=>BMC3:q0.1m:norm8:palette3",
             )
+
+    def test_seek_heavy_routing_files_are_stored_for_bounded_random_access(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self._source_fixture(root)
+            report = runtime_pack.prepare_cached_runtime_pack(source, root / "cache")
+
+            self.assertEqual(runtime_pack.PACK_FORMAT_VERSION, 4)
+            self.assertEqual(
+                report["stored_random_access_files"],
+                sorted(runtime_pack.RANDOM_ACCESS_STORED_FILES),
+            )
+            with zipfile.ZipFile(report["pack_path"]) as archive:
+                for relative_name in runtime_pack.RANDOM_ACCESS_STORED_FILES:
+                    member = archive.getinfo(f"world_data/{relative_name}")
+                    self.assertEqual(
+                        member.compress_type,
+                        zipfile.ZIP_STORED,
+                        f"{relative_name} must stay directly seekable inside the mounted runtime pack",
+                    )
+                self.assertEqual(
+                    archive.getinfo("world_data/background.brmap").compress_type,
+                    zipfile.ZIP_DEFLATED,
+                )
+                manifest = json.loads(archive.read("world_data/windows_runtime_manifest.json"))
+            self.assertEqual(
+                manifest["storage"]["stored_random_access"],
+                sorted(runtime_pack.RANDOM_ACCESS_STORED_FILES),
+            )
+            self.assertEqual(manifest["storage"]["default"], "deflate")
 
     def test_bmc2_building_chunk_is_compacted_inside_windows_pack(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
