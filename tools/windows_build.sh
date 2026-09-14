@@ -40,6 +40,9 @@ ADDED=1
 rm -rf "$LAUNCHER_TMP/world_data"
 ln -s "$ROOT/world_data" "$LAUNCHER_TMP/world_data"
 export BRUR_WINDOWS_MAPPED_ROOT="$ROOT"
-printf 'WINDOWS_BUILD=BOOTSTRAP main=%s mapped=%s\n' "${MAIN_HEAD:0:12}" "$ROOT"
+# The normal bootstrap/Safe Command contract is the mapped checkout's world_data.
+# Pin it explicitly so ambient process environment cannot silently redirect the build.
+export BRUR_WINDOWS_WORLD_DATA="$ROOT/world_data"
+printf 'WINDOWS_BUILD=BOOTSTRAP main=%s mapped=%s world_data=%s\n' "${MAIN_HEAD:0:12}" "$ROOT" "$BRUR_WINDOWS_WORLD_DATA"
 cd "$LAUNCHER_TMP"
 bash tools/windows_build/build.sh "$@"

@@ -12,6 +12,8 @@ bash tools/windows_build.sh 123
 
 This means “build exact PR #123”. The launcher fetches the current `main` build tooling, resolves the exact PR head, creates an isolated temporary checkout for that revision, resolves the production runtime-data subset from the mapped checkout's existing `world_data`, reuses or builds a cached runtime resource pack, exports the revision-specific game EXE/PCK without embedding the large stable world dataset, verifies the combined game/runtime-pack contract, and writes only the final client ZIP to `~/Dropbox/BRUR/` by default.
 
+The normal launcher pins world data to `<mapped checkout>/world_data`. Ambient inherited `BRUR_WINDOWS_WORLD_DATA` values are intentionally ignored so a Safe Command process cannot silently redirect a build to stale data.
+
 Refs and full commits are also supported:
 
 ```bash
@@ -19,14 +21,20 @@ bash tools/windows_build.sh --ref issue/example
 bash tools/windows_build.sh --ref <full-sha>
 ```
 
-Overrides are environment variables, not alternate build implementations:
+Output/cache/Godot overrides remain environment variables:
 
 ```bash
 BRUR_WINDOWS_OUTPUT_DIR=/tmp/brur-out \
-BRUR_WINDOWS_WORLD_DATA=/path/to/world_data \
 BRUR_WINDOWS_CACHE_DIR=/path/to/persistent/windows-build-cache \
 GODOT_BIN=/path/to/godot \
 bash tools/windows_build.sh --ref <ref>
+```
+
+Advanced tooling that intentionally needs a different world-data root may call the lower-level current-checkout builder directly with an explicit override:
+
+```bash
+BRUR_WINDOWS_WORLD_DATA=/path/to/world_data \
+bash tools/windows_build/build.sh --ref <ref>
 ```
 
 The default persistent cache is `~/.cache/brur-world/windows-build`.
