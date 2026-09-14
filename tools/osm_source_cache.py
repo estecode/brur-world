@@ -35,7 +35,7 @@ ROUTE_VERSIONS = {
     "pois": 4,
     "addresses": 4,
     "traffic_signals": 4,
-    "areas": 1,
+    "areas": 2,
 }
 ALL_ROUTES = tuple(ROUTE_VERSIONS)
 AREA_ROUTE = "areas"
