@@ -23,7 +23,13 @@ from build_search_binary import build_search_binary
 from build_search_index import build_search_index
 from build_traffic_signals import build_traffic_signals
 from osm_source_cache import CACHE_DIR_NAME, build_source_caches
-from world_build_plan import make_plan, parse_targets, record_target, required_source_routes
+from world_build_plan import (
+    make_plan,
+    parse_targets,
+    record_target,
+    required_source_routes,
+    target_output_bytes,
+)
 from world_common import ensure_pbf
 
 SEPARATOR = "=" * 72
@@ -111,7 +117,7 @@ def main() -> None:
         sources = build_source_caches(args.pbf, cache_dir, routes)
         source_manifest = _load_json(cache_dir / "manifest.json")
 
-    plan = make_plan(TOOLS_DIR, args.output, source_manifest, targets)
+    plan = make_plan(TOOLS_DIR, args.output, source_manifest, targets, cache_dir)
     _print_plan(plan)
     if args.plan:
         return
@@ -123,7 +129,7 @@ def main() -> None:
         if item.status == "BLOCKED" or item.fingerprint is None:
             raise SystemExit(f"[{item.target}] BLOCKED: {item.reason}")
         if item.status == "CACHE HIT":
-            summaries.append((item.target, "HIT", 0.0, 0))
+            summaries.append((item.target, "HIT", 0.0, target_output_bytes(args.output, item.target)))
             continue
         print(f"[{item.target}] START reason={item.reason}", flush=True)
         started = time.monotonic()
@@ -134,17 +140,13 @@ def main() -> None:
             raise
         elapsed = time.monotonic() - started
         record_target(args.output, item.target, item.fingerprint, elapsed)
-        size = 0
-        for path in args.output.rglob("*"):
-            if path.is_file():
-                size += path.stat().st_size
+        size = target_output_bytes(args.output, item.target)
         summaries.append((item.target, "REBUILT", elapsed, size))
-        print(f"[{item.target}] DONE elapsed={elapsed:.1f}s world-bytes={size:,}", flush=True)
+        print(f"[{item.target}] DONE elapsed={elapsed:.1f}s runtime-bytes={size:,}", flush=True)
 
     print()
     for target, status, elapsed, size in summaries:
-        size_text = f"{size:,} bytes" if size else "reused"
-        print(f"[summary] {target:<12} {status:<7} {elapsed:>8.1f}s {size_text}")
+        print(f"[summary] {target:<12} {status:<7} {elapsed:>8.1f}s {size:>14,} bytes")
     print(f"[summary] total                 {time.monotonic() - total_started:>8.1f}s")
     print(f"[summary] manifest={args.output / 'manifest.json'}")
 
