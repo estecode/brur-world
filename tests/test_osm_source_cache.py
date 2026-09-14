@@ -19,6 +19,7 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 from osm_source_cache import ALL_ROUTES, CACHE_FORMAT, ROUTE_VERSIONS, build_source_caches  # noqa: E402
+from tests.test_pyrosm_extract import Tests as PyrosmExtractTests  # noqa: E402,F401
 
 FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
 <osm version="0.6">
