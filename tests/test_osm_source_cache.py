@@ -36,11 +36,14 @@ FIXTURE = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
   <node id=\"6\" lon=\"18.0110\" lat=\"59.3100\"/>
   <node id=\"7\" lon=\"18.0110\" lat=\"59.3110\"/>
   <node id=\"8\" lon=\"18.0100\" lat=\"59.3110\"/>
+  <node id=\"9\" lon=\"18.0200\" lat=\"59.3000\"/>
+  <node id=\"10\" lon=\"18.0200\" lat=\"59.3200\"/>
   <way id=\"10\"><nd ref=\"1\"/><nd ref=\"2\"/><tag k=\"highway\" v=\"residential\"/><tag k=\"name\" v=\"Signal Street\"/></way>
   <way id=\"20\"><nd ref=\"2\"/><nd ref=\"3\"/><tag k=\"amenity\" v=\"parking\"/></way>
   <way id=\"30\"><nd ref=\"5\"/><nd ref=\"6\"/><nd ref=\"7\"/><nd ref=\"8\"/><nd ref=\"5\"/><tag k=\"building\" v=\"yes\"/></way>
   <way id=\"40\"><nd ref=\"5\"/><nd ref=\"6\"/><nd ref=\"7\"/><nd ref=\"8\"/><nd ref=\"5\"/></way>
   <way id=\"50\"><nd ref=\"2\"/><nd ref=\"4\"/><tag k=\"addr:housenumber\" v=\"14\"/><tag k=\"addr:street\" v=\"Testvägen\"/></way>
+  <way id=\"60\"><nd ref=\"9\"/><nd ref=\"10\"/><tag k=\"natural\" v=\"coastline\"/></way>
   <relation id=\"100\"><member type=\"way\" ref=\"40\" role=\"outer\"/><tag k=\"type\" v=\"multipolygon\"/><tag k=\"building\" v=\"yes\"/><tag k=\"amenity\" v=\"library\"/></relation>
 </osm>
 """
@@ -89,6 +92,10 @@ class OsmSourceCacheTests(unittest.TestCase):
         facts = list(iter_area_facts(caches["areas"]))
         self.assertTrue(any(f["tags"].get("building") == "yes" for f in facts))
         self.assertTrue(any(f["osm_type"] == "relation" and f["tags"].get("amenity") == "library" for f in facts))
+        coastline = next(f for f in facts if f.get("geometry_type") == "coastline")
+        self.assertEqual(coastline["osm_id"], 60)
+        self.assertEqual(coastline["tags"], {"natural": "coastline"})
+        self.assertEqual(len(coastline["geometry"]), 2)
         manifest = json.loads((self.cache / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["format"], "BOSC2")
         for route in ALL_ROUTES:
