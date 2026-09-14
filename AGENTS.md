@@ -180,6 +180,27 @@ test ok #191
 
 Do not stop between these steps unless a new genuine human-only blocker appears.
 
+#### Terminal-state and repeated-action guard
+
+Repository state changes must be idempotent from the agent's point of view. A successful terminal transition is a stop condition for further mutations of that same object in the current workflow.
+
+- After any state-changing repository action such as merge, close, reopen, branch deletion, label change, or metadata repair, inspect the returned state or perform at most one targeted read-back when the mutation response does not itself prove the result.
+- If the intended terminal state is confirmed — for example `merged=true`, the intended issue is closed, or the requested metadata is present — do not invoke another mutation for that object merely to "make sure". Continue only with a distinct required cleanup step or final reporting.
+- Never invoke the same mutating action with effectively identical arguments twice in succession after a successful response.
+- If a mutation explicitly fails and is known to be safely retryable, one corrected retry is allowed. Before any third equivalent attempt, stop the retry loop and diagnose the mismatch, stale assumption, or tool failure instead of repeating the call.
+- A read-back used to verify a mutation must itself be bounded: one successful verification is sufficient. Do not poll a terminal state that cannot become more complete.
+
+Example:
+
+```text
+merge_pull_request -> merged=true
+→ terminal state confirmed
+→ do not call merge/close/update on the same PR again unless a distinct documented cleanup is still required
+→ report completion
+```
+
+This guard takes precedence over agent-owned continuation when the tracked object's intended terminal state has already been reached. "Keep working" never means repeating an already-successful terminal action.
+
 #### Response termination gate
 
 Before producing a final response for unresolved tracked work, explicitly determine whether the next action is agent-owned. If it is agent-owned, the response must not end while the required tools are available and no genuine human-only blocker exists. Execute the next action instead. This check occurs after answering any conversational interruption and before treating the turn as finished.
