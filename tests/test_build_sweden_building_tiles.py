@@ -14,6 +14,15 @@ TOOLS=ROOT/"tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0,str(TOOLS))
 
+from benchmark_issue_220 import (  # noqa: E402
+    BASELINE_FINALIZE_SECONDS,
+    EXPECTED_HIGHWAY_NODES,
+    EXPECTED_HIGHWAY_WAYS,
+    EXPECTED_SOURCE_SHA256,
+    EXPECTED_SOURCE_SIZE,
+    MAX_COLD_SECONDS,
+    MAX_WARM_SECONDS,
+)
 from build_background import WATER, background_class, solve_coastline_land  # noqa: E402
 from world_build_plan import make_plan, parse_targets, record_target, required_source_routes  # noqa: E402
 
@@ -97,6 +106,15 @@ class Tests(unittest.TestCase):
 
     def test_inland_natural_water_remains_water(self):
         self.assertEqual(background_class({"natural":"water"}),WATER)
+
+    def test_real_sweden_benchmark_contract_matches_issue_baseline(self):
+        self.assertEqual(EXPECTED_SOURCE_SHA256,"5c9682d34aeac727487c06f1bbe22b5976de5c3ada5723c0e446bda3bb316cd2")
+        self.assertEqual(EXPECTED_SOURCE_SIZE,814_508_417)
+        self.assertEqual(EXPECTED_HIGHWAY_NODES,25_418_811)
+        self.assertEqual(EXPECTED_HIGHWAY_WAYS,2_290_999)
+        self.assertEqual(BASELINE_FINALIZE_SECONDS,5329.7)
+        self.assertEqual(MAX_COLD_SECONDS,2664.85)
+        self.assertEqual(MAX_WARM_SECONDS,30.0)
 
 
 if __name__=="__main__": unittest.main()
