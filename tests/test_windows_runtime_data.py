@@ -25,7 +25,8 @@ class WindowsRuntimeDataTests(unittest.TestCase):
         for name in windows_runtime_data.REQUIRED_DIRS:
             directory = source / name
             directory.mkdir()
-            (directory / "0_0.bin").write_bytes(b"runtime")
+            suffix = ".brmesh" if name == "road_surfaces" else ".bin"
+            (directory / f"0_0{suffix}").write_bytes(b"runtime")
         obsolete = source / "building_tiles"
         obsolete.mkdir()
         (obsolete / "0_0.jsonl").write_bytes(b"obsolete-runtime")
@@ -46,7 +47,8 @@ class WindowsRuntimeDataTests(unittest.TestCase):
             for name in windows_runtime_data.REQUIRED_FILES:
                 self.assertTrue((output / name).is_file(), name)
             for name in windows_runtime_data.REQUIRED_DIRS:
-                self.assertTrue((output / name / "0_0.bin").is_file(), name)
+                expected = "0_0.brmesh" if name == "road_surfaces" else "0_0.bin"
+                self.assertTrue((output / name / expected).is_file(), name)
             self.assertTrue((output / "routing_stats.json").is_file())
             self.assertFalse((output / "buildings.jsonl").exists())
             self.assertFalse((output / "pois.jsonl").exists())
@@ -55,6 +57,7 @@ class WindowsRuntimeDataTests(unittest.TestCase):
             self.assertFalse((output / "building_tiles").exists())
             self.assertIn("manifest.json", copied)
             self.assertIn("building_mesh_lod/0_0.bin", copied)
+            self.assertIn("road_surfaces/0_0.brmesh", copied)
 
     def test_selection_is_relative_and_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -65,6 +68,7 @@ class WindowsRuntimeDataTests(unittest.TestCase):
             self.assertEqual(first, sorted(first))
             self.assertEqual(first, second)
             self.assertIn("building_mesh_lod/0_0.bin", first)
+            self.assertIn("road_surfaces/0_0.brmesh", first)
             self.assertNotIn("building_tiles/0_0.jsonl", first)
 
     def test_missing_required_file_fails_closed(self) -> None:
@@ -80,6 +84,15 @@ class WindowsRuntimeDataTests(unittest.TestCase):
             root = Path(directory)
             source = self._source_fixture(root)
             for path in (source / "lod0").iterdir():
+                path.unlink()
+            with self.assertRaises(SystemExit):
+                windows_runtime_data.prepare_runtime_data(source, root / "runtime")
+
+    def test_missing_road_surfaces_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self._source_fixture(root)
+            for path in (source / "road_surfaces").iterdir():
                 path.unlink()
             with self.assertRaises(SystemExit):
                 windows_runtime_data.prepare_runtime_data(source, root / "runtime")
