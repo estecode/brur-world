@@ -38,7 +38,7 @@ jobs:
           python -m unittest tests.test_area_source_cache
           python -m unittest tests.test_normalized_source_consumers
           python -m unittest tests.test_pyrosm_source_stage
-          python -m unittest tests.test_osm_gpkg_source_stage
+          python -m unittest tests.test_osm_gpkg_source_cache
 
       - name: Run road LOD build policy tests
         run: python -m unittest tests.test_build_roads_lod
@@ -140,52 +140,64 @@ jobs:
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_road_surface_query.gd
 
       - name: Run continuous world showcase tests
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_continuous_world_showcase.gd
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_showcase.gd
 
       - name: Run portable vehicle dynamics tests
-        run: python -m unittest tests.test_vehicle_dynamics
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_dynamics.gd
 
       - name: Run vehicle integration tests
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_integration.gd
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_integration.gd
 
       - name: Run Person foundation tests
-        run: python -m unittest tests.test_person_foundation
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_person_foundation.gd
 
       - name: Run pedestrian population tests
-        run: python -m unittest tests.test_pedestrian_population
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_pedestrian_population.gd
 
       - name: Run police observation store tests
-        run: python -m unittest tests.test_police_observation_store
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_police_observation_store.gd
 
       - name: Run map controls regression tests
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_map_controls.gd
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_map_controls.gd
 
       - name: Run player map presentation regression tests
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_player_map_presentation.gd
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_player_map_marker.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_player_vehicle_presentation.gd
 
       - name: Run POI startup default regression test
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_poi_startup_default.gd
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_poi_default_disabled.gd
 
       - name: Run objective GPS regression suite
-        run: bash tests/test_gps_objective.sh
+        env:
+          CXX: g++
+        run: bash tools/test_issue4_gps.sh
 
       - name: Run objective music playback tests
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_music_playback.gd
+        run: bash tools/test_music.sh
 
       - name: Run objective world clock tests
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_clock.gd
+        run: bash tools/test_world_clock.sh
 
       - name: Run objective camera altitude tests
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_camera_altitude.gd
+        run: bash tools/test_camera_altitude.sh
 
       - name: Run objective astronomical sun tests
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_astronomical_sun.gd
+        run: bash tools/test_sun.sh
 
       - name: Run objective city light tests
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_city_lights.gd
+        run: bash tools/test_city_lights.sh
 
       - name: Run objective UI overlay tests
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_ui_overlay.gd
+        run: bash tools/test_ui_overlays.sh
 
       - name: Run objective cloud field tests
-        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_cloud_field.gd
+        run: bash tools/test_clouds.sh
