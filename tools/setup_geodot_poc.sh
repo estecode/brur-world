@@ -37,6 +37,30 @@ case "$platform" in
     ;;
 esac
 
+prepare_source() {
+  command -v git >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL git missing\n' >&2; return 1; }
+  if [[ ! -d "$SRC/.git" ]]; then
+    rm -rf "$SRC"
+    git clone --filter=blob:none --no-checkout https://github.com/$REPO.git "$SRC"
+  fi
+  git -C "$SRC" fetch --depth=1 origin "$PIN"
+  git -C "$SRC" checkout --detach "$PIN"
+  [[ "$(git -C "$SRC" rev-parse HEAD)" == "$PIN" ]] || {
+    printf 'GEODOT_SETUP=FAIL pinned source revision mismatch\n' >&2
+    return 1
+  }
+}
+
+copy_linux_pinned_addon() {
+  [[ "$platform" == "Linux" ]] || return 1
+  prepare_source
+  [[ -f "$SRC/demo/addons/geodot/x11/libgeodot.so" ]] || return 1
+  mkdir -p "$ROOT/addons"
+  rm -rf "$TARGET"
+  cp -R "$SRC/demo/addons/geodot" "$TARGET"
+  printf 'GEODOT_SETUP=PINNED_REPO sha=%s platform=%s\n' "$PIN" "$platform"
+}
+
 try_artifact() {
   command -v gh >/dev/null 2>&1 || return 1
   local row run_id head_sha
@@ -55,14 +79,8 @@ try_artifact() {
 }
 
 build_from_source() {
-  command -v git >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL git missing\n' >&2; return 1; }
   command -v scons >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL scons missing\n' >&2; return 1; }
-  if [[ ! -d "$SRC/.git" ]]; then
-    rm -rf "$SRC"
-    git clone https://github.com/$REPO.git "$SRC"
-  fi
-  git -C "$SRC" fetch origin "$PIN"
-  git -C "$SRC" checkout --detach "$PIN"
+  prepare_source
   git -C "$SRC" submodule update --init --recursive
 
   case "$platform" in
@@ -87,8 +105,12 @@ build_from_source() {
   printf 'GEODOT_SETUP=SOURCE sha=%s platform=%s\n' "$PIN" "$platform"
 }
 
-if ! try_artifact; then
-  printf 'GEODOT_SETUP=ARTIFACT_UNAVAILABLE sha=%s; falling back to source build\n' "$PIN"
+if copy_linux_pinned_addon; then
+  :
+elif try_artifact; then
+  :
+else
+  printf 'GEODOT_SETUP=PREBUILT_UNAVAILABLE sha=%s; falling back to source build\n' "$PIN"
   build_from_source
 fi
 
