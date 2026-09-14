@@ -1,0 +1,169 @@
+"""Small directed build planner for Sweden offline targets.
+
+This module owns orchestration metadata only. Dataset semantics remain in their
+existing builders and source-cache owners.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+PLAN_VERSION = 1
+STATE_FILE = "build_state.json"
+
+TARGET_SOURCES: dict[str, tuple[str, ...]] = {
+    "roads": ("highways",),
+    "routing": ("highways",),
+    "traffic": ("traffic_signals",),
+    "background": ("areas",),
+    "pois": ("pois",),
+    "buildings": ("areas", "pois"),
+    "search": ("addresses",),
+}
+TARGET_ORDER = tuple(TARGET_SOURCES)
+TARGET_OUTPUTS: dict[str, tuple[str, ...]] = {
+    "roads": ("lod0", "lod1", "lod2"),
+    "routing": ("routing.brg", "routing_geometry.brh", "routing_snap.brs"),
+    "traffic": ("traffic_signals.json",),
+    "background": ("background.brmap",),
+    "pois": ("pois.jsonl", "poi_tiles"),
+    "buildings": ("buildings.jsonl", "building_mesh_lod"),
+    "search": ("search_index.bsi",),
+}
+TARGET_BUILDERS: dict[str, tuple[str, ...]] = {
+    "roads": ("build_roads.py",),
+    "routing": ("build_routing_dataset.py", "routing_graph.py"),
+    "traffic": ("build_traffic_signals.py",),
+    "background": ("build_background.py",),
+    "pois": ("build_features.py", "poi_filter.py"),
+    "buildings": ("build_features.py", "build_building_mesh_pyramid.py"),
+    "search": ("build_search_index.py", "build_search_binary.py"),
+}
+
+
+@dataclass(frozen=True)
+class PlanItem:
+    target: str
+    status: str
+    reason: str
+    fingerprint: str | None
+
+
+def parse_targets(value: str) -> tuple[str, ...]:
+    requested = [part.strip() for part in value.split(",") if part.strip()]
+    if not requested or requested == ["all"]:
+        return TARGET_ORDER
+    unknown = [name for name in requested if name not in TARGET_SOURCES]
+    if unknown:
+        raise ValueError(f"unknown build target(s): {', '.join(unknown)}")
+    selected = set(requested)
+    # Buildings append relation-only POIs to the POI master/runtime tiles, so its
+    # existing production contract explicitly depends on the base POI target.
+    if "buildings" in selected:
+        selected.add("pois")
+    return tuple(name for name in TARGET_ORDER if name in selected)
+
+
+def required_source_routes(targets: tuple[str, ...]) -> tuple[str, ...]:
+    routes: list[str] = []
+    for target in targets:
+        for route in TARGET_SOURCES[target]:
+            if route not in routes:
+                routes.append(route)
+    return tuple(routes)
+
+
+def load_state(world_dir: Path) -> dict:
+    path = world_dir / STATE_FILE
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) and value.get("version") == PLAN_VERSION else {}
+
+
+def save_state(world_dir: Path, state: dict) -> None:
+    path = world_dir / STATE_FILE
+    temp = path.with_suffix(".json.tmp")
+    temp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    temp.replace(path)
+
+
+def _builder_digest(tools_dir: Path, target: str) -> str:
+    digest = hashlib.sha256()
+    for filename in TARGET_BUILDERS[target]:
+        path = tools_dir / filename
+        digest.update(filename.encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def target_fingerprint(tools_dir: Path, source_manifest: dict, target: str) -> str | None:
+    routes = source_manifest.get("routes")
+    source = source_manifest.get("source")
+    if not isinstance(routes, dict) or not isinstance(source, dict):
+        return None
+    dependencies: dict[str, object] = {}
+    for route in TARGET_SOURCES[target]:
+        entry = routes.get(route)
+        if not isinstance(entry, dict) or entry.get("complete") is not True:
+            return None
+        dependencies[route] = {
+            "version": entry.get("version"), "file": entry.get("file"),
+            "size_bytes": entry.get("size_bytes"),
+        }
+    payload = {
+        "plan_version": PLAN_VERSION,
+        "target": target,
+        "source": source,
+        "dependencies": dependencies,
+        "builder_sha256": _builder_digest(tools_dir, target),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def outputs_exist(world_dir: Path, target: str) -> bool:
+    for relative in TARGET_OUTPUTS[target]:
+        path = world_dir / relative
+        if not path.exists():
+            return False
+        if path.is_file() and path.stat().st_size == 0:
+            return False
+        if path.is_dir() and next(path.iterdir(), None) is None:
+            return False
+    return True
+
+
+def make_plan(tools_dir: Path, world_dir: Path, source_manifest: dict, requested: tuple[str, ...]) -> tuple[PlanItem, ...]:
+    state = load_state(world_dir)
+    target_state = state.get("targets", {}) if isinstance(state.get("targets"), dict) else {}
+    requested_set = set(requested)
+    items: list[PlanItem] = []
+    for target in TARGET_ORDER:
+        if target not in requested_set:
+            items.append(PlanItem(target, "SKIP", "not requested", None))
+            continue
+        fingerprint = target_fingerprint(tools_dir, source_manifest, target)
+        if fingerprint is None:
+            items.append(PlanItem(target, "BLOCKED", "source dependency missing/incomplete", None))
+            continue
+        old = target_state.get(target)
+        if isinstance(old, dict) and old.get("fingerprint") == fingerprint and outputs_exist(world_dir, target):
+            items.append(PlanItem(target, "CACHE HIT", "compatible fingerprint", fingerprint))
+        elif not outputs_exist(world_dir, target):
+            items.append(PlanItem(target, "REBUILD", "output missing/incomplete", fingerprint))
+        else:
+            items.append(PlanItem(target, "REBUILD", "dependency/builder fingerprint changed", fingerprint))
+    return tuple(items)
+
+
+def record_target(world_dir: Path, target: str, fingerprint: str, elapsed_s: float) -> None:
+    state = load_state(world_dir)
+    targets = dict(state.get("targets", {})) if isinstance(state.get("targets"), dict) else {}
+    targets[target] = {"fingerprint": fingerprint, "complete": True, "elapsed_s": elapsed_s}
+    save_state(world_dir, {"version": PLAN_VERSION, "targets": targets})
