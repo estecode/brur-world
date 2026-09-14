@@ -37,13 +37,27 @@ class OsmRouteSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_name:
             root = Path(temp_name)
             output = root / "world_data"
-            for source in (root / "fixture.osm", root / "highways.osm.pbf"):
+            cache = output / "osm_source_cache"
+            cache.mkdir(parents=True)
+            for source in (root / "fixture.osm", cache / "highways.osm.pbf"):
+                source.touch()
                 with mock.patch.object(
                     osm_route_source,
                     "build_source_caches",
                     side_effect=AssertionError("unexpected cache build"),
                 ):
                     self.assertEqual(osm_route_source.resolve_route_source(source, output, "highways"), source)
+
+    def test_non_cache_pbf_still_uses_authoritative_cache_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_name:
+            root = Path(temp_name)
+            source = root / "highways.osm.pbf"
+            source.touch()
+            output = root / "world_data"
+            cached = output / "osm_source_cache" / "highways.osm.pbf"
+            with mock.patch.object(osm_route_source, "build_source_caches", return_value={"highways": cached}) as build:
+                self.assertEqual(osm_route_source.resolve_route_source(source, output, "highways"), cached)
+            build.assert_called_once()
 
     def test_real_data_road_and_routing_builders_use_highway_adapter(self) -> None:
         routing = (TOOLS / "build_routing_dataset.py").read_text(encoding="utf-8")
