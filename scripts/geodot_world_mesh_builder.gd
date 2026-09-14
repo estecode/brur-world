@@ -9,6 +9,7 @@ const RoadLodPolicyScript = preload("res://scripts/road_lod_policy.gd")
 
 const LOD_FAR := 0
 const LOD_NEAR := 1
+const CELL_EDGE_EPSILON_M := 0.001
 
 static func build_buildings(records: Array, cell_origin_absolute: Vector2, lod: int) -> ArrayMesh:
 	if lod != LOD_FAR:
@@ -72,9 +73,20 @@ static func build_roads(records: Array, cell_origin_absolute: Vector2, lod: int)
 			sampled.append(points[index])
 		if sampled.is_empty() or not sampled[sampled.size() - 1].is_equal_approx(points[points.size() - 1]):
 			sampled.append(points[points.size() - 1])
+		var has_clip := record.has("clip_min") and record.has("clip_max")
+		var clip_min: Vector2 = record.get("clip_min", Vector2.ZERO)
+		var clip_max: Vector2 = record.get("clip_max", Vector2.ZERO)
 		for index in range(sampled.size() - 1):
-			var aa := sampled[index] - cell_origin_absolute
-			var bb := sampled[index + 1] - cell_origin_absolute
+			var segment_a := sampled[index]
+			var segment_b := sampled[index + 1]
+			if has_clip:
+				var clipped := clip_segment_to_cell(segment_a, segment_b, clip_min, clip_max)
+				if clipped.size() != 2:
+					continue
+				segment_a = clipped[0]
+				segment_b = clipped[1]
+			var aa := segment_a - cell_origin_absolute
+			var bb := segment_b - cell_origin_absolute
 			var a := Vector3(aa.x, 0.0, -aa.y)
 			var b := Vector3(bb.x, 0.0, -bb.y)
 			var d := b - a
@@ -89,6 +101,29 @@ static func build_roads(records: Array, cell_origin_absolute: Vector2, lod: int)
 	if emitted == 0:
 		return null
 	return st.commit()
+
+static func clip_segment_to_cell(a: Vector2, b: Vector2, cell_min: Vector2, cell_max: Vector2) -> PackedVector2Array:
+	var effective_max := Vector2(maxf(cell_min.x, cell_max.x - CELL_EDGE_EPSILON_M), maxf(cell_min.y, cell_max.y - CELL_EDGE_EPSILON_M))
+	var delta := b - a
+	var p := PackedFloat64Array([-delta.x, delta.x, -delta.y, delta.y])
+	var q := PackedFloat64Array([a.x - cell_min.x, effective_max.x - a.x, a.y - cell_min.y, effective_max.y - a.y])
+	var enter := 0.0
+	var leave := 1.0
+	for index in range(4):
+		var pi := float(p[index])
+		var qi := float(q[index])
+		if is_zero_approx(pi):
+			if qi < 0.0:
+				return PackedVector2Array()
+			continue
+		var ratio := qi / pi
+		if pi < 0.0:
+			enter = maxf(enter, ratio)
+		else:
+			leave = minf(leave, ratio)
+		if enter > leave:
+			return PackedVector2Array()
+	return PackedVector2Array([a + delta * enter, a + delta * leave])
 
 static func _road_color(road_class: int) -> Color:
 	if road_class <= 0:
