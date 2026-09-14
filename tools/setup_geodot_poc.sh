@@ -51,16 +51,6 @@ prepare_source() {
   }
 }
 
-copy_linux_pinned_addon() {
-  [[ "$platform" == "Linux" ]] || return 1
-  prepare_source
-  [[ -f "$SRC/demo/addons/geodot/x11/libgeodot.so" ]] || return 1
-  mkdir -p "$ROOT/addons"
-  rm -rf "$TARGET"
-  cp -R "$SRC/demo/addons/geodot" "$TARGET"
-  printf 'GEODOT_SETUP=PINNED_REPO sha=%s platform=%s\n' "$PIN" "$platform"
-}
-
 try_artifact() {
   command -v gh >/dev/null 2>&1 || return 1
   local row run_id head_sha
@@ -97,6 +87,9 @@ build_from_source() {
     Linux)
       (cd "$SRC/godot-cpp" && scons platform=linux generate_bindings=yes)
       (cd "$SRC" && scons platform=linux)
+      # Match upstream packaging: keep runtime dependencies beside the extension so
+      # the POC does not silently depend on the build machine's exact GDAL SONAME.
+      (cd "$SRC/demo/addons/geodot/x11" && ldd libgeodot.so | awk '/=> \// {print $3}' | xargs -r -I '{}' cp -n '{}' ./)
       ;;
   esac
   mkdir -p "$ROOT/addons"
@@ -105,12 +98,10 @@ build_from_source() {
   printf 'GEODOT_SETUP=SOURCE sha=%s platform=%s\n' "$PIN" "$platform"
 }
 
-if copy_linux_pinned_addon; then
-  :
-elif try_artifact; then
+if try_artifact; then
   :
 else
-  printf 'GEODOT_SETUP=PREBUILT_UNAVAILABLE sha=%s; falling back to source build\n' "$PIN"
+  printf 'GEODOT_SETUP=ARTIFACT_UNAVAILABLE sha=%s; building against host dependencies\n' "$PIN"
   build_from_source
 fi
 
