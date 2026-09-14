@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 import tempfile
 import unittest
@@ -26,8 +25,10 @@ class Tests(unittest.TestCase):
     def test_target_closure_is_minimal(self):
         self.assertEqual(parse_targets("routing"),("routing",))
         self.assertEqual(required_source_routes(parse_targets("routing")),("highways",))
-        self.assertEqual(parse_targets("buildings"),("pois","buildings"))
-        self.assertEqual(required_source_routes(parse_targets("buildings")),("pois","areas"))
+        self.assertEqual(parse_targets("buildings"),("buildings",))
+        self.assertEqual(required_source_routes(parse_targets("buildings")),("areas",))
+        self.assertEqual(parse_targets("pois"),("pois",))
+        self.assertEqual(required_source_routes(parse_targets("pois")),("pois","areas"))
 
     def test_unrelated_targets_are_skip(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -40,7 +41,7 @@ class Tests(unittest.TestCase):
     def test_exact_fingerprint_becomes_hit_and_changed_dependency_rebuilds_only_owner(self):
         with tempfile.TemporaryDirectory() as temp:
             world=Path(temp)
-            for name in ("routing.brg","routing_geometry.brh","routing_snap.brs"):
+            for name in ("routing.brg","routing_geometry.brh","routing_snap.brs","routing_stats.json"):
                 (world/name).write_bytes(b"x")
             first=next(p for p in make_plan(TOOLS,world,self.manifest(),("routing",)) if p.target=="routing")
             self.assertEqual(first.status,"REBUILD")
