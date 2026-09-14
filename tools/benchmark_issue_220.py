@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from area_source_cache import iter_area_facts
-from normalized_source_facts import iter_facts
+from highway_facts import iter_highway_ways
 from osm_source_cache import ALL_ROUTES, build_source_caches
 from source_identity import compute_source_identity
 
@@ -34,8 +34,8 @@ def _load_json(path:Path)->dict:
 
 def _count_highway_cache(path:Path)->tuple[int,int]:
     node_ids:set[int]=set(); ways=0; started=time.monotonic()
-    for ways,fact in enumerate(iter_facts(path,1),1):
-        node_ids.update(int(value) for value in fact.get("node_ids",()))
+    for ways,way in enumerate(iter_highway_ways(path),1):
+        node_ids.update(int(value) for value in way.node_ids)
         if ways%250_000==0:_log(f"PARITY highways ways={ways:,} unique-nodes={len(node_ids):,} elapsed={time.monotonic()-started:.1f}s")
     return len(node_ids),ways
 
