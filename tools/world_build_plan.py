@@ -11,16 +11,15 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-PLAN_VERSION = 1
+PLAN_VERSION = 2
 STATE_FILE = "build_state.json"
-
 TARGET_SOURCES: dict[str, tuple[str, ...]] = {
     "roads": ("highways",),
     "routing": ("highways",),
-    "traffic": ("traffic_signals",),
-    "background": ("areas",),
-    "pois": ("pois", "areas"),
-    "buildings": ("areas",),
+    "traffic": ("traffic_signals", "highways"),
+    "background": ("background_areas", "coastlines", "admin_boundaries"),
+    "pois": ("pois",),
+    "buildings": ("buildings",),
     "search": ("addresses",),
 }
 TARGET_ORDER = tuple(TARGET_SOURCES)
@@ -103,7 +102,10 @@ def _source_artifact_valid(cache_dir: Path | None, route: str, entry: dict) -> b
     if cache_dir is None:
         return True
     filename = entry.get("file")
-    if not isinstance(filename, str) or not filename:
+    checksum = entry.get("sha256")
+    if not isinstance(filename, str) or not filename.endswith(".osm.pbf"):
+        return False
+    if not isinstance(checksum, str) or len(checksum) != 64:
         return False
     path = cache_dir / filename
     if not path.is_file():
@@ -111,23 +113,7 @@ def _source_artifact_valid(cache_dir: Path | None, route: str, entry: dict) -> b
     expected_size = entry.get("size_bytes")
     if not isinstance(expected_size, int) or expected_size <= 0 or path.stat().st_size != expected_size:
         return False
-    if route == "areas":
-        try:
-            with path.open("rb") as handle:
-                if handle.read(4) != b"BAF1":
-                    return False
-                handle.seek(-20, 2)
-                if handle.read(4) != b"BAFE":
-                    return False
-        except (OSError, ValueError):
-            return False
-        return True
-    try:
-        with path.open("rb") as handle:
-            handle.seek(max(0, path.stat().st_size - 128))
-            return b"</osm>" in handle.read()
-    except OSError:
-        return False
+    return True
 
 
 def target_fingerprint(
@@ -149,8 +135,10 @@ def target_fingerprint(
             return None
         dependencies[route] = {
             "version": entry.get("version"),
+            "extractor_version": entry.get("extractor_version"),
             "file": entry.get("file"),
             "size_bytes": entry.get("size_bytes"),
+            "sha256": entry.get("sha256"),
         }
     payload = {
         "plan_version": PLAN_VERSION,
