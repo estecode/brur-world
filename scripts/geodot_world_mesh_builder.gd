@@ -1,0 +1,100 @@
+extends RefCounted
+class_name GeoDotWorldMeshBuilder
+
+## Builds batched presentation meshes from provider-independent GeoDot adapter records.
+## Dependencies: BuildingMeshBuilder for BRUR's existing building height/appearance contract.
+
+const BuildingMeshBuilderScript = preload("res://scripts/building_mesh_builder.gd")
+const RoadLodPolicyScript = preload("res://scripts/road_lod_policy.gd")
+
+const LOD_FAR := 0
+const LOD_NEAR := 1
+
+static func build_buildings(records: Array, cell_origin_absolute: Vector2, lod: int) -> ArrayMesh:
+	if lod != LOD_FAR:
+		return BuildingMeshBuilderScript.build_tile_mesh(records, cell_origin_absolute)
+	var simplified: Array = []
+	for value in records:
+		if typeof(value) != TYPE_DICTIONARY:
+			continue
+		var record: Dictionary = value
+		var polygons: Array = record.get("geometry", [])
+		if polygons.is_empty() or typeof(polygons[0]) != TYPE_DICTIONARY:
+			continue
+		var raw_outer: Array = (polygons[0] as Dictionary).get("outer", [])
+		if raw_outer.size() < 3:
+			continue
+		var min_x := INF
+		var min_y := INF
+		var max_x := -INF
+		var max_y := -INF
+		for point_value in raw_outer:
+			if typeof(point_value) != TYPE_ARRAY:
+				continue
+			var pair: Array = point_value
+			if pair.size() < 2:
+				continue
+			var x := float(pair[0])
+			var y := float(pair[1])
+			min_x = minf(min_x, x)
+			min_y = minf(min_y, y)
+			max_x = maxf(max_x, x)
+			max_y = maxf(max_y, y)
+		if not is_finite(min_x) or max_x - min_x < 0.5 or max_y - min_y < 0.5:
+			continue
+		var proxy := record.duplicate(true)
+		proxy["geometry"] = [{
+			"outer": [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]],
+			"holes": [],
+		}]
+		simplified.append(proxy)
+	return BuildingMeshBuilderScript.build_tile_mesh(simplified, cell_origin_absolute)
+
+static func build_roads(records: Array, cell_origin_absolute: Vector2, lod: int) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var emitted := 0
+	for value in records:
+		if typeof(value) != TYPE_DICTIONARY:
+			continue
+		var record: Dictionary = value
+		var points: PackedVector2Array = record.get("points", PackedVector2Array())
+		if points.size() < 2:
+			continue
+		var road_class := int(record.get("road_class", 5))
+		var width := RoadLodPolicyScript.road_width_m(road_class)
+		if lod == LOD_FAR:
+			width = maxf(2.0, width * 0.70)
+		var color := _road_color(road_class)
+		var stride := 2 if lod == LOD_FAR else 1
+		var sampled := PackedVector2Array()
+		for index in range(0, points.size(), stride):
+			sampled.append(points[index])
+		if sampled.is_empty() or not sampled[sampled.size() - 1].is_equal_approx(points[points.size() - 1]):
+			sampled.append(points[points.size() - 1])
+		for index in range(sampled.size() - 1):
+			var aa := sampled[index] - cell_origin_absolute
+			var bb := sampled[index + 1] - cell_origin_absolute
+			var a := Vector3(aa.x, 0.0, -aa.y)
+			var b := Vector3(bb.x, 0.0, -bb.y)
+			var d := b - a
+			if d.length_squared() < 0.01:
+				continue
+			var side := Vector3(-d.z, 0.0, d.x).normalized() * width * 0.5
+			for vertex in [a - side, a + side, b + side, a - side, b + side, b - side]:
+				st.set_color(color)
+				st.set_normal(Vector3.UP)
+				st.add_vertex(vertex)
+			emitted += 6
+	if emitted == 0:
+		return null
+	return st.commit()
+
+static func _road_color(road_class: int) -> Color:
+	if road_class <= 0:
+		return Color(1.0, 0.58, 0.20)
+	if road_class <= 2:
+		return Color(1.0, 0.78, 0.36)
+	if road_class <= 4:
+		return Color(0.92, 0.88, 0.72)
+	return Color(0.62, 0.66, 0.64)
