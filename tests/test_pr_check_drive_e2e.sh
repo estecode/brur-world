@@ -9,6 +9,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 WORKTREE="$TMP/worktree"
 WORLD_DATA="$TMP/world_data"
+MANUAL_CHECK='production Drive - confirm building presentation remains visually coherent during traversal'
 mkdir -p "$WORKTREE/tools" "$WORLD_DATA/building_mesh_lod"
 cp "$ROOT/tools/pr_check_local.sh" "$WORKTREE/tools/pr_check_local.sh"
 cp "$ROOT/tools/pr_check_scope.py" "$WORKTREE/tools/pr_check_scope.py"
@@ -82,8 +83,13 @@ chmod +x "$FAKE_GODOT"
 
 run_flow() {
   local review_mode="${1:-required}"
+  local manual_check=""
+  if [[ "$review_mode" == "required" ]]; then
+    manual_check="$MANUAL_CHECK"
+  fi
   BRUR_PR_CHECK_CHANGED_FILES='scripts/camera_controller.gd' \
   BRUR_PR_CHECK_MANUAL_REVIEW="$review_mode" \
+  BRUR_PR_CHECK_MANUAL_CHECK="$manual_check" \
   FAKE_DRIVE_MARKER="${FAKE_DRIVE_MARKER:-0}" \
   bash "$ROOT/tools/run_pr_owned_check.sh" "$WORKTREE" 235 "$WORLD_DATA" "$FAKE_PYTHON" "$FAKE_GODOT"
 }
@@ -119,6 +125,10 @@ set -e
 [[ "$status" -eq 0 ]] || fail_scenario check-then-merge "flow exited $status"
 grep -q 'production Drive FPS real-data test: OK' <<<"$output" || fail_scenario check-then-merge "Drive completion marker missing"
 grep -q 'PR_CHECK=STATUS success pr=235' <<<"$output" || fail_scenario check-then-merge "objective success output missing"
+grep -q 'SAFE CHECK — MANUAL CHECK REQUIRED' <<<"$output" || fail_scenario check-then-merge "manual-review heading missing"
+grep -Fq "Inspect exactly this: $MANUAL_CHECK" <<<"$output" || fail_scenario check-then-merge "concrete persisted CHECK missing"
+grep -q 'PASS: close Godot, then report: test ok #235' <<<"$output" || fail_scenario check-then-merge "PASS reporting instruction missing"
+grep -q 'FAIL: close Godot, then report: test fail #235' <<<"$output" || fail_scenario check-then-merge "FAIL reporting instruction missing"
 status_count="$(grep -c '^STATUS .*--state success .*--stage objective-checks-complete' "$ORDER_LOG" || true)"
 [[ "$status_count" -eq 1 ]] || fail_scenario check-then-merge "expected one objective success, got $status_count"
 headless_count="$(grep -c '^GODOT_HEADLESS ' "$ORDER_LOG" || true)"
