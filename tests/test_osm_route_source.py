@@ -23,7 +23,7 @@ class OsmRouteSourceTests(unittest.TestCase):
             source = root / "sweden-test.osm.pbf"
             source.write_bytes(b"fixture")
             output = root / "world_data"
-            cached = output / "osm_source_cache" / "highways.osm"
+            cached = output / "osm_source_cache" / "highways.osm.pbf"
             with mock.patch.object(
                 osm_route_source,
                 "build_source_caches",
@@ -37,7 +37,7 @@ class OsmRouteSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_name:
             root = Path(temp_name)
             output = root / "world_data"
-            for source in (root / "fixture.osm", root / "highways.osm"):
+            for source in (root / "fixture.osm", root / "highways.osm.pbf"):
                 with mock.patch.object(
                     osm_route_source,
                     "build_source_caches",
