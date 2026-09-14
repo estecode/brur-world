@@ -17,7 +17,8 @@ const ROAD_MAGIC: String = "BRT1"
 const ROAD_SURFACE_MAGIC: String = "BRS1"
 const MAP_MAGIC: String = "BRM2"
 const ROAD_MESH_CACHE_LIMIT: int = 512
-const ROAD_GRADE_STEP_M: float = 0.25
+# BRS1 grade is semantic only until authoritative vertical road profiles own physical Y.
+const ROAD_GRADE_STEP_M: float = 0.0
 const DRIVE_LAYER_SPACING_M: float = 0.01
 const DRIVE_BACKGROUND_LAYER_SPACING_M: float = 0.05
 
