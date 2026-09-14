@@ -154,12 +154,13 @@ def main() -> None:
         raise SystemExit(f"pyrosm >= 0.13.1 required, found {version}")
     if not args.source.is_file() or not args.source.name.endswith(".osm.pbf"):
         raise SystemExit(f"source must be an existing .osm.pbf: {args.source}")
+    workers = int(args.workers) if str(args.workers).isdigit() else args.workers
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    temp = args.output.with_suffix(args.output.suffix + f".tmp-{os.getpid()}-{time.time_ns()}")
+    temp = args.output.parent / f".{args.output.stem}.tmp-{os.getpid()}-{time.time_ns()}.osm.pbf"
     started = time.monotonic()
-    _log(f"START domain={args.domain} source={args.source.name} workers={args.workers} pyrosm={version}")
+    _log(f"START domain={args.domain} source={args.source.name} workers={workers} pyrosm={version}")
 
     try:
         try:
@@ -169,7 +170,7 @@ def main() -> None:
         if cleared:
             _log(f"CLEARED internal-pyrosm-cache files={cleared}")
 
-        osm = OSM(args.source, engine="out_of_core", workers=args.workers, keep_metadata=False)
+        osm = OSM(args.source, engine="out_of_core", workers=workers, keep_metadata=False)
         frame = _extract(osm, args.domain)
         if frame is None:
             raise RuntimeError(f"pyrosm returned no frame for domain {args.domain}")
@@ -194,7 +195,7 @@ def main() -> None:
             "output": str(args.output),
             "pyrosm_version": version,
             "engine": "out_of_core",
-            "workers": args.workers,
+            "workers": workers,
             "counts": counts,
             "records": counts["records"],
             "size_bytes": args.output.stat().st_size,
