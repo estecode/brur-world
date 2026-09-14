@@ -1,4 +1,4 @@
-"""Verify BOSC2 live direct-fanout progress and no obsolete finalize spool."""
+"""Verify BOSC2 native-prefilter progress and no obsolete finalize spool."""
 
 from __future__ import annotations
 
@@ -34,8 +34,8 @@ class Tests(unittest.TestCase):
             with contextlib.redirect_stdout(output): build_source_caches(pbf,root/"cache",("highways",))
             text=output.getvalue()
             self.assertIn("[plan] highways",text)
-            self.assertIn("[osm-source] START direct routes=highways",text)
-            self.assertIn("[osm-source] scanned:",text)
+            self.assertIn("[osm-source] START native-prefiltered routes=highways",text)
+            self.assertIn("[osm-source] python-visible:",text)
             self.assertIn("[osm-source] DONE route=highways",text)
             self.assertNotIn("finalizing: selecting spool records",text)
             self.assertFalse((root/"cache"/"resume-spool").exists())
