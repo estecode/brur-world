@@ -4,10 +4,11 @@ class_name GeoDotWorldSource
 ## Thin source adapter from GeoDot/GDAL objects into BRUR-owned render records.
 ##
 ## Dependencies:
-## - Requires the GeoDot GDExtension to register GeoPackage loading before open_dataset().
+## - Dynamically loads the optional GeoDot GDExtension before opening GeoPackage data.
 ## - Returns provider-independent dictionaries consumed by BRUR presentation builders.
 ## - Owns no coordinate conversion, gameplay semantics, camera policy, or rendering nodes.
 
+const GEODOT_EXTENSION_PATH := "res://addons/geodot/geodot.gdextension"
 const BUILDING_LAYER_CANDIDATES := ["buildings", "building", "multipolygons"]
 const ROAD_LAYER_CANDIDATES := ["roads", "road", "lines"]
 
@@ -18,11 +19,15 @@ var dataset_path := ""
 var epsg_code := 0
 var feature_layers: Dictionary = {}
 var open_ms := 0.0
+var _extension_resource = null
 
 func open_dataset(path: String) -> Dictionary:
 	close()
 	if path.is_empty() or not FileAccess.file_exists(path):
 		return {"ok": false, "error": "GeoPackage not found: %s" % path}
+	var extension_error := _ensure_extension_loaded()
+	if not extension_error.is_empty():
+		return {"ok": false, "error": extension_error}
 	var started := Time.get_ticks_usec()
 	var loaded: Variant = load(path)
 	open_ms = float(Time.get_ticks_usec() - started) / 1000.0
@@ -49,6 +54,16 @@ func open_dataset(path: String) -> Dictionary:
 		"road_layer": _layer_name(road_layer),
 		"open_ms": open_ms,
 	}
+
+func _ensure_extension_loaded() -> String:
+	if _extension_resource != null:
+		return ""
+	if not FileAccess.file_exists(GEODOT_EXTENSION_PATH):
+		return "GeoDot extension is not installed at %s" % GEODOT_EXTENSION_PATH
+	_extension_resource = ResourceLoader.load(GEODOT_EXTENSION_PATH)
+	if _extension_resource == null:
+		return "GeoDot extension failed to load from %s" % GEODOT_EXTENSION_PATH
+	return ""
 
 func close() -> void:
 	dataset = null
