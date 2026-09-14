@@ -53,7 +53,7 @@ A revision that supports the build provides `tools/windows_build/target.sh`. The
 
 The normal target exports the selected revision's existing production `run/main_scene` from `project.godot`. The Windows tooling must not rewrite the project entrypoint to a harness or POC scene.
 
-`prepare_runtime_data.py` is the single selection contract for generated production runtime representations. It excludes rebuild-only inputs such as `buildings.jsonl`, `search_index.jsonl`, `pois.jsonl`, `building_tiles/`, and `osm_source_cache/`, and includes the current production `building_mesh_lod/` dataset.
+`prepare_runtime_data.py` is the single selection contract for generated production runtime representations. It excludes rebuild-only inputs such as `buildings.jsonl`, `search_index.jsonl`, `pois.jsonl`, `building_tiles/`, and `osm_source_cache/`, and requires both current production mesh datasets: `building_mesh_lod/` and BRS1 `road_surfaces/`. A Windows build fails closed instead of silently falling back to legacy BRT1 road extrusion when production road surfaces are missing.
 
 `runtime_pack.py` fingerprints exactly that selection. On the first build it hashes the selected files and writes a mountable `brur-world-data.zip`. Data that is consumed sequentially or chunk-by-chunk remains deflate-compressed. The seek-heavy routing datasets `routing.brg`, `routing_snap.brs`, and `routing_geometry.brh` are stored as uncompressed ZIP members so Godot/native runtime code can perform bounded random access without repeatedly inflating large entries. This is a delivery/storage property only; the authoritative generated artifacts and their hashes are unchanged.
 
@@ -63,7 +63,7 @@ The Godot export itself contains code/assets only. `scripts/windows_runtime_pack
 
 The loader also opens `logs/windows-runtime.log` beside the executable before mounting the pack. It flushes startup/mount timing immediately and records the first 15 one-second frame-loop heartbeats. This gives the packaged client useful evidence even when startup or the frame loop becomes severely overloaded.
 
-After export, the target opens the produced game PCK with local Godot, confirms that it does **not** contain `world_data`, mounts the external runtime pack, and executes `tests/godot/test_windows_packaged_world_data.gd`. Missing top-level datasets, empty runtime directories, obsolete `building_tiles`, leaked source caches, missing random-access storage declarations, or failed mounted routing seek/read probes fail the build before packaging.
+After export, the target opens the produced game PCK with local Godot, confirms that it does **not** contain `world_data`, mounts the external runtime pack, and executes `tests/godot/test_windows_packaged_world_data.gd`. Missing top-level datasets, missing BRS1 `road_surfaces`, empty runtime directories, obsolete `building_tiles`, leaked source caches, missing random-access storage declarations, or failed mounted routing seek/read probes fail the build before packaging.
 
 ## Package contract
 
