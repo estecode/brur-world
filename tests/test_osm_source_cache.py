@@ -17,7 +17,6 @@ if str(TOOLS) not in sys.path: sys.path.insert(0, str(TOOLS))
 import osm_source_cache
 from highway_facts import iter_highway_ways
 from osm_source_cache import ALL_ROUTES, CACHE_FORMAT, ROUTE_VERSIONS, build_source_caches
-from tests.test_geofabrik_source_cache import Tests as GeofabrikSourceCacheTests
 
 FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
 <osm version="0.6">
