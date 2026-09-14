@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Export full POI data while building a filtered runtime POI tile set.
+"""Export POI/building data from route caches and shared assembled area facts.
 
 Dependencies:
-- Reads OSM through pyosmium and shared world projection helpers.
+- Reads OSM route caches through pyosmium for node/way POIs.
+- Reads BAF1 assembled area facts for buildings/relation POIs when available.
 - Uses poi_filter for deterministic offline runtime relevance/category decisions.
 """
 
@@ -21,10 +22,11 @@ from typing import TextIO
 
 import osmium
 
+from area_source_cache import area_source_cache_valid, is_poi_tags, iter_area_facts
 from poi_filter import excluded_poi_category, runtime_poi_category
 from world_common import TILE_SIZE, ensure_pbf, project
 
-EXPORTER_VERSION = "poi-v5-runtime-filter"
+EXPORTER_VERSION = "poi-v6-shared-area-cache"
 POI_PROGRESS_INTERVAL = 5_000_000
 
 POI_KEYS = {
@@ -61,10 +63,7 @@ class TileJsonlWriter:
             self.excluded[excluded_poi_category(record["tags"])] += 1
             return
         runtime_record = runtime_poi_record(record, category)
-        key = (
-            math.floor(float(runtime_record["x"]) / TILE_SIZE),
-            math.floor(float(runtime_record["y"]) / TILE_SIZE),
-        )
+        key = (math.floor(float(runtime_record["x"]) / TILE_SIZE), math.floor(float(runtime_record["y"]) / TILE_SIZE))
         file = self.files.pop(key, None)
         if file is None:
             file = (self.write_directory / f"{key[0]}_{key[1]}.jsonl").open("a", encoding="utf-8")
@@ -98,28 +97,17 @@ class TileJsonlWriter:
                 stale.rename(self.directory)
             raise
         if stale is not None and stale.exists():
-            try:
-                shutil.rmtree(stale)
-            except OSError as exc:
-                print(f"[features] Warning: could not remove stale POI tiles {stale}: {exc}", flush=True)
+            shutil.rmtree(stale, ignore_errors=True)
 
     def cleanup(self) -> None:
         self.close()
-        if not self.staged or self.published or not self.write_directory.exists():
-            return
-        try:
-            shutil.rmtree(self.write_directory)
-        except OSError as exc:
-            print(f"[features] Warning: could not remove staging directory {self.write_directory}: {exc}", flush=True)
+        if self.staged and not self.published and self.write_directory.exists():
+            shutil.rmtree(self.write_directory, ignore_errors=True)
 
 
 def git_revision() -> str:
     try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        ).strip()
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL, text=True).strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
 
@@ -133,13 +121,7 @@ def tags_dict(tags: osmium.osm.TagList) -> dict[str, str]:
 
 
 def is_poi(tags: osmium.osm.TagList) -> bool:
-    if any(tags.get(key) is not None for key in POI_KEYS):
-        return True
-    if tags.get("highway") in SPECIAL_HIGHWAY_POIS:
-        return True
-    if tags.get("enforcement") is not None or tags.get("surveillance") is not None:
-        return True
-    return any(tag.k.startswith("camera:") for tag in tags)
+    return is_poi_tags(tags_dict(tags))
 
 
 def write_jsonl(file: TextIO, record: dict) -> None:
@@ -148,12 +130,8 @@ def write_jsonl(file: TextIO, record: dict) -> None:
 
 def runtime_poi_record(record: dict, category: str) -> dict:
     return {
-        "osm_type": record["osm_type"],
-        "osm_id": record["osm_id"],
-        "x": record["x"],
-        "y": record["y"],
-        "category": category,
-        "tags": record["tags"],
+        "osm_type": record["osm_type"], "osm_id": record["osm_id"],
+        "x": record["x"], "y": record["y"], "category": category, "tags": record["tags"],
     }
 
 
@@ -190,12 +168,9 @@ def save_feature_manifest(output: Path, updates: dict) -> dict:
     manifest = load_manifest(output)
     features = dict(manifest.get("features", {}))
     features.update({
-        "format": "JSONL1",
-        "exporter_version": EXPORTER_VERSION,
-        "buildings_file": "buildings.jsonl",
-        "pois_file": "pois.jsonl",
-        "poi_tiles_dir": "poi_tiles",
-        "poi_tile_size": TILE_SIZE,
+        "format": "JSONL1", "exporter_version": EXPORTER_VERSION,
+        "buildings_file": "buildings.jsonl", "pois_file": "pois.jsonl",
+        "poi_tiles_dir": "poi_tiles", "poi_tile_size": TILE_SIZE,
     })
     features.update(updates)
     manifest["features"] = features
@@ -214,14 +189,15 @@ def print_filter_counts(prefix: str, included: dict[str, int], excluded: dict[st
     print(f"[{prefix}] Runtime POI excluded by category: {json.dumps(excluded, sort_keys=True)}", flush=True)
 
 
-class NodePoiHandler(osmium.SimpleHandler):
-    """True fast pass: only node POIs, no way locations and no area assembly."""
+class PoiRouteHandler(osmium.SimpleHandler):
+    """Direct node+way POI pass over the small POI route cache."""
 
     def __init__(self, pois_file: TextIO, poi_tiles: TileJsonlWriter) -> None:
         super().__init__()
         self.pois_file = pois_file
         self.poi_tiles = poi_tiles
         self.poi_nodes = 0
+        self.poi_ways = 0
         self.scanned_nodes = 0
         self.started = time.monotonic()
         self.next_progress = POI_PROGRESS_INTERVAL
@@ -230,40 +206,15 @@ class NodePoiHandler(osmium.SimpleHandler):
         self.scanned_nodes += 1
         if self.scanned_nodes >= self.next_progress:
             elapsed = max(0.001, time.monotonic() - self.started)
-            rate = self.scanned_nodes / elapsed
-            print(
-                f"[pois] scanned {self.scanned_nodes:,} nodes | found {self.poi_nodes:,} POIs | "
-                f"{elapsed:.1f}s | {rate:,.0f} nodes/s",
-                flush=True,
-            )
+            print(f"[pois] nodes={self.scanned_nodes:,} found={self.poi_nodes + self.poi_ways:,} rate={self.scanned_nodes / elapsed:,.0f}/s", flush=True)
             self.next_progress += POI_PROGRESS_INTERVAL
-
         if not is_poi(node.tags) or not node.location.valid():
             return
         x, y = project(node.lon, node.lat)
-        record = {
-            "osm_type": "node",
-            "osm_id": int(node.id),
-            "x": x,
-            "y": y,
-            "tags": tags_dict(node.tags),
-        }
+        record = {"osm_type": "node", "osm_id": int(node.id), "x": x, "y": y, "tags": tags_dict(node.tags)}
         write_jsonl(self.pois_file, record)
         self.poi_tiles.write(record)
         self.poi_nodes += 1
-
-
-class HeavyFeatureHandler(osmium.SimpleHandler):
-    """Heavy pass: POI ways, building footprints and relation-only POIs."""
-
-    def __init__(self, buildings_file: TextIO, pois_file: TextIO, poi_tiles: TileJsonlWriter) -> None:
-        super().__init__()
-        self.buildings_file = buildings_file
-        self.pois_file = pois_file
-        self.poi_tiles = poi_tiles
-        self.buildings = 0
-        self.poi_ways = 0
-        self.poi_areas = 0
 
     def way(self, way: osmium.osm.Way) -> None:
         if not is_poi(way.tags):
@@ -275,25 +226,25 @@ class HeavyFeatureHandler(osmium.SimpleHandler):
         if not points:
             return
         x, y = point_average(points)
-        record = {
-            "osm_type": "way",
-            "osm_id": int(way.id),
-            "x": x,
-            "y": y,
-            "geometry": points,
-            "tags": tags_dict(way.tags),
-        }
+        record = {"osm_type": "way", "osm_id": int(way.id), "x": x, "y": y, "geometry": points, "tags": tags_dict(way.tags)}
         write_jsonl(self.pois_file, record)
         self.poi_tiles.write(record)
         self.poi_ways += 1
 
-    def area(self, area: osmium.osm.Area) -> None:
-        tags = area.tags
-        building = tags.get("building") is not None or tags.get("building:part") is not None
-        relation_poi = is_poi(tags) and not area.from_way()
-        if not building and not relation_poi:
-            return
 
+class HeavyFeatureHandler(osmium.SimpleHandler):
+    """Compatibility PBF adapter for building areas and relation-only POIs."""
+
+    def __init__(self, buildings_file: TextIO, pois_file: TextIO | None, poi_tiles: TileJsonlWriter | None) -> None:
+        super().__init__()
+        self.buildings_file = buildings_file
+        self.pois_file = pois_file
+        self.poi_tiles = poi_tiles
+        self.buildings = 0
+        self.poi_areas = 0
+
+    def area(self, area: osmium.osm.Area) -> None:
+        tags = tags_dict(area.tags)
         polygons: list[dict] = []
         representative_points: list[list[float]] = []
         for outer in area.outer_rings():
@@ -306,121 +257,111 @@ class HeavyFeatureHandler(osmium.SimpleHandler):
                 continue
             polygons.append({"outer": shell, "holes": [hole for hole in holes if len(hole) >= 3]})
             representative_points.extend(shell)
-        if not polygons:
-            return
+        if polygons:
+            self.consume(int(area.id), bool(area.from_way()), tags, polygons, representative_points)
 
-        x, y = point_average(representative_points)
-        record = {
-            "osm_type": "area",
-            "osm_id": int(area.id),
-            "x": x,
-            "y": y,
-            "geometry": polygons,
-            "tags": tags_dict(tags),
-        }
+    def consume(self, area_id: int, from_way: bool, tags: dict[str, str], polygons: list[dict], points: list[list[float]]) -> None:
+        building = tags.get("building") is not None or tags.get("building:part") is not None
+        relation_poi = is_poi_tags(tags) and not from_way
+        if not building and not relation_poi:
+            return
+        x, y = point_average(points)
+        record = {"osm_type": "area", "osm_id": area_id, "x": x, "y": y, "geometry": polygons, "tags": tags}
         if building:
             write_jsonl(self.buildings_file, record)
             self.buildings += 1
-        if relation_poi:
+        if relation_poi and self.pois_file is not None and self.poi_tiles is not None:
             write_jsonl(self.pois_file, record)
             self.poi_tiles.write(record)
             self.poi_areas += 1
 
 
-def build_pois(pbf: Path, output: Path) -> dict:
-    """Build full node POIs plus the filtered runtime node tiles."""
-    ensure_pbf(pbf)
+def _consume_baf(source: Path, handler: HeavyFeatureHandler) -> None:
+    for index, fact in enumerate(iter_area_facts(source), 1):
+        polygons = fact["geometry"]
+        points = [point for polygon in polygons for point in polygon.get("outer", [])]
+        if points:
+            handler.consume(
+                int(fact.get("area_id", fact["osm_id"])), fact.get("osm_type") == "way",
+                {str(k): str(v) for k, v in fact["tags"].items()}, polygons, points,
+            )
+        if index % 250_000 == 0:
+            print(f"[buildings] area-facts={index:,} buildings={handler.buildings:,} relation-pois={handler.poi_areas:,}", flush=True)
+
+
+def build_pois(source: Path, output: Path) -> dict:
+    """Build node+way POIs directly from the selected POI route cache."""
+    ensure_pbf(source)
     output.mkdir(parents=True, exist_ok=True)
     pois_path = output / "pois.jsonl"
     poi_tiles = TileJsonlWriter(output / "poi_tiles", staged=True)
     started = time.monotonic()
     print_version()
-    print(f"[pois] Reading {pbf} ...", flush=True)
-    print(f"[pois] Fast node-only pass, max open tile files: {poi_tiles.max_open}", flush=True)
-    print(f"[pois] Progress every {POI_PROGRESS_INTERVAL:,} scanned nodes", flush=True)
-
+    print(f"[pois] START source={source}", flush=True)
     success = False
     try:
         with pois_path.open("w", encoding="utf-8") as pois_file:
-            handler = NodePoiHandler(pois_file, poi_tiles)
-            handler.apply_file(str(pbf), locations=False)
+            handler = PoiRouteHandler(pois_file, poi_tiles)
+            handler.apply_file(str(source), locations=True)
         poi_tiles.publish()
         success = True
     finally:
         if not success:
             poi_tiles.cleanup()
-
     included = dict(sorted(poi_tiles.included.items()))
     excluded = dict(sorted(poi_tiles.excluded.items()))
     manifest = save_feature_manifest(output, {
-        "poi_nodes": handler.poi_nodes,
-        "poi_ways": 0,
-        "poi_areas": 0,
-        "pois_total": handler.poi_nodes,
+        "poi_nodes": handler.poi_nodes, "poi_ways": handler.poi_ways, "poi_areas": 0,
+        "pois_total": handler.poi_nodes + handler.poi_ways,
         "runtime_pois_total": poi_tiles.records,
         "runtime_poi_included_by_category": included,
         "runtime_poi_excluded_by_category": excluded,
-        "pois_fast_complete": True,
-        "way_pois_complete": False,
-        "relation_pois_complete": False,
+        "pois_fast_complete": True, "way_pois_complete": True, "relation_pois_complete": False,
     })
-    print(f"[pois] Scanned nodes: {handler.scanned_nodes:,}", flush=True)
-    print(f"[pois] Raw/master node POIs: {handler.poi_nodes:,}", flush=True)
-    print(f"[pois] Runtime POI records: {poi_tiles.records:,}", flush=True)
-    print_filter_counts("pois", included, excluded)
-    print(f"[pois] Completed in {time.monotonic() - started:.1f}s", flush=True)
-    print("[pois] Way/relation POIs are intentionally deferred to the heavy buildings pass.", flush=True)
+    print(f"[pois] DONE nodes={handler.poi_nodes:,} ways={handler.poi_ways:,} runtime={poi_tiles.records:,} elapsed={time.monotonic() - started:.1f}s", flush=True)
     return manifest
 
 
-def build_buildings(pbf: Path, output: Path) -> dict:
-    """Build expensive areas and complete raw/runtime POIs with ways and relations."""
-    ensure_pbf(pbf)
+def build_buildings(source: Path, output: Path) -> dict:
+    """Build buildings and append relation-only POIs from shared area facts."""
+    if not area_source_cache_valid(source):
+        ensure_pbf(source)
     output.mkdir(parents=True, exist_ok=True)
     buildings_path = output / "buildings.jsonl"
     pois_path = output / "pois.jsonl"
     poi_tiles = TileJsonlWriter(output / "poi_tiles", staged=False)
     started = time.monotonic()
     print_version()
-    print(f"[buildings] Reading {pbf} ...", flush=True)
-    print("[buildings] Heavy pass: buildings + POI ways + relation-only POIs", flush=True)
-
+    print(f"[buildings] START source={source}", flush=True)
     with buildings_path.open("w", encoding="utf-8") as buildings_file, pois_path.open("a", encoding="utf-8") as pois_file:
         handler = HeavyFeatureHandler(buildings_file, pois_file, poi_tiles)
-        handler.apply_file(str(pbf), locations=True)
+        if area_source_cache_valid(source):
+            _consume_baf(source, handler)
+        else:
+            handler.apply_file(str(source), locations=True)
     poi_tiles.close()
-
     features = dict(load_manifest(output).get("features", {}))
     poi_nodes = int(features.get("poi_nodes", 0))
-    total = poi_nodes + handler.poi_ways + handler.poi_areas
+    poi_ways = int(features.get("poi_ways", 0))
+    total = poi_nodes + poi_ways + handler.poi_areas
     included = merged_counts(features.get("runtime_poi_included_by_category", {}), poi_tiles.included)
     excluded = merged_counts(features.get("runtime_poi_excluded_by_category", {}), poi_tiles.excluded)
     runtime_total = int(features.get("runtime_pois_total", 0)) + poi_tiles.records
     manifest = save_feature_manifest(output, {
-        "buildings": handler.buildings,
-        "poi_ways": handler.poi_ways,
-        "poi_areas": handler.poi_areas,
-        "pois_total": total,
-        "runtime_pois_total": runtime_total,
-        "runtime_poi_included_by_category": included,
-        "runtime_poi_excluded_by_category": excluded,
-        "way_pois_complete": True,
-        "relation_pois_complete": True,
+        "buildings": handler.buildings, "poi_ways": poi_ways, "poi_areas": handler.poi_areas,
+        "pois_total": total, "runtime_pois_total": runtime_total,
+        "runtime_poi_included_by_category": included, "runtime_poi_excluded_by_category": excluded,
+        "way_pois_complete": True, "relation_pois_complete": True,
+        "area_source_shared": area_source_cache_valid(source),
     })
-    print(f"[buildings] Buildings: {handler.buildings:,}", flush=True)
-    print(f"[buildings] Raw/master POI ways appended: {handler.poi_ways:,}", flush=True)
-    print(f"[buildings] Raw/master relation POIs appended: {handler.poi_areas:,}", flush=True)
-    print(f"[buildings] Runtime POIs total: {runtime_total:,}", flush=True)
-    print_filter_counts("buildings", included, excluded)
-    print(f"[buildings] Completed in {time.monotonic() - started:.1f}s", flush=True)
+    print(f"[buildings] DONE buildings={handler.buildings:,} relation-pois={handler.poi_areas:,} elapsed={time.monotonic() - started:.1f}s", flush=True)
     return manifest
 
 
 def build_features(pbf: Path, output: Path) -> dict:
-    print("=== BUILD POIS (FAST NODE PASS) ===", flush=True)
+    print("=== BUILD POIS ===", flush=True)
     build_pois(pbf, output)
-    print(flush=True)
-    print("=== BUILD BUILDINGS / WAY + RELATION POIS (HEAVY) ===", flush=True)
+    print("=== BUILD BUILDINGS / RELATION POIS ===", flush=True)
     return build_buildings(pbf, output)
 
 
@@ -431,13 +372,11 @@ def main() -> None:
     parser.add_argument("--part", choices=("all", "pois", "buildings"), default="all")
     parser.add_argument("--version", action="store_true")
     args = parser.parse_args()
-
     if args.version:
         print_version()
         return
     if args.pbf is None:
         parser.error("pbf is required unless --version is used")
-
     if args.part == "pois":
         build_pois(args.pbf, args.output)
     elif args.part == "buildings":
