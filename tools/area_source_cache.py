@@ -22,6 +22,8 @@ MAGIC = b"BAF1"
 VERSION = 1
 HEADER = struct.Struct("<4sI")
 FRAME = struct.Struct("<I")
+FOOTER_MAGIC = b"BAFE"
+FOOTER = struct.Struct("<4sQQ")
 PROGRESS_INTERVAL_S = 10.0
 
 POI_KEYS = {
@@ -87,6 +89,7 @@ class AreaFactHandler(osmium.SimpleHandler):
         super().__init__()
         self.handle = handle
         self.records = 0
+        self.payload_bytes = 0
         self.bytes_written = HEADER.size
         self.started = time.monotonic()
         self.last_progress = self.started
@@ -110,10 +113,13 @@ class AreaFactHandler(osmium.SimpleHandler):
         record = {
             "osm_type": "way" if area.from_way() else "relation",
             "osm_id": int(area.orig_id()),
+            "area_id": int(area.id),
             "tags": tags,
             "geometry": polygons,
         }
-        self.bytes_written += _write_frame(self.handle, record)
+        frame_bytes = _write_frame(self.handle, record)
+        self.bytes_written += frame_bytes
+        self.payload_bytes += frame_bytes
         self.records += 1
         now = time.monotonic()
         if now - self.last_progress >= PROGRESS_INTERVAL_S:
@@ -137,6 +143,8 @@ def build_area_source_cache(source: Path, destination: Path) -> dict[str, int | 
             handle.write(HEADER.pack(MAGIC, VERSION))
             handler = AreaFactHandler(handle)
             handler.apply_file(str(source), locations=True)
+            handle.write(FOOTER.pack(FOOTER_MAGIC, handler.records, handler.payload_bytes))
+            handler.bytes_written += FOOTER.size
             handle.flush()
             os.fsync(handle.fileno())
         temp.replace(destination)
@@ -154,7 +162,22 @@ def build_area_source_cache(source: Path, destination: Path) -> dict[str, int | 
     return {"records": handler.records, "bytes": handler.bytes_written, "elapsed_s": elapsed}
 
 
+def _footer(path: Path) -> tuple[int, int]:
+    if path.stat().st_size < HEADER.size + FOOTER.size:
+        raise ValueError(f"truncated area source cache: {path}")
+    with path.open("rb") as handle:
+        handle.seek(-FOOTER.size, os.SEEK_END)
+        magic, records, payload_bytes = FOOTER.unpack(handle.read(FOOTER.size))
+    if magic != FOOTER_MAGIC:
+        raise ValueError(f"missing area cache completion footer: {path}")
+    expected = HEADER.size + int(payload_bytes) + FOOTER.size
+    if path.stat().st_size != expected:
+        raise ValueError(f"area cache size mismatch: expected={expected} actual={path.stat().st_size}")
+    return int(records), int(payload_bytes)
+
+
 def iter_area_facts(path: Path) -> Iterator[dict]:
+    records_expected, payload_bytes = _footer(path)
     with path.open("rb") as handle:
         raw_header = handle.read(HEADER.size)
         if len(raw_header) != HEADER.size:
@@ -162,30 +185,36 @@ def iter_area_facts(path: Path) -> Iterator[dict]:
         magic, version = HEADER.unpack(raw_header)
         if magic != MAGIC or version != VERSION:
             raise ValueError(f"unsupported area source cache: magic={magic!r} version={version}")
-        while True:
+        payload_end = HEADER.size + payload_bytes
+        records = 0
+        while handle.tell() < payload_end:
             raw_size = handle.read(FRAME.size)
-            if not raw_size:
-                break
             if len(raw_size) != FRAME.size:
                 raise ValueError(f"truncated area frame header: {path}")
             (size,) = FRAME.unpack(raw_size)
             if size <= 0 or size > 256 * 1024 * 1024:
                 raise ValueError(f"invalid area frame size {size}: {path}")
             payload = handle.read(size)
-            if len(payload) != size:
+            if len(payload) != size or handle.tell() > payload_end:
                 raise ValueError(f"truncated area frame payload: {path}")
             value = json.loads(payload)
             if not isinstance(value, dict) or not isinstance(value.get("geometry"), list):
                 raise ValueError(f"invalid area record: {path}")
+            records += 1
             yield value
+        if records != records_expected:
+            raise ValueError(f"area cache record count mismatch: expected={records_expected} actual={records}")
 
 
 def area_source_cache_valid(path: Path) -> bool:
-    if not path.is_file() or path.stat().st_size <= HEADER.size:
+    if not path.is_file():
         return False
     try:
         with path.open("rb") as handle:
             raw = handle.read(HEADER.size)
-        return len(raw) == HEADER.size and HEADER.unpack(raw) == (MAGIC, VERSION)
+        if len(raw) != HEADER.size or HEADER.unpack(raw) != (MAGIC, VERSION):
+            return False
+        _footer(path)
+        return True
     except (OSError, ValueError, struct.error):
         return False
