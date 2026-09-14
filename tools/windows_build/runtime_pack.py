@@ -4,8 +4,9 @@
 Dependencies:
 - Uses prepare_runtime_data.py as the single Windows runtime-selection contract.
 - Reads authoritative generated world_data without rebuilding it.
-- Stores only local verification metadata/hashes and derived compressed ZIP resource packs in a cache.
+- Stores only local verification metadata/hashes and derived ZIP resource packs in a cache.
 - Transcodes BMC2 building chunks to compact BMC3 only inside the derived Windows pack.
+- Stores seek-heavy routing datasets uncompressed so runtime random access stays bounded.
 """
 
 from __future__ import annotations
@@ -29,11 +30,18 @@ if str(WINDOWS_BUILD_DIR) not in sys.path:
 
 from prepare_runtime_data import DELIVERY_MANIFEST, selected_runtime_files  # noqa: E402
 
-PACK_FORMAT_VERSION = 3
+PACK_FORMAT_VERSION = 4
 STATE_SCHEMA_VERSION = 1
 PACK_FILENAME = "brur-world-data.zip"
 HASH_STATE_FILENAME = "runtime_file_hashes.json"
 PROGRESS_INTERVAL_SECONDS = 2.0
+RANDOM_ACCESS_STORED_FILES = frozenset(
+    {
+        "routing.brg",
+        "routing_snap.brs",
+        "routing_geometry.brh",
+    }
+)
 
 BMC2_MAGIC = b"BMC2"
 BMC3_MAGIC = b"BMC3"
@@ -97,6 +105,13 @@ def _human_bytes(value: int) -> str:
 def _runtime_category(relative_name: str) -> str:
     parts = Path(relative_name).parts
     return parts[0] if len(parts) > 1 else "root-files"
+
+
+def _compression_for_runtime_file(relative_name: str) -> int:
+    """Keep seek-heavy runtime datasets directly seekable inside the mounted ZIP pack."""
+    if relative_name in RANDOM_ACCESS_STORED_FILES:
+        return zipfile.ZIP_STORED
+    return zipfile.ZIP_DEFLATED
 
 
 def _report_runtime_footprint(identities: dict[str, dict[str, int]]) -> None:
@@ -408,7 +423,11 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
                     compact_records += record_count
                     raw_records += fallback_count
                 else:
-                    archive.write(path, archive_name)
+                    archive.write(
+                        path,
+                        archive_name,
+                        compress_type=_compression_for_runtime_file(relative_name),
+                    )
                 packed_bytes += path.stat().st_size
                 progress.update(number, packed_bytes)
             archive.writestr(
@@ -420,6 +439,10 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
                         "fingerprint": fingerprint,
                         "files": sorted(hashes),
                         "sha256": hashes,
+                        "storage": {
+                            "stored_random_access": sorted(RANDOM_ACCESS_STORED_FILES),
+                            "default": "deflate",
+                        },
                         "transforms": {
                             "building_mesh_lod": "BMC2=>BMC3:q0.1m:norm8:palette3",
                         },
@@ -429,6 +452,11 @@ def _build_pack(source: Path, pack_path: Path, fingerprint: str, hashes: dict[st
                 ),
             )
         progress.update(len(hashes), packed_bytes, force=True)
+        print(
+            "WINDOWS_RUNTIME_STORAGE random_access=stored files="
+            + ",".join(sorted(RANDOM_ACCESS_STORED_FILES)),
+            flush=True,
+        )
         if transformed_source_bytes:
             reduction = 100.0 * (1.0 - transformed_output_bytes / transformed_source_bytes)
             print(
@@ -473,7 +501,7 @@ def prepare_cached_runtime_pack(source: Path, cache_dir: Path) -> dict[str, Any]
         print("[runtime-pack] reusable world pack unchanged — skipping packing", flush=True)
     else:
         print("WINDOWS BUILD — PACKING + SHIPPING", flush=True)
-        print("[runtime-pack] building reusable compressed world pack with compact building chunks", flush=True)
+        print("[runtime-pack] building reusable world pack with seekable routing and compact building chunks", flush=True)
         _build_pack(source, pack_path, fingerprint, hashes)
     pack_seconds = time.monotonic() - pack_started
 
@@ -484,6 +512,7 @@ def prepare_cached_runtime_pack(source: Path, cache_dir: Path) -> dict[str, Any]
         "pack_filename": PACK_FILENAME,
         "fingerprint": fingerprint,
         "runtime_files": hashes,
+        "stored_random_access_files": sorted(RANDOM_ACCESS_STORED_FILES),
         "cache_hit": cache_hit,
         "hashes_reused": reused_hashes,
         "files_rehashed": rehashed_files,
