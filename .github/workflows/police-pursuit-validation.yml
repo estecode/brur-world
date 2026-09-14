@@ -1,0 +1,23 @@
+name: Police pursuit validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/police_pursuit_*.gd'
+      - 'tests/godot/test_police_pursuit.gd'
+      - '.github/workflows/police-pursuit-validation.yml'
+
+jobs:
+  police-pursuit-headless:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot 4 headless runtime
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/4.5.1-stable/Godot_v4.5.1-stable_linux.x86_64.zip -O /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          echo "GODOT_BIN=/tmp/godot/Godot_v4.5.1-stable_linux.x86_64" >> "$GITHUB_ENV"
+      - name: Run police pursuit regressions headlessly
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_police_pursuit.gd
