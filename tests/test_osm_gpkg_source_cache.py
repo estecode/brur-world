@@ -86,6 +86,13 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(building["geometry"][0]["holes"]), 1)
         self.assertTrue(any(item.get("geometry_type") == "coastline" for item in areas))
 
+    def test_unicode_separation_values_are_deterministic(self):
+        separation = source_cache._separation({"layer": "−1", "bridge": "yes"})
+        first = source_cache._synthetic_node_id(18.001, 59.3, separation)
+        second = source_cache._synthetic_node_id(18.001, 59.3, separation)
+        self.assertEqual(first, second)
+        self.assertIsInstance(first, int)
+
     def test_manifest_hashes_gpkg_and_pbf_and_warm_run_hits(self):
         source_cache.build_osm_gpkg_source_caches(self.gpkg, self.pbf, self.cache, source_cache.ALL_ROUTES)
         manifest = json.loads((self.cache / "manifest.json").read_text(encoding="utf-8"))
