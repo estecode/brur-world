@@ -12,15 +12,7 @@ TOOLS = ROOT / "tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-from benchmark_issue_220 import (
-    BASELINE_FINALIZE_SECONDS,
-    EXPECTED_HIGHWAY_NODES,
-    EXPECTED_HIGHWAY_WAYS,
-    EXPECTED_SOURCE_SHA256,
-    EXPECTED_SOURCE_SIZE,
-    MAX_COLD_SECONDS,
-    MAX_WARM_SECONDS,
-)
+from benchmark_issue_220 import MAX_FULL_BUILD_SECONDS, MAX_WARM_SECONDS, MIN_BUILDINGS
 from build_background import WATER, background_class, solve_coastline_land
 from world_build_plan import parse_targets, required_source_routes
 
@@ -28,7 +20,7 @@ from world_build_plan import parse_targets, required_source_routes
 class Tests(unittest.TestCase):
     def test_buildings_use_shared_assembled_area_cache_then_bmc2(self):
         text = (TOOLS / "build_sweden.py").read_text(encoding="utf-8")
-        run = text[text.index("def _run_target") : text.index("def main()")]
+        run = text[text.index("def _run_target") : text.index("def _is_geopackage")]
         buildings = run.index('build_buildings(sources["areas"], output)')
         mesh = run.index("build_building_mesh_pyramid(output)")
         self.assertLess(buildings, mesh)
@@ -62,14 +54,15 @@ class Tests(unittest.TestCase):
     def test_inland_natural_water_remains_water(self):
         self.assertEqual(background_class({"natural": "water"}), WATER)
 
-    def test_real_sweden_benchmark_contract_matches_issue_baseline(self):
-        self.assertEqual(EXPECTED_SOURCE_SHA256, "5c9682d34aeac727487c06f1bbe22b5976de5c3ada5723c0e446bda3bb316cd2")
-        self.assertEqual(EXPECTED_SOURCE_SIZE, 814_508_417)
-        self.assertEqual(EXPECTED_HIGHWAY_NODES, 25_418_811)
-        self.assertEqual(EXPECTED_HIGHWAY_WAYS, 2_290_999)
-        self.assertEqual(BASELINE_FINALIZE_SECONDS, 5329.7)
-        self.assertEqual(MAX_COLD_SECONDS, 2664.85)
+    def test_real_sweden_benchmark_contract_uses_new_source_boundary(self):
+        self.assertEqual(MIN_BUILDINGS, 3_800_000)
+        self.assertEqual(MAX_FULL_BUILD_SECONDS, 900.0)
         self.assertEqual(MAX_WARM_SECONDS, 30.0)
+        benchmark = (TOOLS / "benchmark_issue_220.py").read_text(encoding="utf-8")
+        self.assertIn('parser.add_argument("gpkg"', benchmark)
+        self.assertIn('parser.add_argument("--address-pbf"', benchmark)
+        self.assertIn('"building_records_match_source"', benchmark)
+        self.assertIn('"traffic_signals_match_source"', benchmark)
 
 
 if __name__ == "__main__":
