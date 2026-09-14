@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-Sweden acceptance benchmark for issue #220's GeoPackage source path."""
+"""Real-Sweden acceptance benchmark for issue #220's BRUR GeoPackage source path."""
 from __future__ import annotations
 
 import argparse
@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from area_source_cache import iter_area_facts
-from geofabrik_source_cache import ALL_ROUTES, build_geofabrik_source_caches
 from highway_facts import iter_highway_ways
 from normalized_source_facts import iter_facts
+from osm_gpkg_source_cache import ALL_ROUTES, build_osm_gpkg_source_caches
 from source_identity import compute_source_identity
 
 MAX_WARM_SECONDS = 30.0
@@ -66,28 +66,28 @@ def _count_buildings(path: Path) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("gpkg", type=Path)
-    parser.add_argument("--address-pbf", type=Path, required=True)
+    parser.add_argument("--source-pbf", type=Path, required=True)
     parser.add_argument("--world-dir", type=Path, default=Path("/tmp/brur-220-world-data"))
     parser.add_argument("--report", type=Path, default=Path("/tmp/brur-220-benchmark.json"))
     args = parser.parse_args()
 
-    gpkg = args.gpkg.resolve(); pbf = args.address_pbf.resolve(); world_dir = args.world_dir.resolve(); report_path = args.report.resolve()
+    gpkg = args.gpkg.resolve(); pbf = args.source_pbf.resolve(); world_dir = args.world_dir.resolve(); report_path = args.report.resolve()
     if not gpkg.is_file(): raise SystemExit(f"GeoPackage missing: {gpkg}")
-    if not pbf.is_file(): raise SystemExit(f"address PBF missing: {pbf}")
+    if not pbf.is_file(): raise SystemExit(f"source PBF missing: {pbf}")
 
     _log(f"VERIFY gpkg={gpkg}"); gpkg_identity = compute_source_identity(gpkg)
-    _log(f"VERIFY address-pbf={pbf}"); pbf_identity = compute_source_identity(pbf)
+    _log(f"VERIFY source-pbf={pbf}"); pbf_identity = compute_source_identity(pbf)
     source_counts = {
-        "roads": _sql_count(gpkg, "SELECT COUNT(*) FROM gis_osm_roads_free"),
-        "buildings": _sql_count(gpkg, "SELECT COUNT(*) FROM gis_osm_buildings_a_free"),
-        "traffic_signals": _sql_count(gpkg, "SELECT COUNT(*) FROM gis_osm_traffic_free WHERE fclass='traffic_signals'"),
+        "roads": _sql_count(gpkg, "SELECT COUNT(*) FROM lines WHERE highway IS NOT NULL AND TRIM(highway) <> ''"),
+        "buildings": _sql_count(gpkg, "SELECT COUNT(*) FROM multipolygons WHERE (building IS NOT NULL AND TRIM(building) <> '') OR other_tags LIKE '%\"building\"=>\"%' OR other_tags LIKE '%\"building:part\"=>\"%'"),
+        "traffic_signals": _sql_count(gpkg, "SELECT COUNT(*) FROM points WHERE highway='traffic_signals' OR other_tags LIKE '%\"highway\"=>\"traffic_signals\"%'")
     }
     _log(f"SOURCE roads={source_counts['roads']:,} buildings={source_counts['buildings']:,} signals={source_counts['traffic_signals']:,}")
 
     if world_dir.exists(): _log(f"REMOVE clean-world={world_dir}"); shutil.rmtree(world_dir)
     _log("FULL BUILD START target=all")
     full_started = time.monotonic()
-    subprocess.run([sys.executable, str(TOOLS_DIR/"build_sweden.py"), str(gpkg), "--address-pbf", str(pbf), "--output", str(world_dir), "--target", "all"], check=True)
+    subprocess.run([sys.executable, str(TOOLS_DIR/"build_sweden.py"), str(gpkg), "--source-pbf", str(pbf), "--output", str(world_dir), "--target", "all"], check=True)
     full_seconds = time.monotonic() - full_started; _log(f"FULL BUILD DONE elapsed={full_seconds:.3f}s")
 
     cache_dir = world_dir / "osm_source_cache"
@@ -98,24 +98,30 @@ def main() -> None:
     cold_run = _load_json(cache_dir / "last_run.json")
 
     _log("WARM SOURCE CACHE START"); warm_started = time.monotonic()
-    build_geofabrik_source_caches(gpkg, pbf, cache_dir, ALL_ROUTES)
+    build_osm_gpkg_source_caches(gpkg, pbf, cache_dir, ALL_ROUTES)
     warm_seconds = time.monotonic()-warm_started; _log(f"WARM SOURCE CACHE DONE elapsed={warm_seconds:.3f}s")
     warm_run = _load_json(cache_dir / "last_run.json"); warm_blocks = warm_run.get("blocks", {}) if isinstance(warm_run.get("blocks"), dict) else {}
     all_warm_hits = all(isinstance(warm_blocks.get(route), dict) and warm_blocks[route].get("status") == "CACHE HIT" for route in ALL_ROUTES)
 
+    manifest = _load_json(cache_dir / "manifest.json"); source_identity = manifest.get("source", {}) if isinstance(manifest.get("source"), dict) else {}
+    source_hashes = source_identity.get("sources", {}) if isinstance(source_identity.get("sources"), dict) else {}
+    both_hashes_recorded = (
+        isinstance(source_hashes.get("brur_gpkg"), dict) and source_hashes["brur_gpkg"].get("digest") == gpkg_identity["digest"] and
+        isinstance(source_hashes.get("osm_pbf"), dict) and source_hashes["osm_pbf"].get("digest") == pbf_identity["digest"]
+    )
+
     required_runtime = ("background.brmap", "routing.brg", "routing_geometry.brh", "routing_snap.brs", "traffic_signals.json", "search_index.bsi", "buildings.jsonl")
     runtime_present = all((world_dir/name).is_file() and (world_dir/name).stat().st_size > 0 for name in required_runtime)
     roads_present = all((world_dir/f"lod{lod}").is_dir() and any((world_dir/f"lod{lod}").glob("*.brtile")) for lod in range(3))
-    stage_dir = cache_dir / "source_stage"
-    stage_present = all((stage_dir/name).is_file() and (stage_dir/name).stat().st_size > 0 for name in ("roads.sqlite","traffic.sqlite","pois.sqlite","areas.sqlite","osm_supplement.osm.pbf"))
 
     checks = {
         "source_buildings_sane": source_counts["buildings"] >= MIN_BUILDINGS,
-        "highway_records_cover_source_rows": highway_records >= source_counts["roads"],
+        "highway_records_match_source": highway_records == source_counts["roads"],
         "building_records_match_source": building_records == source_counts["buildings"],
         "traffic_signals_match_source": signal_records == source_counts["traffic_signals"],
         "addresses_present": address_records > 0,
-        "staged_source_files_present": stage_present,
+        "gpkg_and_pbf_hashes_recorded": both_hashes_recorded,
+        "no_provider_stage_cache": not (cache_dir / "source_stage").exists(),
         "full_world_build_under_15_minutes": full_seconds <= MAX_FULL_BUILD_SECONDS,
         "warm_under_30_seconds": warm_seconds <= MAX_WARM_SECONDS,
         "warm_all_blocks_cache_hit": all_warm_hits,
@@ -123,12 +129,11 @@ def main() -> None:
         "road_tiles_present": roads_present,
     }
     report = {
-        "issue":220, "gpkg":str(gpkg), "address_pbf":str(pbf), "gpkg_identity":gpkg_identity, "pbf_identity":pbf_identity,
+        "issue":220, "gpkg":str(gpkg), "source_pbf":str(pbf), "gpkg_identity":gpkg_identity, "pbf_identity":pbf_identity,
         "source_counts":source_counts, "normalized_counts":{"highway_records":highway_records,"building_records":building_records,"traffic_signals":signal_records,"addresses":address_records},
         "full_build_seconds":full_seconds, "warm_seconds":warm_seconds, "world_dir":str(world_dir),
         "world_bytes":sum(path.stat().st_size for path in world_dir.rglob("*") if path.is_file()),
         "source_cache_bytes":sum(path.stat().st_size for path in cache_dir.rglob("*") if path.is_file()),
-        "stage_bytes":sum(path.stat().st_size for path in stage_dir.rglob("*") if path.is_file()),
         "cold_blocks":cold_run.get("blocks",{}), "warm_blocks":warm_blocks, "checks":checks, "passed":all(checks.values()), "completed_at":_now(),
     }
     report_path.parent.mkdir(parents=True,exist_ok=True); report_path.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
