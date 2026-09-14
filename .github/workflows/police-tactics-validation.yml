@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'scripts/police_tactic_*.gd'
-      - 'scripts/police_spike_strip_tactic.gd'
+      - 'scripts/police_*_tactic.gd'
       - 'tests/godot/test_police_tactics.gd'
       - '.github/workflows/police-tactics-validation.yml'
 
