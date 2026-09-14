@@ -14,13 +14,16 @@ from pathlib import Path
 import osmium
 
 from area_source_cache import is_poi_tags
+from highway_facts import HighwayFactWriter
 from normalized_source_facts import FactWriter
 from world_common import ensure_pbf, project
 
-SCHEMAS = {"highways": 1, "pois": 1, "addresses": 1, "traffic_signals": 1}
+SCHEMAS = {"pois": 1, "addresses": 1, "traffic_signals": 1}
+FAST_ROUTES = ("highways", "pois", "addresses", "traffic_signals")
 ROUTING_TAGS = {
-    "highway", "oneway", "junction", "maxspeed", "access", "vehicle", "motor_vehicle",
-    "motorcar", "service", "lanes", "surface", "bridge", "tunnel", "layer", "name",
+    "highway", "oneway", "junction", "maxspeed", "maxspeed:forward", "maxspeed:backward",
+    "access", "vehicle", "motor_vehicle", "motorcar", "service", "lanes", "surface",
+    "bridge", "tunnel", "layer", "name",
 }
 ROAD_TAGS = ROUTING_TAGS | {"width", "lit"}
 ADDRESS_TAGS = {
@@ -41,9 +44,9 @@ def _has_address(tags) -> bool:
     return bool(number and street)
 
 
-def _way_points(way) -> tuple[list[int], list[list[float]], list[list[float]]]:
+def _way_points(way) -> tuple[list[int], list[tuple[float, float]], list[list[float]]]:
     node_ids: list[int] = []
-    lonlat: list[list[float]] = []
+    lonlat: list[tuple[float, float]] = []
     projected: list[list[float]] = []
     for node in way.nodes:
         if not node.location.valid():
@@ -51,14 +54,14 @@ def _way_points(way) -> tuple[list[int], list[list[float]], list[list[float]]]:
         lon = float(node.lon)
         lat = float(node.lat)
         node_ids.append(int(node.ref))
-        lonlat.append([lon, lat])
+        lonlat.append((lon, lat))
         x, y = project(lon, lat)
         projected.append([x, y])
     return node_ids, lonlat, projected
 
 
 class FactHandler(osmium.SimpleHandler):
-    def __init__(self, writers: dict[str, FactWriter]) -> None:
+    def __init__(self, writers: dict[str, object]) -> None:
         super().__init__()
         self.writers = writers
         self.nodes = 0
@@ -66,12 +69,15 @@ class FactHandler(osmium.SimpleHandler):
         self.started = time.monotonic()
         self.last_progress = self.started
 
+    def _writer_records(self, writer: object) -> int:
+        return int(getattr(writer, "records", 0))
+
     def _progress(self) -> None:
         now = time.monotonic()
         if now - self.last_progress < PROGRESS_SECONDS:
             return
         elapsed = max(0.001, now - self.started)
-        counts = " ".join(f"{name}={writer.records:,}" for name, writer in self.writers.items())
+        counts = " ".join(f"{name}={self._writer_records(writer):,}" for name, writer in self.writers.items())
         print(
             f"[fast-facts] nodes={self.nodes:,} ways={self.ways:,} {counts} "
             f"elapsed={elapsed:.1f}s rate={(self.nodes + self.ways) / elapsed:,.0f}/s",
@@ -83,25 +89,21 @@ class FactHandler(osmium.SimpleHandler):
         self.nodes += 1
         self._progress()
         if "traffic_signals" in self.writers and node.tags.get("highway") == "traffic_signals" and node.location.valid():
-            self.writers["traffic_signals"].write({
-                "osm_id": int(node.id),
-                "lon": float(node.lon),
-                "lat": float(node.lat),
-                "tags": _tags(node.tags),
-            })
+            writer = self.writers["traffic_signals"]
+            assert isinstance(writer, FactWriter)
+            writer.write({"osm_id": int(node.id), "lon": float(node.lon), "lat": float(node.lat), "tags": _tags(node.tags)})
         if "addresses" in self.writers and _has_address(node.tags) and node.location.valid():
             x, y = project(node.lon, node.lat)
-            self.writers["addresses"].write({
-                "osm_type": "node", "osm_id": int(node.id), "x": x, "y": y,
-                "tags": _tags(node.tags, ADDRESS_TAGS),
-            })
+            writer = self.writers["addresses"]
+            assert isinstance(writer, FactWriter)
+            writer.write({"osm_type": "node", "osm_id": int(node.id), "x": x, "y": y, "tags": _tags(node.tags, ADDRESS_TAGS)})
         if "pois" in self.writers:
             tags = _tags(node.tags)
             if is_poi_tags(tags) and node.location.valid():
                 x, y = project(node.lon, node.lat)
-                self.writers["pois"].write({
-                    "osm_type": "node", "osm_id": int(node.id), "x": x, "y": y, "tags": tags,
-                })
+                writer = self.writers["pois"]
+                assert isinstance(writer, FactWriter)
+                writer.write({"osm_type": "node", "osm_id": int(node.id), "x": x, "y": y, "tags": tags})
 
     def way(self, way: osmium.osm.Way) -> None:
         self.ways += 1
@@ -120,39 +122,38 @@ class FactHandler(osmium.SimpleHandler):
         if not node_ids:
             return
         if need_highway:
-            self.writers["highways"].write({
-                "osm_id": int(way.id), "node_ids": node_ids, "lonlat": lonlat,
-                "tags": _tags(way.tags, ROAD_TAGS),
-            })
+            writer = self.writers["highways"]
+            assert isinstance(writer, HighwayFactWriter)
+            writer.write_way(int(way.id), node_ids, lonlat, _tags(way.tags, ROAD_TAGS))
         x = sum(point[0] for point in projected) / len(projected)
         y = sum(point[1] for point in projected) / len(projected)
         if need_address:
-            self.writers["addresses"].write({
-                "osm_type": "way", "osm_id": int(way.id), "x": x, "y": y,
-                "tags": _tags(way.tags, ADDRESS_TAGS),
-            })
+            writer = self.writers["addresses"]
+            assert isinstance(writer, FactWriter)
+            writer.write({"osm_type": "way", "osm_id": int(way.id), "x": x, "y": y, "tags": _tags(way.tags, ADDRESS_TAGS)})
         if need_poi:
-            self.writers["pois"].write({
-                "osm_type": "way", "osm_id": int(way.id), "x": x, "y": y,
-                "geometry": projected, "tags": poi_tags,
-            })
+            writer = self.writers["pois"]
+            assert isinstance(writer, FactWriter)
+            writer.write({"osm_type": "way", "osm_id": int(way.id), "x": x, "y": y, "geometry": projected, "tags": poi_tags})
 
 
 def build_fast_facts(source: Path, outputs: dict[str, Path]) -> dict[str, dict]:
     ensure_pbf(source)
-    unknown = sorted(set(outputs) - set(SCHEMAS))
+    unknown = sorted(set(outputs) - set(FAST_ROUTES))
     if unknown:
         raise ValueError(f"unsupported fast-fact routes: {', '.join(unknown)}")
-    writers = {name: FactWriter(path, SCHEMAS[name]) for name, path in outputs.items()}
+    writers: dict[str, object] = {}
+    for name, path in outputs.items():
+        writers[name] = HighwayFactWriter(path) if name == "highways" else FactWriter(path, SCHEMAS[name])
     started = time.monotonic()
     print(f"[fast-facts] START source={source.name} routes={','.join(outputs)}", flush=True)
     try:
         handler = FactHandler(writers)
         handler.apply_file(str(source), locations=True)
-        reports = {name: writer.publish() for name, writer in writers.items()}
+        reports = {name: getattr(writer, "publish")() for name, writer in writers.items()}
     except BaseException:
         for writer in writers.values():
-            writer.abort()
+            getattr(writer, "abort")()
         raise
     elapsed = time.monotonic() - started
     for name, report in reports.items():
@@ -169,7 +170,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("source", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--routes", default=",".join(SCHEMAS))
+    parser.add_argument("--routes", default=",".join(FAST_ROUTES))
     args = parser.parse_args()
     routes = tuple(name.strip() for name in args.routes.split(",") if name.strip())
     outputs = {name: args.output_dir / f"{name}.brfacts" for name in routes}
