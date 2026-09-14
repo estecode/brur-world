@@ -12,6 +12,7 @@ No derived `.osm.pbf` files are written.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import time
@@ -19,9 +20,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from area_source_cache import area_source_cache_metadata, build_area_source_cache
+from area_source_cache import FOOTER as AREA_FOOTER, area_source_cache_metadata, build_area_source_cache
 from fast_osm_facts import SCHEMAS, build_fast_facts
-from normalized_source_facts import validate as validate_facts
+from normalized_source_facts import FOOTER as FACT_FOOTER, validate as validate_facts
 from source_identity import compute_source_identity
 from world_common import ensure_pbf
 
@@ -80,6 +81,21 @@ def _artifact_metadata(path: Path) -> dict[str, int]:
     }
 
 
+def _content_sha256(path: Path, footer_size: int) -> str:
+    remaining = path.stat().st_size - footer_size
+    if remaining <= 0:
+        raise ValueError(f"truncated cache artifact: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while remaining:
+            chunk = handle.read(min(4 * 1024 * 1024, remaining))
+            if not chunk:
+                raise ValueError(f"truncated cache artifact while verifying: {path}")
+            digest.update(chunk)
+            remaining -= len(chunk)
+    return digest.hexdigest()
+
+
 def _source_matches(manifest: dict, source_identity: dict[str, object]) -> bool:
     return isinstance(manifest.get("source"), dict) and manifest["source"] == source_identity
 
@@ -101,8 +117,19 @@ def _validate_route_entry(cache_dir: Path, route: str, entry: object) -> tuple[b
     checksum = str(meta.get("sha256", ""))
     if checksum != entry.get("sha256") or len(checksum) != 64:
         return False, None
+
+    metadata = _artifact_metadata(path)
+    if entry.get("artifact_metadata") != metadata:
+        _log(f"VERIFY route={route} reason=artifact-metadata-changed bytes={path.stat().st_size:,}")
+        footer_size = AREA_FOOTER.size if route == AREA_ROUTE else FACT_FOOTER.size
+        try:
+            if _content_sha256(path, footer_size) != checksum:
+                return False, None
+        except (OSError, ValueError):
+            return False, None
+
     refreshed = dict(entry)
-    refreshed["artifact_metadata"] = _artifact_metadata(path)
+    refreshed["artifact_metadata"] = metadata
     return True, refreshed
 
 
@@ -183,10 +210,7 @@ def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = A
         if stale_fast:
             _log(f"START unit=fast-facts routes={','.join(stale_fast)}")
             started = time.monotonic()
-            reports = build_fast_facts(
-                source,
-                {route: cache_dir / _route_filename(route) for route in stale_fast},
-            )
+            reports = build_fast_facts(source, {route: cache_dir / _route_filename(route) for route in stale_fast})
             elapsed = time.monotonic() - started
             for route in stale_fast:
                 path = cache_dir / _route_filename(route)
@@ -217,12 +241,7 @@ def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = A
             _log(f"DONE routes={','.join(requested)}")
         return outputs
     except BaseException as exc:
-        run.update({
-            "status": "ERROR",
-            "completed_at": _now(),
-            "source": source_identity,
-            "error": f"{type(exc).__name__}: {exc}",
-        })
+        run.update({"status": "ERROR", "completed_at": _now(), "source": source_identity, "error": f"{type(exc).__name__}: {exc}"})
         _atomic_json(report_path, run)
         _log(f"ERROR {type(exc).__name__}: {exc}")
         raise
