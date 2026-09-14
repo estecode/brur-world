@@ -1,7 +1,8 @@
 extends "res://scripts/main.gd"
 
 ## POC composition of the normal BRUR game with GeoDot as the road/building presentation path.
-## Everything else comes from scenes/main.tscn unchanged.
+## Everything else comes from scenes/main.tscn unchanged. Legacy presentation remains active
+## until GeoDot setup succeeds, so missing/incompatible optional POC dependencies fail safely.
 
 const LUND_FOCUS := Vector3(-489086.0, 0.0, 1582123.0)
 const LUND_ALTITUDE_M := 9000.0
@@ -9,31 +10,57 @@ const LUND_ALTITUDE_M := 9000.0
 @onready var geodot_world_layer: Node3D = $World/GeoDotWorldLayer
 @onready var legacy_building_layer: Node = $BuildingLayer
 
+var _geodot_active := false
+
 func _ready() -> void:
 	super._ready()
-	if legacy_building_layer != null and legacy_building_layer.has_method("set_streaming_enabled"):
-		legacy_building_layer.call("set_streaming_enabled", false)
 	var gpkg_path := OS.get_environment("BRUR_GEODOT_GPKG")
 	if gpkg_path.is_empty():
-		push_error("GeoDot POC requires BRUR_GEODOT_GPKG=/absolute/path/to/sweden-brur.gpkg")
+		push_warning("GeoDot POC unavailable: BRUR_GEODOT_GPKG is not configured; keeping legacy world presentation")
 		return
 	if geodot_world_layer == null or not geodot_world_layer.has_method("setup"):
-		push_error("GeoDot POC scene is missing GeoDotWorldLayer")
+		push_warning("GeoDot POC scene is missing GeoDotWorldLayer; keeping legacy world presentation")
 		return
 	var result: Dictionary = geodot_world_layer.call("setup", get_world_coordinates(), camera_rig, gpkg_path)
 	if result.get("ok", false) != true:
-		push_error("GeoDot POC setup failed: %s" % String(result.get("error", "unknown")))
+		push_warning("GeoDot POC setup failed: %s; keeping legacy world presentation" % String(result.get("error", "unknown")))
 		return
+	_geodot_active = true
+	if legacy_building_layer != null and legacy_building_layer.has_method("set_streaming_enabled"):
+		legacy_building_layer.call("set_streaming_enabled", false)
+	# GeoDot is now proven ready, so legacy road tiles may be removed without a
+	# blank-world failure mode. Background/depth/world/gameplay remain shared.
+	_clear_legacy_roads()
 	print("GeoDot POC dataset: ", result)
 	if OS.get_environment("BRUR_GEODOT_KEEP_VIEW") != "1" and camera_rig.has_method("set_view_altitude"):
 		camera_rig.call_deferred("set_view_altitude", LUND_FOCUS, LUND_ALTITUDE_M)
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if manifest.is_empty():
 		return
+	if not _geodot_active:
+		super._process(delta)
+		return
 	# Keep the ordinary BRUR background/depth layout alive, but intentionally do not
-	# schedule or publish the legacy BRS/BRT road presentation in this POC scene.
+	# schedule or publish the legacy BRS/BRT road presentation while GeoDot is active.
 	_update_depth_layout(false)
+
+func _clear_legacy_roads() -> void:
+	for instance_value in loaded.values():
+		var instance := instance_value as Node
+		if instance != null:
+			instance.queue_free()
+	loaded.clear()
+	pending_tiles.clear()
+	pending_wanted.clear()
+	pending_lod = -1
+	pending_lod_swap = false
+	current_lod = -1
+	last_min_tile = Vector2i(999999, 999999)
+	last_max_tile = Vector2i(-999999, -999999)
+
+func is_geodot_active() -> bool:
+	return _geodot_active
 
 func consume_perf_metrics() -> Dictionary:
 	var metrics: Dictionary = {}
