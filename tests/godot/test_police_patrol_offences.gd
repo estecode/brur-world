@@ -28,7 +28,7 @@ class FakeTopology:
 		if id == 0: return Vector3(0,0,-25.0 * fraction)
 		if id == 1: return Vector3(25.0 * fraction,0,-25.0)
 		return Vector3(-25.0 * fraction,0,-25.0)
-	func edge_heading_rad(id: int) -> float: return PI if id == 0 else (PI * 0.5 if id == 1 else -PI * 0.5)
+	func edge_heading_rad(id: int) -> float: return 0.0 if id == 0 else (PI * 0.5 if id == 1 else -PI * 0.5)
 	func edge_progress_from_world(id: int, p: Vector3, fallback: float) -> float:
 		if id == 0: return clampf(-p.z, 0.0, 25.0)
 		if id == 1: return clampf(p.x, 0.0, 25.0)
@@ -74,8 +74,8 @@ func _test_observation_range_and_visibility_gate_speeding() -> void:
 	var root := Node.new(); get_root().add_child(root)
 	var police := VehicleScene.instantiate() as Node3D; var player := VehicleScene.instantiate() as Node3D
 	root.add_child(police); root.add_child(player)
-	police.call("set_world_position", Vector3(0,0,0)); police.call("set_heading_rad", PI)
-	player.call("set_world_position", Vector3(0,0,-50)); player.call("set_motion_state", 20.0, PI)
+	police.call("set_world_position", Vector3(0,0,0)); police.call("set_heading_rad", 0.0)
+	player.call("set_world_position", Vector3(0,0,-50)); player.call("set_motion_state", 20.0, 0.0)
 	var runtime := PoliceUnitRuntimeScript.new(); root.add_child(runtime)
 	_assert(runtime.setup("patrol-1", police, player, FakeSpeedQuery.new(), PoliceObservationStoreScript.new()), "police runtime setup succeeds")
 	var offence := runtime.sample(10.0, true)
