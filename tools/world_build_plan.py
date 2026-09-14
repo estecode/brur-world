@@ -3,7 +3,6 @@
 This module owns orchestration metadata only. Dataset semantics remain in their
 existing builders and source-cache owners.
 """
-
 from __future__ import annotations
 
 import hashlib
@@ -11,15 +10,15 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-PLAN_VERSION = 2
+PLAN_VERSION = 3
 STATE_FILE = "build_state.json"
 TARGET_SOURCES: dict[str, tuple[str, ...]] = {
     "roads": ("highways",),
     "routing": ("highways",),
     "traffic": ("traffic_signals", "highways"),
-    "background": ("background_areas", "coastlines", "admin_boundaries"),
-    "pois": ("pois",),
-    "buildings": ("buildings",),
+    "background": ("areas",),
+    "pois": ("pois", "areas"),
+    "buildings": ("areas",),
     "search": ("addresses",),
 }
 TARGET_ORDER = tuple(TARGET_SOURCES)
@@ -33,13 +32,13 @@ TARGET_OUTPUTS: dict[str, tuple[str, ...]] = {
     "search": ("search_index.bsi",),
 }
 TARGET_BUILDERS: dict[str, tuple[str, ...]] = {
-    "roads": ("build_roads.py", "road_surface_mesh.py"),
-    "routing": ("build_routing_dataset.py", "routing_graph.py"),
-    "traffic": ("build_traffic_signals.py", "build_traffic_signals_sources.py"),
-    "background": ("build_background.py", "build_background_sources.py"),
-    "pois": ("build_features.py", "poi_filter.py", "build_city_light_density.py"),
-    "buildings": ("build_features.py", "build_building_mesh_pyramid.py"),
-    "search": ("build_search_index.py", "build_search_binary.py"),
+    "roads": ("build_roads.py", "road_surface_mesh.py", "normalized_source_facts.py"),
+    "routing": ("build_routing_dataset.py", "build_routing.py", "routing_graph.py", "normalized_source_facts.py"),
+    "traffic": ("build_traffic_signals.py", "build_traffic_signals_sources.py", "normalized_source_facts.py"),
+    "background": ("build_background.py", "build_background_sources.py", "area_source_cache.py"),
+    "pois": ("build_features.py", "poi_filter.py", "build_city_light_density.py", "area_source_cache.py", "normalized_source_facts.py"),
+    "buildings": ("build_features.py", "build_building_mesh_pyramid.py", "area_source_cache.py"),
+    "search": ("build_search_index.py", "build_search_binary.py", "normalized_source_facts.py"),
 }
 
 
@@ -103,7 +102,7 @@ def _source_artifact_valid(cache_dir: Path | None, route: str, entry: dict) -> b
         return True
     filename = entry.get("file")
     checksum = entry.get("sha256")
-    if not isinstance(filename, str) or not filename.endswith(".osm.pbf"):
+    if not isinstance(filename, str) or not filename.endswith((".brfacts", ".baf")):
         return False
     if not isinstance(checksum, str) or len(checksum) != 64:
         return False
@@ -116,12 +115,7 @@ def _source_artifact_valid(cache_dir: Path | None, route: str, entry: dict) -> b
     return True
 
 
-def target_fingerprint(
-    tools_dir: Path,
-    source_manifest: dict,
-    target: str,
-    source_cache_dir: Path | None = None,
-) -> str | None:
+def target_fingerprint(tools_dir: Path, source_manifest: dict, target: str, source_cache_dir: Path | None = None) -> str | None:
     routes = source_manifest.get("routes")
     source = source_manifest.get("source")
     if not isinstance(routes, dict) or not isinstance(source, dict):
@@ -173,13 +167,7 @@ def target_output_bytes(world_dir: Path, target: str) -> int:
     return total
 
 
-def make_plan(
-    tools_dir: Path,
-    world_dir: Path,
-    source_manifest: dict,
-    requested: tuple[str, ...],
-    source_cache_dir: Path | None = None,
-) -> tuple[PlanItem, ...]:
+def make_plan(tools_dir: Path, world_dir: Path, source_manifest: dict, requested: tuple[str, ...], source_cache_dir: Path | None = None) -> tuple[PlanItem, ...]:
     state = load_state(world_dir)
     target_state = state.get("targets", {}) if isinstance(state.get("targets"), dict) else {}
     requested_set = set(requested)
