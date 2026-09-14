@@ -37,6 +37,7 @@ jobs:
           python -m unittest tests.test_osm_route_source
           python -m unittest tests.test_area_source_cache
           python -m unittest tests.test_normalized_source_consumers
+          python -m unittest tests.test_pyrosm_source_stage
 
       - name: Run road LOD build policy tests
         run: python -m unittest tests.test_build_roads_lod
