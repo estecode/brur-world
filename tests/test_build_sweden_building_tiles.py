@@ -1,4 +1,4 @@
-"""Guard canonical BMC2 output and selective Sweden build planning."""
+"""Guard canonical BMC2 output, directed planning and coastline background truth."""
 
 from __future__ import annotations
 
@@ -7,11 +7,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from shapely.geometry import LineString, Point, Polygon
+
 ROOT=Path(__file__).resolve().parents[1]
 TOOLS=ROOT/"tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0,str(TOOLS))
 
+from build_background import WATER, background_class, solve_coastline_land  # noqa: E402
 from world_build_plan import make_plan, parse_targets, record_target, required_source_routes  # noqa: E402
 
 
@@ -70,6 +73,29 @@ class Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             item=next(p for p in make_plan(TOOLS,Path(temp),manifest,("background",)) if p.target=="background")
             self.assertEqual(item.status,"BLOCKED")
+
+    def test_plan_fails_closed_when_manifest_route_file_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            world=Path(temp); cache=world/"osm_source_cache"; cache.mkdir()
+            item=next(
+                p for p in make_plan(TOOLS,world,self._manifest(),("routing",),cache)
+                if p.target=="routing"
+            )
+            self.assertEqual(item.status,"BLOCKED")
+
+    def test_admin_boundary_is_not_land_truth(self):
+        self.assertIsNone(background_class({"boundary":"administrative","admin_level":"2"}))
+
+    def test_directed_coastline_selects_land_side_not_whole_admin_domain(self):
+        domain=Polygon([(-10,-10),(10,-10),(10,10),(-10,10),(-10,-10)])
+        # OSM coastline direction: land is on the left. South->north means west.
+        coastline=LineString([(0,-10),(0,10)])
+        land=solve_coastline_land([domain],[coastline])
+        self.assertTrue(land.covers(Point(-5,0)))
+        self.assertFalse(land.covers(Point(5,0)))
+
+    def test_inland_natural_water_remains_water(self):
+        self.assertEqual(background_class({"natural":"water"}),WATER)
 
 
 if __name__=="__main__": unittest.main()
