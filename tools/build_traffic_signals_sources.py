@@ -33,23 +33,34 @@ def build_traffic_signals_sources(signal_source: Path, highway_source: Path, out
 
     signals: list[dict] = []
     signal_ids: set[int] = set()
+    explicit_memberships = True
     for fact in iter_facts(signal_source, SIGNAL_SCHEMA):
         signal_id = int(fact["osm_id"])
         signal_ids.add(signal_id)
         signals.append(fact)
+        if "way_ids" not in fact:
+            explicit_memberships = False
 
     memberships: dict[int, list[int]] = {signal_id: [] for signal_id in signal_ids}
     highway_way_count = 0
-    for index, way in enumerate(iter_highway_ways(highway_source), 1):
-        highway_way_count += 1
-        way_id = int(way.way_id)
-        for node_id in way.node_ids:
-            value = int(node_id)
-            if value in memberships:
-                memberships[value].append(way_id)
-        if index % 250_000 == 0:
-            linked = sum(1 for values in memberships.values() if values)
-            _log(f"PROGRESS highway-facts={index:,} linked-signals={linked:,}")
+    if explicit_memberships:
+        for signal in signals:
+            signal_id = int(signal["osm_id"])
+            memberships[signal_id] = sorted({int(value) for value in signal.get("way_ids", [])})
+        _log(f"MEMBERSHIP source=explicit signals={len(signals):,}")
+    else:
+        # Legacy normalized PBF facts retain OSM node ids in the highway cache,
+        # so memberships can be joined by node id exactly as before.
+        for index, way in enumerate(iter_highway_ways(highway_source), 1):
+            highway_way_count += 1
+            way_id = int(way.way_id)
+            for node_id in way.node_ids:
+                value = int(node_id)
+                if value in memberships:
+                    memberships[value].append(way_id)
+            if index % 250_000 == 0:
+                linked = sum(1 for values in memberships.values() if values)
+                _log(f"PROGRESS highway-facts={index:,} linked-signals={linked:,}")
 
     drafts: list[SignalDraft] = []
     for signal in signals:
@@ -74,6 +85,7 @@ def build_traffic_signals_sources(signal_source: Path, highway_source: Path, out
         "source_node_count": len(signals),
         "source_way_count": highway_way_count,
         "source_cache_blocks": [signal_source.name, highway_source.name],
+        "membership_source": "explicit" if explicit_memberships else "highway_node_join",
     })
     manifest_path = output / "manifest.json"
     try:
@@ -86,6 +98,7 @@ def build_traffic_signals_sources(signal_source: Path, highway_source: Path, out
         "source_cache_blocks": [signal_source.name, highway_source.name],
         "source_signal_count": stats["source_signal_count"],
         "exported_signal_count": stats["exported_signal_count"],
+        "membership_source": stats["membership_source"],
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     _log(
