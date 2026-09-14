@@ -67,6 +67,13 @@ def _peak_rss_bytes() -> int:
     return value if platform.system() == "Darwin" else value * 1024
 
 
+def _background_area_filters() -> list[str]:
+    filters = [f'["natural"="{value}"]' for value in BACKGROUND_NATURAL]
+    filters.extend(f'["landuse"="{value}"]' for value in BACKGROUND_LANDUSE)
+    filters.extend(['["waterway"="riverbank"]', '["water"]'])
+    return filters
+
+
 def _criteria(domain: str):
     if domain == "buildings":
         return ['["building"]', '["building:part"]']
@@ -86,16 +93,17 @@ def _criteria(domain: str):
         ]
     if domain == "traffic_signals":
         return '["highway"="traffic_signals"]'
+    if domain == "background_areas":
+        return _background_area_filters()
+    if domain == "coastlines":
+        return '["natural"="coastline"]'
+    if domain == "admin_boundaries":
+        return '["boundary"="administrative"]["admin_level"="2"]'
     if domain == "background":
-        filters = [f'["natural"="{value}"]' for value in BACKGROUND_NATURAL]
-        filters.extend(f'["landuse"="{value}"]' for value in BACKGROUND_LANDUSE)
-        filters.extend([
-            '["waterway"="riverbank"]',
-            '["water"]',
+        return _background_area_filters() + [
             '["natural"="coastline"]',
             '["boundary"="administrative"]["admin_level"="2"]',
-        ])
-        return filters
+        ]
     raise ValueError(f"unsupported pyrosm domain: {domain}")
 
 
@@ -124,7 +132,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--domain", required=True, choices=(
-        "highways", "buildings", "pois", "addresses", "traffic_signals", "background",
+        "highways", "buildings", "pois", "addresses", "traffic_signals",
+        "background_areas", "coastlines", "admin_boundaries", "background",
     ))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
@@ -153,8 +162,6 @@ def main() -> None:
     _log(f"START domain={args.domain} source={args.source.name} workers={args.workers} pyrosm={version}")
 
     try:
-        # BRUR owns the persistent cache. Never make correctness/performance depend
-        # on pyrosm's hidden GeoParquet cache from an earlier process/session.
         try:
             cleared = OSM.clear_cache(args.source)
         except Exception:
