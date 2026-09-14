@@ -51,12 +51,45 @@ func _run() -> void:
 	_assert(road_mesh != null, "real Lund roads batch into a mesh")
 	_assert(int(result.get("building_features", 0)) <= 12000 and int(result.get("road_features", 0)) <= 8000, "feature query is explicitly bounded")
 	print("GEODOT_REAL_DATA metadata=", opened)
-	print("GEODOT_REAL_DATA lund_abs=", lund_abs, " cell=", cell, " buildings=", result.get("building_features"), " roads=", result.get("road_features"), " building_query_ms=", result.get("building_query_ms"), " road_query_ms=", result.get("road_query_ms"), " build_ms=", build_ms)
+	print("GEODOT_REAL_DATA lund_abs=", lund_abs, " cell=", cell, " buildings=", result.get("building_features"), " roads=", result.get("road_features"), " raw_buildings=", result.get("raw_building_features"), " raw_roads=", result.get("raw_road_features"), " building_query_ms=", result.get("building_query_ms"), " road_query_ms=", result.get("road_query_ms"), " build_ms=", build_ms)
+	if _failed:
+		quit(1)
+		return
+	if gpkg.get_file() == "sweden-brur.gpkg":
+		_run_production_ab_performance()
 	if _failed:
 		quit(1)
 		return
 	print("geodot real-data test: OK")
 	quit(0)
+
+func _run_production_ab_performance() -> void:
+	print("GEODOT_AB_PERF starting comparable production Drive measurements")
+	if not _run_child_test("res://tests/godot/test_production_fps_real_data.gd", "production Drive FPS real-data test: OK", "legacy"):
+		return
+	_run_child_test("res://tests/godot/test_geodot_fps_real_data.gd", "GeoDot Drive FPS real-data test: OK", "geodot")
+
+func _run_child_test(script: String, marker: String, label: String) -> bool:
+	var output: Array = []
+	var args := PackedStringArray([
+		"--headless",
+		"--path", ProjectSettings.globalize_path("res://"),
+		"--script", script,
+	])
+	var exit_code := OS.execute(OS.get_executable_path(), args, output, true)
+	var combined := ""
+	for line in output:
+		var text := String(line)
+		combined += text + "\n"
+		print(text)
+	if exit_code != 0:
+		_assert(false, "%s performance child exited with %d" % [label, exit_code])
+		return false
+	if marker not in combined:
+		_assert(false, "%s performance child exited without completion marker" % label)
+		return false
+	print("GEODOT_AB_PERF %s=OK" % label)
+	return true
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:
