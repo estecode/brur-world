@@ -9,28 +9,84 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Callable
 
 HASH_ALGORITHM = "sha256"
 CHUNK_SIZE = 1024 * 1024
+IDENTITY_CACHE_VERSION = 1
 
 
-def compute_source_identity(path: Path) -> dict[str, object]:
-    """Return a stable content identity for one source file."""
+def _file_metadata(path: Path) -> dict[str, int]:
+    stat = path.stat()
+    return {
+        "device": int(getattr(stat, "st_dev", 0)),
+        "inode": int(getattr(stat, "st_ino", 0)),
+        "size_bytes": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+        "ctime_ns": int(getattr(stat, "st_ctime_ns", 0)),
+    }
+
+
+def _load_identity_cache(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _atomic_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + f".tmp-{os.getpid()}")
+    temp.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+    temp.replace(path)
+
+
+def compute_source_identity(path: Path, cache_path: Path | None = None) -> dict[str, object]:
+    """Return exact SHA256 + size, reusing only a previously verified digest.
+
+    Strong local file metadata is only a shortcut to an exact digest already
+    computed earlier. Any metadata mismatch or corrupt cache forces a full hash.
+    """
     if not path.is_file():
         raise FileNotFoundError(path)
+
+    metadata = _file_metadata(path)
+    if cache_path is not None:
+        cached = _load_identity_cache(cache_path)
+        identity = cached.get("identity")
+        if (
+            cached.get("version") == IDENTITY_CACHE_VERSION
+            and cached.get("metadata") == metadata
+            and isinstance(identity, dict)
+            and identity.get("algorithm") == HASH_ALGORITHM
+            and isinstance(identity.get("digest"), str)
+            and len(str(identity.get("digest"))) == 64
+            and identity.get("size_bytes") == metadata["size_bytes"]
+        ):
+            return dict(identity)
 
     digest = hashlib.sha256()
     with path.open("rb") as source:
         while chunk := source.read(CHUNK_SIZE):
             digest.update(chunk)
 
-    return {
+    identity = {
         "algorithm": HASH_ALGORITHM,
         "digest": digest.hexdigest(),
-        "size_bytes": path.stat().st_size,
+        "size_bytes": metadata["size_bytes"],
     }
+    if cache_path is not None:
+        _atomic_json(cache_path, {
+            "version": IDENTITY_CACHE_VERSION,
+            "metadata": metadata,
+            "identity": identity,
+        })
+    return identity
 
 
 def load_manifest(path: Path) -> dict:
