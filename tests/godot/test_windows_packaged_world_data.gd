@@ -29,6 +29,7 @@ const REQUIRED_DIRS := [
 	"lod0",
 	"lod1",
 	"lod2",
+	"road_surfaces",
 	"poi_tiles",
 	"building_mesh_lod",
 ]
@@ -87,11 +88,17 @@ func _initialize() -> void:
 	if files.is_empty():
 		_fail("empty file list in %s" % delivery_path)
 		return
+	var has_road_surface := false
 	for relative_value in files:
 		var relative := String(relative_value)
 		if relative.is_empty() or not FileAccess.file_exists("res://world_data/" + relative):
 			_fail("selected runtime file missing from mounted pack: %s" % relative)
 			return
+		if relative.begins_with("road_surfaces/"):
+			has_road_surface = true
+	if not has_road_surface:
+		_fail("delivery manifest does not contain production road_surfaces")
+		return
 
 	var storage_value: Variant = delivery.get("storage", {})
 	if typeof(storage_value) != TYPE_DICTIONARY:
@@ -109,7 +116,7 @@ func _initialize() -> void:
 		if not _probe_random_access("res://world_data/%s" % name):
 			return
 
-	print("WINDOWS_PACK_DATA=OK files=%d random_access=%d" % [files.size(), RANDOM_ACCESS_FILES.size()])
+	print("WINDOWS_PACK_DATA=OK files=%d random_access=%d road_surfaces=true" % [files.size(), RANDOM_ACCESS_FILES.size()])
 	quit(0)
 
 func _probe_random_access(path: String) -> bool:
