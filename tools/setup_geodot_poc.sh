@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PIN="0301e42eecc45b36503da3c02a6296bcc5dc32a8"
+GODOT_CPP_PIN="27d9dd23c83871e0619fca5dc2cddfbfd69e926a"
 REPO="boku-ilen/geodot-plugin"
 TARGET="$ROOT/addons/geodot"
 CACHE_ROOT="$ROOT/.poc_runtime/geodot"
@@ -51,7 +52,30 @@ prepare_source() {
   }
 }
 
+pin_godot_cpp() {
+  # GeoDot master currently points at Godot 4.6 godot-cpp. BRUR is intentionally
+  # still on Godot 4.5.x, and GDExtensions built for a newer engine are rejected
+  # by 4.5 at load time. Keep the GeoDot source pin, but compile its binding layer
+  # against a fixed 4.5-compatible godot-cpp revision instead of changing BRUR's
+  # engine version just for the POC.
+  git -C "$SRC/godot-cpp" fetch --depth=1 origin "$GODOT_CPP_PIN"
+  git -C "$SRC/godot-cpp" checkout --detach "$GODOT_CPP_PIN"
+  [[ "$(git -C "$SRC/godot-cpp" rev-parse HEAD)" == "$GODOT_CPP_PIN" ]] || {
+    printf 'GEODOT_SETUP=FAIL pinned godot-cpp revision mismatch\n' >&2
+    return 1
+  }
+  printf 'GEODOT_SETUP=GODOT_CPP sha=%s\n' "$GODOT_CPP_PIN"
+}
+
 try_artifact() {
+  # Upstream artifacts follow GeoDot's own godot-cpp submodule and can therefore
+  # move ahead of BRUR's engine ABI. Only use artifacts when the source revision's
+  # godot-cpp already matches our pinned BRUR-compatible binding revision.
+  prepare_source
+  git -C "$SRC" submodule update --init godot-cpp
+  if [[ "$(git -C "$SRC/godot-cpp" rev-parse HEAD)" != "$GODOT_CPP_PIN" ]]; then
+    return 1
+  fi
   command -v gh >/dev/null 2>&1 || return 1
   local row run_id head_sha
   row="$(gh run list -R "$REPO" --workflow "$workflow" --branch master --status success --limit 10 \
@@ -72,6 +96,7 @@ build_from_source() {
   command -v scons >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL scons missing\n' >&2; return 1; }
   prepare_source
   git -C "$SRC" submodule update --init --recursive
+  pin_godot_cpp
 
   case "$platform" in
     Darwin)
@@ -95,15 +120,15 @@ build_from_source() {
   mkdir -p "$ROOT/addons"
   rm -rf "$TARGET"
   cp -R "$SRC/demo/addons/geodot" "$TARGET"
-  printf 'GEODOT_SETUP=SOURCE sha=%s platform=%s\n' "$PIN" "$platform"
+  printf 'GEODOT_SETUP=SOURCE sha=%s godot_cpp=%s platform=%s\n' "$PIN" "$GODOT_CPP_PIN" "$platform"
 }
 
 if try_artifact; then
   :
 else
-  printf 'GEODOT_SETUP=ARTIFACT_UNAVAILABLE sha=%s; building against host dependencies\n' "$PIN"
+  printf 'GEODOT_SETUP=ARTIFACT_UNAVAILABLE sha=%s; building against BRUR-compatible host dependencies\n' "$PIN"
   build_from_source
 fi
 
 [[ -f "$TARGET/geodot.gdextension" ]] || { printf 'GEODOT_SETUP=FAIL addon missing after setup\n' >&2; exit 1; }
-printf 'GEODOT_SETUP=OK sha=%s target=%s\n' "$PIN" "$TARGET"
+printf 'GEODOT_SETUP=OK sha=%s godot_cpp=%s target=%s\n' "$PIN" "$GODOT_CPP_PIN" "$TARGET"
