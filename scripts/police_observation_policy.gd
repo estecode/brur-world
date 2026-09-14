@@ -18,6 +18,7 @@ func can_observe(observer_position: Vector2, observer_heading_rad: float, target
 		return false
 	if delta.length_squared() <= 0.0001:
 		return true
-	var forward := Vector2(sin(observer_heading_rad), cos(observer_heading_rad))
+	# Match Vehicle's heading convention: heading 0 points toward world -Z.
+	var forward := Vector2(sin(observer_heading_rad), -cos(observer_heading_rad))
 	var angle := absf(forward.angle_to(delta.normalized()))
 	return angle <= deg_to_rad(field_of_view_deg * 0.5)
