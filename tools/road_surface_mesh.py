@@ -116,9 +116,14 @@ class RoadSurfaceAccumulator:
         line = LineString(way.points)
         if line.length <= 1.0e-6:
             return
+        # OSM commonly splits one physical road into multiple ways at tag changes and
+        # junctions. Square caps deliberately overlap by half a road width at those
+        # artificial way boundaries; the same-grade union below removes the overlap
+        # and heals the triangular wedges left by flat caps. At genuine dead ends the
+        # same geometry is simply a deterministic square end cap.
         surface = line.buffer(
             road_width_m(way.road_class) * 0.5,
-            cap_style="flat",
+            cap_style="square",
             join_style="mitre",
             mitre_limit=MITER_LIMIT,
         )
