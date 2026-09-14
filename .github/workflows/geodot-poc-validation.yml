@@ -40,6 +40,9 @@ jobs:
       - name: Run plugin-independent renderer contracts
         run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_renderer_contracts.gd
 
+      - name: Run production-composition contracts
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_composition_contract.gd
+
       - name: Run cell geometry contracts
         run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_cell_geometry.gd
 
