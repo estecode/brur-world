@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the BRM2 triangulated OSM background map from an OSM PBF source."""
+"""Build the BRM2 triangulated OSM background map from PBF or BAF1 area facts."""
 
 from __future__ import annotations
 
@@ -7,12 +7,14 @@ import argparse
 import json
 import math
 import struct
+import time
 from pathlib import Path
 
 import osmium
 from shapely import constrained_delaunay_triangles, make_valid
 from shapely.geometry import Polygon
 
+from area_source_cache import area_source_cache_valid, iter_area_facts
 from world_common import TILE_SIZE, ensure_pbf, project
 
 BACKGROUND_HEADER = struct.Struct("<4sI")
@@ -23,24 +25,21 @@ FARMLAND = 1
 FOREST = 2
 URBAN = 3
 WATER = 4
-
-# Runtime already has an ocean-colored base plane. Background WATER must
-# therefore be conservative and only represent explicit inland water bodies.
-# Do NOT classify natural=bay/strait here: those can be very large coastal
-# polygons and will paint land blue when used as an overlay mask.
 WATER_NATURAL = {"water"}
 WATER_LANDUSE = {"reservoir"}
 
 
-def background_class(tags: osmium.osm.TagList) -> int | None:
-    # The runtime uses a water base plane. Country boundaries paint land back on
-    # top, so explicit WATER polygons are only inland/explicit water surfaces.
-    if tags.get("boundary") == "administrative" and tags.get("admin_level") == "2":
+def _tag_get(tags, key: str):
+    return tags.get(key)
+
+
+def background_class(tags) -> int | None:
+    # LAND remains a compatibility mask until the dedicated coastline source is
+    # introduced; it is not used to infer inland-water semantics.
+    if _tag_get(tags, "boundary") == "administrative" and _tag_get(tags, "admin_level") == "2":
         return LAND
-
-    natural = tags.get("natural")
-    landuse = tags.get("landuse")
-
+    natural = _tag_get(tags, "natural")
+    landuse = _tag_get(tags, "landuse")
     if natural in WATER_NATURAL or landuse in WATER_LANDUSE:
         return WATER
     if natural == "wood" or landuse == "forest":
@@ -94,9 +93,8 @@ def iter_polygons(geometry):
             yield from iter_polygons(child)
 
 
-class BackgroundHandler(osmium.SimpleHandler):
+class BackgroundAccumulator:
     def __init__(self) -> None:
-        super().__init__()
         self.payload = bytearray()
         self.triangles = 0
         self.counts = [0, 0, 0, 0, 0]
@@ -108,57 +106,45 @@ class BackgroundHandler(osmium.SimpleHandler):
         self.max_x = -math.inf
         self.max_y = -math.inf
 
-    def area(self, area: osmium.osm.Area) -> None:
-        kind = background_class(area.tags)
+    def add(self, tags, polygons: list[dict]) -> None:
+        kind = background_class(tags)
         if kind is None:
-            natural = area.tags.get("natural")
+            natural = _tag_get(tags, "natural")
             if natural in {"bay", "strait"}:
                 self.rejected_coastal_water += 1
             if (
-                area.tags.get("waterway") == "riverbank"
-                or area.tags.get("landuse") == "basin"
-                or (area.tags.get("water") is not None and area.tags.get("natural") != "water")
+                _tag_get(tags, "waterway") == "riverbank"
+                or _tag_get(tags, "landuse") == "basin"
+                or (_tag_get(tags, "water") is not None and natural != "water")
             ):
                 self.rejected_water_like += 1
             return
 
-        for outer in area.outer_rings():
-            try:
-                shell = ring_points(outer)
-                holes = [ring_points(inner) for inner in area.inner_rings(outer)]
-            except osmium.InvalidLocationError:
-                continue
+        for raw in polygons:
+            shell = [tuple(point) for point in raw.get("outer", [])]
+            holes = [[tuple(point) for point in hole] for hole in raw.get("holes", [])]
             if len(shell) < 3:
                 continue
             holes = [hole for hole in holes if len(hole) >= 3]
-
             polygon = Polygon(shell, holes)
             if polygon.is_empty:
                 continue
             min_x, min_y, max_x, max_y = polygon.bounds
             if (max_x - min_x) * (max_y - min_y) < background_min_bbox_area(kind):
                 continue
-
-            # Invalid water polygons are dangerous for a map mask: make_valid()
-            # can turn a broken relation into large disconnected pieces. Reject
-            # them instead. Other background classes keep the repair behavior.
             if kind == WATER and not polygon.is_valid:
                 self.rejected_invalid_water += 1
                 continue
-
             geometry = polygon if polygon.is_valid else make_valid(polygon)
             geometry = geometry.simplify(background_spacing(kind), preserve_topology=True)
             if geometry.is_empty:
                 continue
-
             written_for_area = 0
             for part in iter_polygons(geometry):
                 if part.is_empty or part.area <= 0.0:
                     continue
                 for triangle in constrained_delaunay_triangles(part).geoms:
-                    if triangle.is_empty or triangle.geom_type != "Polygon":
-                        continue
-                    if not part.covers(triangle):
+                    if triangle.is_empty or triangle.geom_type != "Polygon" or not part.covers(triangle):
                         continue
                     coords = list(triangle.exterior.coords)
                     if len(coords) < 4:
@@ -176,65 +162,84 @@ class BackgroundHandler(osmium.SimpleHandler):
                 self.counts[kind] += 1
 
 
-def build_background(pbf: Path, output: Path) -> dict:
-    ensure_pbf(pbf)
-    handler = BackgroundHandler()
-    print(f"[background] Reading {pbf} ...", flush=True)
-    handler.apply_file(str(pbf), locations=True)
+class BackgroundHandler(osmium.SimpleHandler):
+    def __init__(self, accumulator: BackgroundAccumulator) -> None:
+        super().__init__()
+        self.accumulator = accumulator
+
+    def area(self, area: osmium.osm.Area) -> None:
+        polygons: list[dict] = []
+        for outer in area.outer_rings():
+            try:
+                shell = ring_points(outer)
+                holes = [ring_points(inner) for inner in area.inner_rings(outer)]
+            except osmium.InvalidLocationError:
+                continue
+            if len(shell) >= 3:
+                polygons.append({"outer": shell, "holes": [hole for hole in holes if len(hole) >= 3]})
+        self.accumulator.add(area.tags, polygons)
+
+
+def _consume_source(source: Path, accumulator: BackgroundAccumulator) -> None:
+    if area_source_cache_valid(source):
+        print(f"[background] shared-area-cache={source}", flush=True)
+        for index, record in enumerate(iter_area_facts(source), 1):
+            accumulator.add(record["tags"], record["geometry"])
+            if index % 250_000 == 0:
+                print(f"[background] area-facts={index:,} triangles={accumulator.triangles:,}", flush=True)
+        return
+    ensure_pbf(source)
+    BackgroundHandler(accumulator).apply_file(str(source), locations=True)
+
+
+def build_background(source: Path, output: Path) -> dict:
+    started = time.monotonic()
+    accumulator = BackgroundAccumulator()
+    print(f"[background] START source={source}", flush=True)
+    _consume_source(source, accumulator)
 
     output.mkdir(parents=True, exist_ok=True)
-    with (output / "background.brmap").open("wb") as f:
-        f.write(BACKGROUND_HEADER.pack(b"BRM2", handler.triangles))
-        f.write(handler.payload)
+    temp = output / "background.brmap.tmp"
+    with temp.open("wb") as handle:
+        handle.write(BACKGROUND_HEADER.pack(b"BRM2", accumulator.triangles))
+        handle.write(accumulator.payload)
+    temp.replace(output / "background.brmap")
 
     manifest_path = output / "manifest.json"
-    manifest = {}
-    if manifest_path.is_file():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-    if "bounds" not in manifest and handler.triangles > 0:
-        manifest["bounds"] = [handler.min_x, handler.min_y, handler.max_x, handler.max_y]
-        manifest["origin_x"] = (handler.min_x + handler.max_x) * 0.5
-        manifest["origin_y"] = (handler.min_y + handler.max_y) * 0.5
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+    if "bounds" not in manifest and accumulator.triangles > 0:
+        manifest["bounds"] = [accumulator.min_x, accumulator.min_y, accumulator.max_x, accumulator.max_y]
+        manifest["origin_x"] = (accumulator.min_x + accumulator.max_x) * 0.5
+        manifest["origin_y"] = (accumulator.min_y + accumulator.max_y) * 0.5
         manifest["tile_size"] = TILE_SIZE
-
     manifest["background_format"] = "BRM2"
     manifest["background"] = {
-        "triangles": handler.triangles,
+        "triangles": accumulator.triangles,
         "areas": {
-            "land": handler.counts[LAND],
-            "farmland": handler.counts[FARMLAND],
-            "forest": handler.counts[FOREST],
-            "urban": handler.counts[URBAN],
-            "water": handler.counts[WATER],
+            "land": accumulator.counts[LAND], "farmland": accumulator.counts[FARMLAND],
+            "forest": accumulator.counts[FOREST], "urban": accumulator.counts[URBAN],
+            "water": accumulator.counts[WATER],
         },
-        "rejected_water_like": handler.rejected_water_like,
-        "rejected_invalid_water": handler.rejected_invalid_water,
-        "rejected_coastal_water": handler.rejected_coastal_water,
+        "rejected_water_like": accumulator.rejected_water_like,
+        "rejected_invalid_water": accumulator.rejected_invalid_water,
+        "rejected_coastal_water": accumulator.rejected_coastal_water,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-
+    elapsed = time.monotonic() - started
     print(
-        "[background] Areas: "
-        f"land={handler.counts[LAND]:,}, "
-        f"farmland={handler.counts[FARMLAND]:,}, "
-        f"forest={handler.counts[FOREST]:,}, "
-        f"urban={handler.counts[URBAN]:,}, "
-        f"water={handler.counts[WATER]:,}"
+        f"[background] DONE triangles={accumulator.triangles:,} bytes={(output / 'background.brmap').stat().st_size:,} "
+        f"elapsed={elapsed:.1f}s",
+        flush=True,
     )
-    print(f"[background] Rejected coastal bay/strait areas: {handler.rejected_coastal_water:,}")
-    print(f"[background] Rejected ambiguous water-like areas: {handler.rejected_water_like:,}")
-    print(f"[background] Rejected invalid water polygons: {handler.rejected_invalid_water:,}")
-    print(f"[background] Triangles: {handler.triangles:,}")
     return manifest
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("pbf", type=Path)
+    parser.add_argument("source", type=Path)
     parser.add_argument("--output", type=Path, default=Path("world_data"))
     args = parser.parse_args()
-    build_background(args.pbf, args.output)
+    build_background(args.source, args.output)
 
 
 if __name__ == "__main__":
