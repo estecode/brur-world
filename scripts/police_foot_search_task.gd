@@ -13,6 +13,7 @@ func choose(search_area: Dictionary, officer_position: Vector2) -> Dictionary:
 	var candidates_value: Variant = search_area.get("candidates", [])
 	if not candidates_value is Array:
 		return {}
+	var center: Vector2 = search_area.get("center", Vector2(INF, INF))
 	var best := Vector2(INF, INF)
 	var best_distance := INF
 	for candidate_value in candidates_value:
@@ -21,10 +22,14 @@ func choose(search_area: Dictionary, officer_position: Vector2) -> Dictionary:
 		var candidate := candidate_value as Vector2
 		if not candidate.is_finite():
 			continue
+		if candidates_value.size() > 1 and center.is_finite() and candidate.is_equal_approx(center):
+			continue
 		var distance := officer_position.distance_squared_to(candidate)
 		if distance < best_distance:
 			best_distance = distance
 			best = candidate
+	if not best.is_finite() and center.is_finite():
+		best = center
 	if not best.is_finite():
 		return {}
 	return {
