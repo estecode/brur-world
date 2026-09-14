@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Build reusable OSM route caches without a full-Sweden Python spool.
 
-Fast routes are written directly to route-local staging during one pyosmium
-source traversal. Assembled areas use libosmium's area engine and a separate
-streamed BAF1 cache so they never force every Sweden way through Python pickle.
+Fast routes are written directly to route-local staging. The source reader keeps
+node-location enrichment inside libosmium and pre-filters tagless objects before
+crossing the Python boundary. Assembled areas use libosmium's area engine and a
+separate streamed BAF cache.
 """
 
 from __future__ import annotations
@@ -29,8 +30,6 @@ from world_common import ensure_pbf
 
 CACHE_FORMAT = "BOSC2"
 CACHE_DIR_NAME = "osm_source_cache"
-# Retained as compatibility constants for older callers/tests. BOSC2 does not
-# create or reuse a generic resume spool.
 SPOOL_DIR_NAME = "resume-spool"
 SPOOL_MARKER_NAME = "complete.json"
 ROUTE_VERSIONS = {
@@ -143,8 +142,7 @@ def _tagged_node_iter(path: Path) -> Iterator[tuple[int, float, float, dict[str,
             if not line.strip():
                 continue
             try:
-                value = json.loads(line)
-                node_id, lon, lat, tags = value
+                node_id, lon, lat, tags = json.loads(line)
             except (json.JSONDecodeError, TypeError, ValueError) as exc:
                 raise ValueError(f"Corrupt tagged-node staging record {path}:{line_number}") from exc
             if not isinstance(tags, dict):
@@ -176,8 +174,6 @@ def _progress_count(current: int, total: int | None) -> str:
 
 
 class _ProgressDisplay:
-    """Render one compact live view of source scan and route-match progress."""
-
     def __init__(
         self,
         source: Path,
@@ -199,28 +195,19 @@ class _ProgressDisplay:
         if route in self.route_counts:
             self.route_counts[route] += count
 
-    def _scan_text(self, scanned: int) -> str:
-        if isinstance(self.total_items, int) and self.total_items >= scanned and self.total_items > 0:
-            return f"{scanned:,} / {self.total_items:,} items"
-        return f"{scanned:,} items"
-
     def render(self, counts: dict[str, int], elapsed: float) -> None:
-        scanned = sum(counts.values())
-        rate = scanned / max(0.001, elapsed)
-        scan_text = self._scan_text(scanned)
+        visible = sum(counts.values())
+        rate = visible / max(0.001, elapsed)
+        scan_text = f"{visible:,} tagged objects"
         if not self.tty:
             routes = ", ".join(f"{route}={self.route_counts[route]:,}" for route in self.routes)
-            print(
-                f"[osm-source] scanned: {scan_text} | {rate:,.0f}/s | routes: {routes}",
-                file=self.stream,
-                flush=True,
-            )
+            print(f"[osm-source] python-visible: {scan_text} | {rate:,.0f}/s | routes: {routes}", file=self.stream, flush=True)
             return
         lines = [
-            "[osm-source] direct route fan-out",
+            "[osm-source] native-prefiltered route fan-out",
             f"source: {self.source.name}",
             f"sha256: {self.digest}",
-            f"scanned: {scan_text} | {rate:,.0f}/s",
+            f"python-visible: {scan_text} | {rate:,.0f}/s",
             "",
             "routes (matched source items):",
         ]
@@ -234,8 +221,6 @@ class _ProgressDisplay:
 
 
 class _RouteWriter:
-    """Stage one selected route directly and atomically publish OSM XML."""
-
     def __init__(self, route: str, work_dir: Path, destination: Path) -> None:
         self.route = route
         self.work_dir = work_dir / f"route-{route}"
@@ -274,8 +259,8 @@ class _RouteWriter:
     def add_node(self, node_id: int, lon: float, lat: float, tags: dict[str, str] | None = None) -> None:
         if not math.isfinite(lon) or not math.isfinite(lat):
             return
-        node_tags = tags or {}
         bucket = node_id % NODE_BUCKETS
+        node_tags = tags or {}
         if node_tags:
             self._open_tagged_bucket(bucket).write(
                 json.dumps([node_id, lon, lat, node_tags], ensure_ascii=False, separators=(",", ":")) + "\n"
@@ -321,9 +306,7 @@ class _RouteWriter:
                     unique[node_id] = (lon, lat, tags)
                 for node_id in sorted(unique):
                     lon, lat, tags = unique[node_id]
-                    output.write(
-                        f"  <node id={quoteattr(str(node_id))} lon={quoteattr(repr(lon))} lat={quoteattr(repr(lat))}"
-                    )
+                    output.write(f"  <node id={quoteattr(str(node_id))} lon={quoteattr(repr(lon))} lat={quoteattr(repr(lat))}")
                     if not tags:
                         output.write("/>\n")
                     else:
@@ -339,7 +322,7 @@ class _RouteWriter:
 
 
 class SourceCacheHandler(osmium.SimpleHandler):
-    """Single-pass direct fan-out for non-area route caches."""
+    """Route tagged nodes/ways after libosmium-native pre-filtering."""
 
     def __init__(
         self,
@@ -359,6 +342,26 @@ class SourceCacheHandler(osmium.SimpleHandler):
         self.signal_ids: set[int] = set()
         self.writers = writers or {}
 
+    def apply_file(self, filename: str, *args, **kwargs) -> None:
+        """Read with native location enrichment and drop tagless objects pre-Python.
+
+        ``with_locations()`` must run before the filters so the C++ location cache
+        still sees every node. ``EmptyTagFilter`` then prevents the overwhelmingly
+        common tagless nodes from becoming Python objects. EntityFilter removes
+        relations because fast routes only consume nodes and ways.
+        """
+        processor = (
+            osmium.FileProcessor(filename)
+            .with_locations()
+            .with_filter(osmium.filter.EmptyTagFilter())
+            .with_filter(osmium.filter.EntityFilter(osmium.osm.NODE | osmium.osm.WAY))
+        )
+        for obj in processor:
+            if isinstance(obj, osmium.osm.Node):
+                self.node(obj)
+            elif isinstance(obj, osmium.osm.Way):
+                self.way(obj)
+
     def close(self) -> None:
         for writer in self.writers.values():
             writer.close_inputs()
@@ -375,11 +378,7 @@ class SourceCacheHandler(osmium.SimpleHandler):
         if self.progress is not None:
             self.progress.render(self.counts, elapsed)
         else:
-            print(
-                f"[osm-source] {kind}: {_progress_count(current, self.known_totals.get(kind))} | "
-                f"{current / elapsed:,.0f}/s",
-                flush=True,
-            )
+            print(f"[osm-source] {kind}: {_progress_count(current, self.known_totals.get(kind))} | {current / elapsed:,.0f}/s", flush=True)
 
     def node(self, node: osmium.osm.Node) -> None:
         self.counts["nodes"] += 1
@@ -404,16 +403,14 @@ class SourceCacheHandler(osmium.SimpleHandler):
         tags = _tags_dict(way.tags)
         is_highway = bool(tags.get("highway"))
         is_signal_way = is_highway and any(int(ref.ref) in self.signal_ids for ref in way.nodes)
-        is_poi = _is_poi(tags)
-        is_address = _is_address(tags)
         selected: list[str] = []
         if "highways" in self.stale_routes and is_highway:
             selected.append("highways")
         if "traffic_signals" in self.stale_routes and is_signal_way:
             selected.append("traffic_signals")
-        if "pois" in self.stale_routes and is_poi:
+        if "pois" in self.stale_routes and _is_poi(tags):
             selected.append("pois")
-        if "addresses" in self.stale_routes and is_address:
+        if "addresses" in self.stale_routes and _is_address(tags):
             selected.append("addresses")
         if selected:
             record = _way_record(way, tags)
@@ -446,18 +443,11 @@ def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = A
     identity_elapsed = time.monotonic() - identity_started
     manifest = _load_manifest(manifest_path)
     same_source = _source_matches(manifest, source_identity)
-    stale = {
-        route for route in requested
-        if not same_source or not _route_cache_valid(cache_dir, manifest, route)
-    }
+    stale = {route for route in requested if not same_source or not _route_cache_valid(cache_dir, manifest, route)}
     outputs = {route: cache_dir / _route_filename(route) for route in requested}
 
     if not stale:
-        print(
-            f"[osm-source] CACHE HIT routes={','.join(requested)} identity={identity_elapsed:.3f}s "
-            f"sha256={str(source_identity['digest'])[:12]}...",
-            flush=True,
-        )
+        print(f"[osm-source] CACHE HIT routes={','.join(requested)} identity={identity_elapsed:.3f}s sha256={str(source_identity['digest'])[:12]}...", flush=True)
         return outputs
 
     for route in requested:
@@ -472,13 +462,10 @@ def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = A
     try:
         if fast_stale:
             work_dir.mkdir(parents=True, exist_ok=False)
-            writers = {
-                route: _RouteWriter(route, work_dir, cache_dir / _route_filename(route))
-                for route in sorted(fast_stale)
-            }
+            writers = {route: _RouteWriter(route, work_dir, cache_dir / _route_filename(route)) for route in sorted(fast_stale)}
             progress = _ProgressDisplay(source, source_identity, fast_stale, {})
             handler = SourceCacheHandler(work_dir, fast_stale, {}, progress, writers)
-            print(f"[osm-source] START direct routes={','.join(sorted(fast_stale))}", flush=True)
+            print(f"[osm-source] START native-prefiltered routes={','.join(sorted(fast_stale))}", flush=True)
             started = time.monotonic()
             try:
                 handler.apply_file(str(source), locations=True)
@@ -495,11 +482,7 @@ def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = A
                         "counts": counts,
                         "size_bytes": (cache_dir / _route_filename(route)).stat().st_size,
                     }
-                    print(
-                        f"[osm-source] DONE route={route} ways={counts['ways']:,} nodes={counts['nodes']:,} "
-                        f"bytes={route_entries[route]['size_bytes']:,} elapsed={time.monotonic() - publish_started:.1f}s",
-                        flush=True,
-                    )
+                    print(f"[osm-source] DONE route={route} ways={counts['ways']:,} nodes={counts['nodes']:,} bytes={route_entries[route]['size_bytes']:,} elapsed={time.monotonic() - publish_started:.1f}s", flush=True)
             finally:
                 handler.close()
 
@@ -513,11 +496,7 @@ def build_source_caches(source: Path, cache_dir: Path, routes: Iterable[str] = A
                 "size_bytes": int(report["bytes"]),
             }
 
-        new_manifest = {
-            "format": CACHE_FORMAT,
-            "source": source_identity,
-            "routes": route_entries,
-        }
+        new_manifest = {"format": CACHE_FORMAT, "source": source_identity, "routes": route_entries}
         if scan_counts is not None:
             new_manifest["source_scan"] = scan_counts
         elif same_source and isinstance(manifest.get("source_scan"), dict):
