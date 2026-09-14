@@ -19,26 +19,26 @@ TARGET_SOURCES: dict[str, tuple[str, ...]] = {
     "routing": ("highways",),
     "traffic": ("traffic_signals",),
     "background": ("areas",),
-    "pois": ("pois",),
-    "buildings": ("areas", "pois"),
+    "pois": ("pois", "areas"),
+    "buildings": ("areas",),
     "search": ("addresses",),
 }
 TARGET_ORDER = tuple(TARGET_SOURCES)
 TARGET_OUTPUTS: dict[str, tuple[str, ...]] = {
-    "roads": ("lod0", "lod1", "lod2"),
-    "routing": ("routing.brg", "routing_geometry.brh", "routing_snap.brs"),
+    "roads": ("lod0", "lod1", "lod2", "road_surfaces"),
+    "routing": ("routing.brg", "routing_geometry.brh", "routing_snap.brs", "routing_stats.json"),
     "traffic": ("traffic_signals.json",),
     "background": ("background.brmap",),
-    "pois": ("pois.jsonl", "poi_tiles"),
+    "pois": ("pois.jsonl", "poi_tiles", "city_light_density.jsonl"),
     "buildings": ("buildings.jsonl", "building_mesh_lod"),
     "search": ("search_index.bsi",),
 }
 TARGET_BUILDERS: dict[str, tuple[str, ...]] = {
-    "roads": ("build_roads.py",),
+    "roads": ("build_roads.py", "road_surface_mesh.py"),
     "routing": ("build_routing_dataset.py", "routing_graph.py"),
     "traffic": ("build_traffic_signals.py",),
     "background": ("build_background.py",),
-    "pois": ("build_features.py", "poi_filter.py"),
+    "pois": ("build_features.py", "poi_filter.py", "build_city_light_density.py"),
     "buildings": ("build_features.py", "build_building_mesh_pyramid.py"),
     "search": ("build_search_index.py", "build_search_binary.py"),
 }
@@ -60,10 +60,6 @@ def parse_targets(value: str) -> tuple[str, ...]:
     if unknown:
         raise ValueError(f"unknown build target(s): {', '.join(unknown)}")
     selected = set(requested)
-    # Buildings append relation-only POIs to the POI master/runtime tiles, so its
-    # existing production contract explicitly depends on the base POI target.
-    if "buildings" in selected:
-        selected.add("pois")
     return tuple(name for name in TARGET_ORDER if name in selected)
 
 
@@ -114,7 +110,8 @@ def target_fingerprint(tools_dir: Path, source_manifest: dict, target: str) -> s
         if not isinstance(entry, dict) or entry.get("complete") is not True:
             return None
         dependencies[route] = {
-            "version": entry.get("version"), "file": entry.get("file"),
+            "version": entry.get("version"),
+            "file": entry.get("file"),
             "size_bytes": entry.get("size_bytes"),
         }
     payload = {
