@@ -15,7 +15,7 @@ TOOLS = ROOT / "tools"
 if str(TOOLS) not in sys.path: sys.path.insert(0, str(TOOLS))
 
 import osm_source_cache
-from normalized_source_facts import iter_facts
+from highway_facts import iter_highway_ways
 from osm_source_cache import ALL_ROUTES, CACHE_FORMAT, ROUTE_VERSIONS, build_source_caches
 
 FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -56,8 +56,8 @@ class Tests(unittest.TestCase):
             self.assertTrue(entry["complete"]); self.assertEqual(entry["version"],ROUTE_VERSIONS[route])
             self.assertEqual(entry["extractor"],"pyosmium/libosmium"); self.assertEqual(len(entry["sha256"]),64)
             self.assertNotIn(".osm.pbf",entry["file"]); self.assertTrue(outputs[route].is_file())
-        highway=list(iter_facts(outputs["highways"],1))
-        self.assertEqual(len(highway),1); self.assertEqual(highway[0]["osm_id"],10); self.assertEqual(highway[0]["tags"]["maxspeed"],"50")
+        highway=list(iter_highway_ways(outputs["highways"]))
+        self.assertEqual(len(highway),1); self.assertEqual(highway[0].way_id,10); self.assertEqual(highway[0].tags["maxspeed"],"50")
 
     def test_multiple_stale_simple_blocks_share_one_fast_pass(self):
         real=osm_source_cache.build_fast_facts
