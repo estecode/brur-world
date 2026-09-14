@@ -49,7 +49,9 @@ func _init() -> void:
 func _run() -> void:
 	_test_building_adapter()
 	_test_real_osm_feature_filtering()
+	_test_cell_ownership_is_unique()
 	_test_road_adapter()
+	_test_road_cell_clipping_is_seam_safe()
 	_test_far_building_lod_preserves_feature()
 	_test_road_mesh_batching()
 	if _failed:
@@ -99,6 +101,18 @@ func _test_real_osm_feature_filtering() -> void:
 	_assert(not road.is_empty(), "highway promoted only through GDAL other_tags is retained")
 	_assert(int(road.get("road_class", -1)) == 5, "residential other_tags road maps to local-road class")
 
+func _test_cell_ownership_is_unique() -> void:
+	var left_min := Vector2(0.0, 0.0)
+	var left_max := Vector2(10.0, 10.0)
+	var right_min := Vector2(10.0, 0.0)
+	var right_max := Vector2(20.0, 10.0)
+	var boundary_record := {"x": 10.0, "y": 5.0}
+	_assert(not GeoDotWorldSourceScript.record_owned_by_cell(boundary_record, left_min, left_max), "building on a shared max edge is not owned by the left cell")
+	_assert(GeoDotWorldSourceScript.record_owned_by_cell(boundary_record, right_min, right_max), "building on a shared min edge is owned by exactly the right cell")
+	var interior_record := {"x": 9.5, "y": 5.0}
+	_assert(GeoDotWorldSourceScript.record_owned_by_cell(interior_record, left_min, left_max), "interior building remains owned by its source cell")
+	_assert(not GeoDotWorldSourceScript.record_owned_by_cell(interior_record, right_min, right_max), "interior building cannot be duplicated into an adjacent cell")
+
 func _test_road_adapter() -> void:
 	var feature := FakeLineFeature.new()
 	feature.feature_id = 99
@@ -113,6 +127,19 @@ func _test_road_adapter() -> void:
 	_assert(points.size() == 3, "GeoDot line preserves road points")
 	_assert(points[1].is_equal_approx(Vector2(1010.0, 2010.0)), "GeoDot Godot-space Z is converted back to projected Y")
 	_assert(int(record.get("road_class", -1)) == 2, "primary road maps to BRUR road class")
+
+func _test_road_cell_clipping_is_seam_safe() -> void:
+	var a := Vector2(0.0, 5.0)
+	var b := Vector2(20.0, 5.0)
+	var left := GeoDotWorldMeshBuilderScript.clip_segment_to_cell(a, b, Vector2(0.0, 0.0), Vector2(10.0, 10.0))
+	var right := GeoDotWorldMeshBuilderScript.clip_segment_to_cell(a, b, Vector2(10.0, 0.0), Vector2(20.0, 10.0))
+	_assert(left.size() == 2 and right.size() == 2, "road crossing a cell boundary produces one bounded segment per cell")
+	if left.size() == 2 and right.size() == 2:
+		_assert(left[1].x < 10.0, "left cell uses a half-open max edge so the road is not duplicated on the boundary")
+		_assert(is_equal_approx(right[0].x, 10.0), "right cell owns the shared boundary from its inclusive min edge")
+		_assert(right[0].x - left[1].x <= 0.0011, "cell clipping leaves no visually meaningful road gap")
+	var outside := GeoDotWorldMeshBuilderScript.clip_segment_to_cell(Vector2(0.0, 20.0), Vector2(20.0, 20.0), Vector2(0.0, 0.0), Vector2(10.0, 10.0))
+	_assert(outside.is_empty(), "road segment outside a cell emits no duplicate geometry")
 
 func _test_far_building_lod_preserves_feature() -> void:
 	var record := {
