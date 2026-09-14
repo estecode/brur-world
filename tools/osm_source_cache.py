@@ -21,7 +21,8 @@ from pathlib import Path
 from typing import Iterable
 
 from area_source_cache import FOOTER as AREA_FOOTER, area_source_cache_metadata, build_area_source_cache
-from fast_osm_facts import SCHEMAS, build_fast_facts
+from fast_osm_facts import FAST_ROUTES, SCHEMAS, build_fast_facts
+from highway_facts import FOOTER as HIGHWAY_FOOTER, validate_highways
 from normalized_source_facts import FOOTER as FACT_FOOTER, validate as validate_facts
 from source_identity import compute_source_identity
 from world_common import ensure_pbf
@@ -30,14 +31,13 @@ CACHE_FORMAT = "BOSC4-BRUR-FACTS"
 CACHE_DIR_NAME = "osm_source_cache"
 EXTRACTOR_VERSION = 2
 ROUTE_VERSIONS = {
-    "highways": 4,
+    "highways": 5,
     "pois": 4,
     "addresses": 4,
     "traffic_signals": 4,
     "areas": 1,
 }
 ALL_ROUTES = tuple(ROUTE_VERSIONS)
-FAST_ROUTES = tuple(name for name in ALL_ROUTES if name in SCHEMAS)
 AREA_ROUTE = "areas"
 
 
@@ -100,6 +100,14 @@ def _source_matches(manifest: dict, source_identity: dict[str, object]) -> bool:
     return isinstance(manifest.get("source"), dict) and manifest["source"] == source_identity
 
 
+def _route_metadata(path: Path, route: str) -> tuple[dict[str, int | str], int]:
+    if route == AREA_ROUTE:
+        return area_source_cache_metadata(path), AREA_FOOTER.size
+    if route == "highways":
+        return validate_highways(path), HIGHWAY_FOOTER.size
+    return validate_facts(path, SCHEMAS[route]), FACT_FOOTER.size
+
+
 def _validate_route_entry(cache_dir: Path, route: str, entry: object) -> tuple[bool, dict | None]:
     if not isinstance(entry, dict):
         return False, None
@@ -111,8 +119,8 @@ def _validate_route_entry(cache_dir: Path, route: str, entry: object) -> tuple[b
     if not path.is_file() or entry.get("size_bytes") != path.stat().st_size:
         return False, None
     try:
-        meta = area_source_cache_metadata(path) if route == AREA_ROUTE else validate_facts(path, SCHEMAS[route])
-    except (OSError, ValueError, TypeError):
+        meta, footer_size = _route_metadata(path, route)
+    except (OSError, ValueError, TypeError, KeyError):
         return False, None
     checksum = str(meta.get("sha256", ""))
     if checksum != entry.get("sha256") or len(checksum) != 64:
@@ -121,7 +129,6 @@ def _validate_route_entry(cache_dir: Path, route: str, entry: object) -> tuple[b
     metadata = _artifact_metadata(path)
     if entry.get("artifact_metadata") != metadata:
         _log(f"VERIFY route={route} reason=artifact-metadata-changed bytes={path.stat().st_size:,}")
-        footer_size = AREA_FOOTER.size if route == AREA_ROUTE else FACT_FOOTER.size
         try:
             if _content_sha256(path, footer_size) != checksum:
                 return False, None
