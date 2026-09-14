@@ -216,6 +216,16 @@ class WindowsPackageTests(unittest.TestCase):
         self.assertIn('FileAccess.file_exists(REQUIRED_MANIFEST)', loader)
         self.assertIn('get_tree().quit(78)', loader)
 
+    def test_windows_loader_writes_early_bundle_diagnostics(self) -> None:
+        loader = LOADER_PATH.read_text(encoding="utf-8")
+        self.assertIn('const LOG_DIRECTORY := "logs"', loader)
+        self.assertIn('const LOG_FILENAME := "windows-runtime.log"', loader)
+        self.assertIn('OS.get_executable_path().get_base_dir()', loader)
+        self.assertIn('Engine.get_process_frames()', loader)
+        self.assertIn('Engine.get_frames_per_second()', loader)
+        self.assertIn('_runtime_log.flush()', loader)
+        self.assertIn('pack=loaded mount_ms=', loader)
+
 
 if __name__ == "__main__":
     unittest.main()
