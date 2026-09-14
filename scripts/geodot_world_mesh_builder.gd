@@ -85,25 +85,33 @@ static func build_roads(records: Array, cell_origin_absolute: Vector2, lod: int)
 					continue
 				segment_a = clipped[0]
 				segment_b = clipped[1]
-			var aa := segment_a - cell_origin_absolute
-			var bb := segment_b - cell_origin_absolute
-			var a := Vector3(aa.x, 0.0, -aa.y)
-			var b := Vector3(bb.x, 0.0, -bb.y)
-			var d := b - a
-			if d.length_squared() < 0.01:
+			var delta := segment_b - segment_a
+			if delta.length_squared() < 0.01:
 				continue
-			var side := Vector3(-d.z, 0.0, d.x).normalized() * width * 0.5
-			for vertex in [a - side, a + side, b + side, a - side, b + side, b - side]:
-				st.set_color(color)
-				st.set_normal(Vector3.UP)
-				st.add_vertex(vertex)
-			emitted += 6
+			var side := Vector2(-delta.y, delta.x).normalized() * width * 0.5
+			var strip := PackedVector2Array([
+				segment_a - side,
+				segment_a + side,
+				segment_b + side,
+				segment_b - side,
+			])
+			if has_clip:
+				strip = clip_polygon_to_cell(strip, clip_min, clip_max)
+			if strip.size() < 3:
+				continue
+			for tri_index in range(1, strip.size() - 1):
+				for absolute_vertex in [strip[0], strip[tri_index], strip[tri_index + 1]]:
+					var local := absolute_vertex - cell_origin_absolute
+					st.set_color(color)
+					st.set_normal(Vector3.UP)
+					st.add_vertex(Vector3(local.x, 0.0, -local.y))
+					emitted += 1
 	if emitted == 0:
 		return null
 	return st.commit()
 
 static func clip_segment_to_cell(a: Vector2, b: Vector2, cell_min: Vector2, cell_max: Vector2) -> PackedVector2Array:
-	var effective_max := Vector2(maxf(cell_min.x, cell_max.x - CELL_EDGE_EPSILON_M), maxf(cell_min.y, cell_max.y - CELL_EDGE_EPSILON_M))
+	var effective_max := _effective_cell_max(cell_min, cell_max)
 	var delta := b - a
 	var p := PackedFloat64Array([-delta.x, delta.x, -delta.y, delta.y])
 	var q := PackedFloat64Array([a.x - cell_min.x, effective_max.x - a.x, a.y - cell_min.y, effective_max.y - a.y])
@@ -124,6 +132,40 @@ static func clip_segment_to_cell(a: Vector2, b: Vector2, cell_min: Vector2, cell
 		if enter > leave:
 			return PackedVector2Array()
 	return PackedVector2Array([a + delta * enter, a + delta * leave])
+
+static func clip_polygon_to_cell(polygon: PackedVector2Array, cell_min: Vector2, cell_max: Vector2) -> PackedVector2Array:
+	var effective_max := _effective_cell_max(cell_min, cell_max)
+	var result := polygon
+	result = _clip_polygon_axis(result, 0, cell_min.x, true)
+	result = _clip_polygon_axis(result, 0, effective_max.x, false)
+	result = _clip_polygon_axis(result, 1, cell_min.y, true)
+	result = _clip_polygon_axis(result, 1, effective_max.y, false)
+	return result
+
+static func _clip_polygon_axis(polygon: PackedVector2Array, axis: int, boundary: float, keep_greater: bool) -> PackedVector2Array:
+	var output := PackedVector2Array()
+	if polygon.is_empty():
+		return output
+	var previous := polygon[polygon.size() - 1]
+	var previous_coordinate := previous.x if axis == 0 else previous.y
+	var previous_inside := previous_coordinate >= boundary if keep_greater else previous_coordinate <= boundary
+	for current in polygon:
+		var current_coordinate := current.x if axis == 0 else current.y
+		var current_inside := current_coordinate >= boundary if keep_greater else current_coordinate <= boundary
+		if current_inside != previous_inside:
+			var denominator := current_coordinate - previous_coordinate
+			if not is_zero_approx(denominator):
+				var ratio := (boundary - previous_coordinate) / denominator
+				output.append(previous.lerp(current, ratio))
+		if current_inside:
+			output.append(current)
+		previous = current
+		previous_coordinate = current_coordinate
+		previous_inside = current_inside
+	return output
+
+static func _effective_cell_max(cell_min: Vector2, cell_max: Vector2) -> Vector2:
+	return Vector2(maxf(cell_min.x, cell_max.x - CELL_EDGE_EPSILON_M), maxf(cell_min.y, cell_max.y - CELL_EDGE_EPSILON_M))
 
 static func _road_color(road_class: int) -> Color:
 	if road_class <= 0:
