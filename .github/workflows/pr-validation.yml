@@ -165,6 +165,7 @@ jobs:
       - name: Run player map presentation regression tests
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_player_map_marker.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_player_vehicle_presentation.gd
 
       - name: Run POI startup default regression test
         run: |
