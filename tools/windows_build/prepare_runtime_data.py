@@ -33,6 +33,7 @@ REQUIRED_DIRS = (
     "lod0",
     "lod1",
     "lod2",
+    "road_surfaces",
     "poi_tiles",
     "building_mesh_lod",
 )
@@ -111,7 +112,7 @@ def prepare_runtime_data(source: Path, output: Path) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("source", type=Path, help="Existing authoritative world_data directory")
+    parser.add_argument("source", type=Path, help="Existing authoritative generated world_data directory")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     prepare_runtime_data(args.source, args.output)
