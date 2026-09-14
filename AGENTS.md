@@ -111,6 +111,55 @@ When the next step is agent-owned, do not hand control back merely by describing
 
 If execution genuinely cannot continue without a new user message, say so explicitly and state the exact message or action required. Never rely on a hidden convention such as the project leader knowing to type `fortsätt`. This rule does not imply background execution: if work cannot continue after the current response without an automation or a new message, do not claim or imply that it will.
 
+#### Active-task continuity across conversational interruptions
+
+A tracked issue, PR, wave, investigation, build or validation remains the active task across conversational turns until it reaches a valid termination condition. **Completing a chat answer is not the same thing as completing or pausing the tracked task.**
+
+The latest project-leader message does not replace, suspend or complete the active task merely because it asks a question, requests status, asks for an explanation, corrects the agent, reminds the agent to follow this file, or says `fortsätt`. Typical interruptions such as `status?`, `vad händer?`, `varför?`, `vad är skillnaden?`, `kommer den bygga igen?`, `följ AGENTS.md`, scope/reasoning corrections and `fortsätt` are conversational interruptions unless they explicitly change task ownership or scope.
+
+For such interruptions the required sequence is:
+
+```text
+answer/correct
+-> re-identify the still-active tracked task
+-> determine its next concrete action
+-> execute that action when it is agent-owned and tool-available
+-> continue until a valid termination condition is reached
+```
+
+Status reporting is observational, not a handoff. An explanation, apology, plan, status update, summary or statement that work will continue is never by itself a valid termination condition.
+
+The active task is paused, replaced or cancelled only when the project leader explicitly says to stop, pause, wait, abandon it, or change/replace its scope, or when a genuine human/external blocker or technical impossibility satisfies the termination rules below. A correction narrows or repairs execution inside the active task unless the project leader explicitly replaces that task.
+
+Before producing any final user-facing response while tracked work remains active, run this mandatory continuation loop:
+
+1. Identify the active tracked task.
+2. Determine whether it is complete for the current scope.
+3. If incomplete, identify the next concrete action.
+4. If that action is agent-owned and executable with the available tools/environment, execute it now.
+5. Re-evaluate from step 2 and repeat.
+6. Send a final response only when the task is complete or one of the genuine stopping conditions below applies.
+
+Example:
+
+```text
+Active task: fix #300
+
+Project leader: "varför drog du in #288?"
+Agent: answer the question, correct the scope, then resume #300 immediately.
+
+Project leader: "följ agent md"
+Agent: acknowledge/correct the behavior, then resume #300 immediately.
+
+Project leader: "men nu gjorde du precis det. fortsätt"
+Agent: do not merely describe the next #300 step; execute it.
+
+Project leader: "vad händer?"
+Agent: give a concise status, then continue #300 in the same turn when an executable agent-owned action remains.
+```
+
+The project leader must never need to repeatedly type `fortsätt` merely to advance an already active agent-owned task.
+
 #### Human-check resolution continuation
 
 When the project leader resolves the final required human check for a tracked PR, for example with `test ok #191`, that message transfers control back to the agent. The agent must immediately continue through all remaining agent-owned steps in the same active turn: synchronize the current PR and `main`, repair stale PR metadata or merge-decision text, perform the smallest required merge-safety refresh/revalidation, update `BRUR — Needs You` if applicable, and merge automatically when the resulting decision is `MERGE`.
@@ -133,9 +182,9 @@ Do not stop between these steps unless a new genuine human-only blocker appears.
 
 #### Response termination gate
 
-Before ending a response for unresolved tracked work, explicitly determine whether the next action is agent-owned. If it is agent-owned, the response must not end while the required tools are available and no genuine human-only blocker exists. Execute the next action instead.
+Before producing a final response for unresolved tracked work, explicitly determine whether the next action is agent-owned. If it is agent-owned, the response must not end while the required tools are available and no genuine human-only blocker exists. Execute the next action instead. This check occurs after answering any conversational interruption and before treating the turn as finished.
 
-Writing "I will continue", "I'll fix that next", "I will investigate", or equivalent never satisfies this gate. If the next action is agent-owned, perform it before responding.
+Writing "I will continue", "I'll fix that next", "I will investigate", or equivalent never satisfies this gate. If the next action is agent-owned, perform it before responding. **A user-facing answer is not a termination condition.**
 
 A response for unresolved tracked work may end only when at least one of these conditions is true:
 
