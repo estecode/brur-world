@@ -12,6 +12,8 @@ bash tools/windows_build.sh 123
 
 This means “build exact PR #123”. The launcher fetches the current `main` build tooling, resolves the exact PR head, creates an isolated temporary checkout for that revision, resolves the production runtime-data subset from the mapped checkout's existing `world_data`, reuses or builds a cached runtime resource pack, exports the revision-specific game EXE/PCK without embedding the large stable world dataset, verifies the combined game/runtime-pack contract, and writes only the final client ZIP to `~/Dropbox/BRUR/` by default.
 
+The normal launcher pins world data to `<mapped checkout>/world_data`. Ambient inherited `BRUR_WINDOWS_WORLD_DATA` values are intentionally ignored so a Safe Command process cannot silently redirect a build to stale data.
+
 Refs and full commits are also supported:
 
 ```bash
@@ -19,14 +21,20 @@ bash tools/windows_build.sh --ref issue/example
 bash tools/windows_build.sh --ref <full-sha>
 ```
 
-Overrides are environment variables, not alternate build implementations:
+Output/cache/Godot overrides remain environment variables:
 
 ```bash
 BRUR_WINDOWS_OUTPUT_DIR=/tmp/brur-out \
-BRUR_WINDOWS_WORLD_DATA=/path/to/world_data \
 BRUR_WINDOWS_CACHE_DIR=/path/to/persistent/windows-build-cache \
 GODOT_BIN=/path/to/godot \
 bash tools/windows_build.sh --ref <ref>
+```
+
+Advanced tooling that intentionally needs a different world-data root may call the lower-level current-checkout builder directly with an explicit override:
+
+```bash
+BRUR_WINDOWS_WORLD_DATA=/path/to/world_data \
+bash tools/windows_build/build.sh --ref <ref>
 ```
 
 The default persistent cache is `~/.cache/brur-world/windows-build`.
@@ -53,13 +61,17 @@ A revision that supports the build provides `tools/windows_build/target.sh`. The
 
 The normal target exports the selected revision's existing production `run/main_scene` from `project.godot`. The Windows tooling must not rewrite the project entrypoint to a harness or POC scene.
 
-`prepare_runtime_data.py` is the single selection contract for generated production runtime representations. It excludes rebuild-only inputs such as `buildings.jsonl`, `search_index.jsonl`, `pois.jsonl`, `building_tiles/`, and `osm_source_cache/`, and includes the current production `building_mesh_lod/` dataset.
+`prepare_runtime_data.py` is the single selection contract for generated production runtime representations. It excludes rebuild-only inputs such as `buildings.jsonl`, `search_index.jsonl`, `pois.jsonl`, `building_tiles/`, and `osm_source_cache/`, and requires both current production mesh datasets: `building_mesh_lod/` and BRS1 `road_surfaces/`. A Windows build fails closed instead of silently falling back to legacy BRT1 road extrusion when production road surfaces are missing.
 
-`runtime_pack.py` fingerprints exactly that selection. On the first build it hashes the selected files and writes a compressed, mountable `brur-world-data.zip`. Verified per-file hashes are memoized against strong local file metadata (`dev`, `ino`, `size`, `mtime_ns`, `ctime_ns`). An unchanged warm build stats the files, reuses their verified hashes, and reuses the exact content-addressed runtime pack without rereading multi-GB payloads. Any metadata change rehashes the affected file. Invalid or modified cached packs are rebuilt.
+`runtime_pack.py` fingerprints exactly that selection. On the first build it hashes the selected files and writes a mountable `brur-world-data.zip`. Data that is consumed sequentially or chunk-by-chunk remains deflate-compressed. The seek-heavy routing datasets `routing.brg`, `routing_snap.brs`, and `routing_geometry.brh` are stored as uncompressed ZIP members so Godot/native runtime code can perform bounded random access without repeatedly inflating large entries. This is a delivery/storage property only; the authoritative generated artifacts and their hashes are unchanged.
+
+Verified per-file hashes are memoized against strong local file metadata (`dev`, `ino`, `size`, `mtime_ns`, `ctime_ns`). An unchanged warm build stats the files, reuses their verified hashes, and reuses the exact content-addressed runtime pack without rereading multi-GB payloads. Any metadata change rehashes the affected file. Invalid, modified, or obsolete-format cached packs are rebuilt.
 
 The Godot export itself contains code/assets only. `scripts/windows_runtime_pack_loader.gd` is an autoload that, on Windows production startup, mounts `brur-world-data.zip` from beside the executable before the main scene starts. Existing gameplay paths remain `res://world_data/...`; local/editor runs that already have world data do not mount an external pack.
 
-After export, the target opens the produced game PCK with local Godot, confirms that it does **not** contain `world_data`, mounts the external runtime pack, and executes `tests/godot/test_windows_packaged_world_data.gd`. Missing top-level datasets, empty runtime directories, obsolete `building_tiles`, or leaked source caches fail the build before packaging.
+The loader also opens `logs/windows-runtime.log` beside the executable before mounting the pack. It flushes startup/mount timing immediately and records the first 15 one-second frame-loop heartbeats. This gives the packaged client useful evidence even when startup or the frame loop becomes severely overloaded.
+
+After export, the target opens the produced game PCK with local Godot, confirms that it does **not** contain `world_data`, mounts the external runtime pack, and executes `tests/godot/test_windows_packaged_world_data.gd`. Missing top-level datasets, missing BRS1 `road_surfaces`, empty runtime directories, obsolete `building_tiles`, leaked source caches, missing random-access storage declarations, or failed mounted routing seek/read probes fail the build before packaging.
 
 ## Package contract
 
@@ -75,7 +87,7 @@ BRUR/
   logs/
 ```
 
-The external runtime resource pack is already compressed and content-addressed, so `package.py` stores it verbatim in the outer client ZIP instead of recompressing it on every code build. The delivered client remains completely self-contained.
+The external runtime resource pack is already content-addressed and uses its own per-entry storage policy, so `package.py` stores it verbatim in the outer client ZIP instead of recompressing it on every code build. The delivered client remains completely self-contained.
 
 `build_info.json` records repository, selector/ref, PR/issue when available, exact SHA, build timestamp, Godot version/export target, source-manifest fingerprint, runtime-file fingerprints, runtime-pack fingerprint/cache status, and `runtime_delivery=resource_pack:brur-world-data.zip=>res://world_data`. `client_bundle_info.json` repeats the code/world identity needed for copied client logs and package inspection.
 
@@ -93,6 +105,6 @@ WINDOWS_TIMING stage=target_total seconds=...
 WINDOWS_TIMING stage=client_package seconds=...
 ```
 
-`runtime_pack.py` also reports whether the runtime pack was a cache `HIT` or `MISS`, how many file hashes were reused, how many files were rehashed, and the identity/pack time. This makes it clear whether a slow build is export, world-data identity, first-time compression, verification, or final client packaging.
+`runtime_pack.py` also reports whether the runtime pack was a cache `HIT` or `MISS`, how many file hashes were reused, how many files were rehashed, which random-access datasets are stored, and the identity/pack time. This makes it clear whether a slow build is export, world-data identity, first-time packing, verification, or final client packaging.
 
 Intermediate worktrees and exports stay in temporary directories. Only the final ZIP and the persistent content-addressed runtime-pack cache survive between builds.

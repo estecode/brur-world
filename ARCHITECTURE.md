@@ -525,3 +525,35 @@ Rules:
 When extending gameplay, preserve the same principle used elsewhere in this architecture:
 
 > **Orchestration may request and observe gameplay; it may not replace the subsystem that owns the truth.**
+
+---
+
+## 35. Replaceable presentation and production-asset contract
+
+BRUR must be able to evolve from simple placeholder visuals to production-quality art without rewriting world truth, simulation, gameplay, physics, persistence or entity identity.
+
+The boundary is:
+
+```text
+authoritative entity/world state
+        -> presentation-facing semantic state
+        -> replaceable presentation recipe / asset selection
+        -> mesh / rig / animation / materials / audio / lights / VFX
+```
+
+Rules:
+
+- A Building, Vehicle, Person or other presentable world entity keeps the same logical identity and gameplay-relevant state regardless of which visual representation is currently active. This does not require one universal entity class; each domain owner keeps its own model and API.
+- Meshes, scenes, textures, PBR materials, rigs/skeletons, animation graphs/clips, audio, lights, shadows, decals, particles and other VFX are presentation assets. They must not become the owner of entity identity, world truth, gameplay state, route/lane state, persistence or authoritative physics state.
+- Placeholder/simple geometry is a valid temporary or low-fidelity presentation, not an architectural truth. The same entity may progress from placeholder to procedural/generated representation to production asset to entity-specific or handcrafted override without identity reset or gameplay-state migration.
+- Presentation LOD, instancing, culling and asset replacement may change visual fidelity but must not change gameplay/collision truth. Gameplay-critical collision follows section 24 even when visual meshes are hidden, simplified or replaced.
+- Animation presents authoritative simulation/physics state. Character locomotion, vehicle movement, wheel steering/rotation, suspension, doors or similar motion may be animated from owned gameplay/physics state, but presentation animation must not silently become the source of authoritative world movement unless an explicitly scoped system owns that gameplay action.
+- World/build pipelines should preserve useful provider-independent semantics and provenance that future presentation can consume, such as building dimensions/type, vehicle class/dimensions or person presentation attributes when such facts exist. They must not bake today's renderer, mesh topology, material library or current placeholder choices into world truth.
+- Presentation artifacts should be independently regenerable/cacheable where practical. A new building generator, vehicle asset pack, character rig or material/shader version should not force unrelated routing, traffic, terrain or search artifacts to rebuild when their authoritative inputs and contracts are unchanged.
+- Asset/archetype selection may be data-driven and may support specific entity/landmark overrides, but selection is presentation policy over stable identity. Handcrafted overrides must not require creating a competing Building/Vehicle/Person truth.
+- Future art systems may add detailed facades, windows, interiors, clothing, faces, damage visuals, vehicle parts, vegetation, weather response, lighting or other production presentation without requiring current gameplay/domain systems to know those asset schemas.
+- Exact production asset formats, art tools, procedural-building generator, character rig, animation state machine, material library and authoring workflow are intentionally deferred until scoped implementation exists. Do not create speculative frameworks merely to anticipate them.
+
+The governing rule is:
+
+> **Presentation may become richer or be replaced entirely; authoritative identity, world truth and gameplay state must survive unchanged.**
