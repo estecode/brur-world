@@ -1,0 +1,15 @@
+extends SceneTree
+const Controller = preload("res://scripts/geodot_hlod_controller.gd")
+func _init() -> void:
+	var c = Controller.new()
+	c.configure_regions(["r"])
+	c.request_detail("r", 4, 100)
+	assert(c.base_owns("r"))
+	c.mark_detail_ready("r", 4, 100)
+	assert(c.detail_owns("r"))
+	c.prefer_base("r")
+	assert(c.base_owns("r"))
+	c.prefer_detail("r", 4)
+	assert(c.detail_owns("r"))
+	print("GEODOT_HLOD_RUNTIME=PASS")
+	quit(0)
