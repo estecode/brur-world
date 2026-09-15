@@ -20,6 +20,7 @@ var _material:StandardMaterial3D=null
 var _enabled:=false
 var _active:=false
 var _transition_hold:=false
+var _detail_owner:=false
 var _refresh_accum:=0.0
 var _last_samples:=0
 var _last_level:=-1
@@ -39,15 +40,31 @@ func setup(world_coordinates,camera_rig:Node,cache_path:String)->Dictionary:
 	_enabled=true; set_process(true); return opened
 
 func shutdown()->void:
-	set_process(false); _enabled=false; _active=false; _transition_hold=false; _last_signature=""; _cache.close()
+	set_process(false); _enabled=false; _active=false; _transition_hold=false; _detail_owner=false; _last_signature=""; _cache.close()
+	# Break render-resource ownership explicitly before Node/engine teardown. This
+	# keeps MultiMesh/mesh/material RIDs from surviving into Godot Main::cleanup().
+	if _instance!=null:
+		_instance.visible=false
+		_instance.multimesh=null
+	if _quad!=null:_quad.material=null
 	if _instance!=null:_instance.free()
 	_instance=null; _quad=null; _material=null; _coordinates=null; _camera_rig=null
 func _exit_tree()->void: shutdown()
 
+func set_detail_owner(value:bool)->void:
+	_detail_owner=value
+	# Ownership changes are synchronous: never leave a 250 ms refresh window where
+	# far and detail draw the same ground and z-fight.
+	if value:
+		visible=false
+	elif _enabled and (_active or _transition_hold):
+		visible=true
+
 func set_transition_hold(value:bool)->void:
 	_transition_hold=value
 	if value and _enabled:
-		_active=true; visible=true
+		_active=true
+		if not _detail_owner:visible=true
 
 func set_tuning(values:Dictionary)->void:
 	var old_density:=density_scale; var old_budget:=base_sample_budget; var old_pixels:=target_screen_cell_px
@@ -74,16 +91,13 @@ func _refresh()->void:
 		_active=true
 	else:
 		_active=distance>=exit_distance_m if _active else distance>=enter_distance_m
-	visible=_active
+	visible=_active and not _detail_owner
 	if not _active:return
 	var bounds:=_view_bounds(focus); var viewport:=get_viewport().get_visible_rect().size; _last_mpp=LodPolicy.meters_per_pixel(bounds,viewport)
 	var level:=_cache.choose_level(maxf(2000.0,_last_mpp*target_screen_cell_px))
 	if level<0:return
 	_last_pressure=_renderer_memory_pressure()
 	var budget:=LodPolicy.sample_budget(base_sample_budget,density_scale*LodPolicy.quality_scale_for_pressure(_last_pressure),hard_sample_cap)
-	# Quantize the visible request to the selected cache cell. Zooming inside the
-	# same hierarchy level therefore reuses the already-published MultiMesh
-	# instead of rebuilding thousands of transforms every 250 ms.
 	var cell_m:=_cache.level_cell_size(level)
 	var qmin:=Vector2(floor(bounds.position.x/cell_m),floor(bounds.position.y/cell_m))
 	var qmax:=Vector2(ceil(bounds.end.x/cell_m),ceil(bounds.end.y/cell_m))
@@ -119,4 +133,4 @@ func _publish(samples:Array[Dictionary])->void:
 func _renderer_memory_pressure()->float:
 	var used:=int(Performance.get_monitor(Performance.MEMORY_STATIC)); return LodPolicy.ram_pressure(used,ram_target_bytes,ram_hard_bytes)
 func debug_snapshot()->Dictionary:
-	return {"active":_active,"transition_hold":_transition_hold,"samples":_last_samples,"level":_last_level,"cell_m":_last_cell_m,"meters_per_pixel":_last_mpp,"build_ms":_last_build_ms,"density":density_scale,"sample_budget":base_sample_budget,"ram_pressure":_last_pressure,"ram_target_mb":ram_target_bytes/(1024*1024),"ram_hard_mb":ram_hard_bytes/(1024*1024)}
+	return {"active":_active,"transition_hold":_transition_hold,"detail_owner":_detail_owner,"samples":_last_samples,"level":_last_level,"cell_m":_last_cell_m,"meters_per_pixel":_last_mpp,"build_ms":_last_build_ms,"density":density_scale,"sample_budget":base_sample_budget,"ram_pressure":_last_pressure,"ram_target_mb":ram_target_bytes/(1024*1024),"ram_hard_mb":ram_hard_bytes/(1024*1024)}
