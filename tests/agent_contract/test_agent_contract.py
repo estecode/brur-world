@@ -22,6 +22,9 @@ REQUIRED_AGENT_CONTRACT = {
     "red_tests_agent_owned": "red tests",
     "safe_check_agent_owned": "objective Safe Check failure returns ownership to the agent",
     "missing_ci_not_handoff": "Missing hosted CI is not by itself `WAITING_FOR_HUMAN`",
+    "ci_pending_is_action": "A bounded wait followed by another status poll counts as a concrete agent-owned action.",
+    "ci_follow_through": "CI FOLLOW-THROUGH LOOP — MANDATORY",
+    "ci_no_human_nudge": "The project leader must never need to say `follow CI`, `wait for CI`, `check again`, `continue`, or send another message to make polling continue.",
     "safe_check_objective_first": "After all relevant available objective validation is complete, if human verification still remains",
     "safe_check_exact_head_status": "Local `pr-check` objective results are persistent project state on the exact PR head",
     "safe_check_no_iterative_human_runner": "Never use the project leader as an iterative test runner.",
@@ -30,6 +33,7 @@ REQUIRED_AGENT_CONTRACT = {
 REQUIRED_CASES = {
     "running_must_continue": "CONTINUE",
     "missing_ci_must_continue": "CONTINUE",
+    "pending_ci_must_poll_until_terminal": "CONTINUE",
     "red_test_returns_to_agent": "CONTINUE",
     "safe_check_failure_returns_to_agent": "CONTINUE",
     "premature_safe_check_handoff": "CONTINUE",
