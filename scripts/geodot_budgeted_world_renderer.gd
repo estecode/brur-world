@@ -22,7 +22,7 @@ func set_streaming_enabled(value: bool) -> void:
 	if next == _streaming_enabled: return
 	_streaming_enabled = next
 	if not _streaming_enabled:
-		_generation += 1; _queue.clear(); _queued.clear(); _ready_results.clear(); _trim_warm(); _trim_active_to_budget(); _apply_presentation_visibility(); coverage_changed.emit(); return
+		_generation += 1; _queue.clear(); _queued.clear(); _ready_results.clear(); _trim_warm(); _enforce_resident_budget(); _apply_presentation_visibility(); coverage_changed.emit(); return
 	_refresh_desired(true); _apply_presentation_visibility()
 
 func set_presentation_visible(value: bool) -> void: _presentation_visible = value; _apply_presentation_visibility()
