@@ -10,7 +10,19 @@ var _resident_tick := 0
 func set_enabled(value: bool) -> void:
 	_enabled = value and _ready; set_process(_enabled)
 	if not _enabled:
-		_generation += 1; _queue.clear(); _queued.clear(); _ready_results.clear(); _desired.clear(); _shutdown_query_workers(); _apply_presentation_visibility(); return
+		_streaming_enabled = false; _generation += 1; _queue.clear(); _queued.clear(); _ready_results.clear(); _desired.clear(); _shutdown_query_workers(); _apply_presentation_visibility(); return
+	_streaming_enabled = true; _refresh_desired(true); _apply_presentation_visibility()
+
+# Pausing streaming is a quality-pressure action, not a presentation ownership change.
+# Keep the current desired/active owners visible so FAR never has to replace an entire
+# detail footprint in one frame. In-flight results are invalidated and drained without
+# blocking the camera; resuming refreshes the viewport and reuses warm residents.
+func set_streaming_enabled(value: bool) -> void:
+	var next := value and _enabled and _ready
+	if next == _streaming_enabled: return
+	_streaming_enabled = next
+	if not _streaming_enabled:
+		_generation += 1; _queue.clear(); _queued.clear(); _ready_results.clear(); _trim_warm(); _trim_active_to_budget(); _apply_presentation_visibility(); coverage_changed.emit(); return
 	_refresh_desired(true); _apply_presentation_visibility()
 
 func set_presentation_visible(value: bool) -> void: _presentation_visible = value; _apply_presentation_visibility()
@@ -46,7 +58,9 @@ static func choose_lru_stale_eviction_key(active: Dictionary, desired: Dictionar
 	return candidate
 
 func evict_warm_for_pressure(max_warm_cells: int = 0) -> int:
-	var evicted := 0
+	# True warm LOD replacements are always the first quality sacrificed.
+	var evicted := _warm.size()
+	_clear_warm(true)
 	var keep_warm := maxi(0, max_warm_cells)
 	while _active.size() > _desired.size() + keep_warm:
 		var stale := choose_lru_stale_eviction_key(_active, _desired, "")
@@ -87,6 +101,8 @@ func ready_desired_cells() -> int:
 func _process(delta: float) -> void:
 	if not _enabled: return
 	_poll_queries()
+	if not _streaming_enabled:
+		_enforce_resident_budget(); return
 	var started := Time.get_ticks_usec(); var published := 0; var budget := maxf(0.25,streaming_budget_ms)
 	while not _ready_results.is_empty() and published < maxi(1,max_publishes_per_frame):
 		if published > 0 and float(Time.get_ticks_usec()-started)/1000.0 >= budget: break
@@ -99,6 +115,6 @@ func _process(delta: float) -> void:
 
 func debug_snapshot() -> Dictionary:
 	var snapshot := super.debug_snapshot(); var ready_count := ready_desired_cells()
-	snapshot["active_cells"] = ready_count; snapshot["ready_desired_cells"] = ready_count; snapshot["warm_resident_cells"] = _active.size()
+	snapshot["active_cells"] = ready_count; snapshot["ready_desired_cells"] = ready_count; snapshot["warm_resident_cells"] = _active.size() + _warm.size()
 	snapshot["streaming_budget_ms"] = streaming_budget_ms; snapshot["last_publish_frame_ms"] = _last_publish_frame_ms; snapshot["over_budget_publishes"] = _over_budget_publishes; snapshot["presentation_visible"] = _presentation_visible
 	return snapshot
