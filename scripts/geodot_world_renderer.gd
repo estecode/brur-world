@@ -28,6 +28,7 @@ var _camera_rig: Node = null
 var _source = null
 var _enabled := false
 var _ready := false
+var _presentation_visible := true
 var _refresh_accum := 0.0
 var _active: Dictionary = {}
 var _desired: Dictionary = {}
@@ -79,8 +80,17 @@ func _shutdown_query_workers() -> void:
 func set_enabled(value: bool) -> void:
 	_enabled = value and _ready; set_process(_enabled)
 	if not _enabled:
-		_generation += 1; _queue.clear(); _queued.clear(); _ready_results.clear(); _desired.clear(); _shutdown_query_workers(); _clear_active(); return
+		# Streaming can be demoted while far presentation owns the screen, but already
+		# built detail remains warm. Rapid reverse zoom therefore never reconstructs a
+		# city merely because its presentation LOD changed.
+		_generation += 1; _queue.clear(); _queued.clear(); _ready_results.clear(); _desired.clear(); _shutdown_query_workers(); return
 	_refresh_desired(true)
+
+func set_presentation_visible(value: bool) -> void:
+	_presentation_visible = value
+	for entry in _active.values():
+		var node := (entry as Dictionary).get("node") as Node3D
+		if node != null: node.visible = value
 
 func is_enabled() -> bool: return _enabled
 func is_ready() -> bool: return _ready
@@ -88,11 +98,7 @@ func source_metadata() -> Dictionary: return _source.metadata() if _source != nu
 
 func _process(delta: float) -> void:
 	if not _enabled: return
-	_poll_queries()
-	# At most one expensive Godot mesh publication per frame. Query workers may
-	# finish in bursts, but a burst can never turn into N mesh builds in one frame.
-	_publish_one_ready_result()
-	_refresh_accum += delta
+	_poll_queries(); _publish_one_ready_result(); _refresh_accum += delta
 	if _refresh_accum >= refresh_interval_s:
 		_refresh_accum = 0.0; _refresh_desired(false)
 	_start_queries_if_needed()
@@ -172,17 +178,16 @@ func _refresh_desired(force: bool) -> void:
 	_trim_queue(); _start_queries_if_needed()
 
 static func desired_coverage_ready(active: Dictionary, desired: Dictionary) -> bool:
+	if desired.is_empty(): return false
 	for value in desired.keys():
 		var key := String(value)
 		if not active.has(key) or int((active[key] as Dictionary).get("lod",-1)) != int(desired[key]): return false
 	return true
 
 func _retire_stale_active_cells() -> void:
-	var stale: Array[String] = []
-	for value in _active.keys():
-		var key := String(value)
-		if not _desired.has(key): stale.append(key)
-	for key in stale: _evict_active_key(key)
+	# Stale cells are a warm cache, not immediate garbage. They are evicted only
+	# when a new resident needs the bounded slot.
+	return
 
 func _enqueue_request(request: Dictionary) -> void:
 	var queue_id := "%s:%d" % [String(request.key), int(request.lod)]
@@ -220,8 +225,7 @@ func _poll_queries() -> void:
 		if thread == null: continue
 		var value: Variant = thread.wait_to_finish()
 		if typeof(value) != TYPE_DICTIONARY: continue
-		var result: Dictionary = value
-		var request: Dictionary = result.get("request",{})
+		var result: Dictionary = value; var request: Dictionary = result.get("request",{})
 		if int(request.get("generation",-1)) != _generation: continue
 		if _ready_results.size() < maxi(1,max_ready_cells): _ready_results.append(result)
 
@@ -251,8 +255,7 @@ func _publish_cell(request: Dictionary, result: Dictionary) -> void:
 		var instance := MeshInstance3D.new(); instance.name="Roads"; instance.mesh=roads; instance.position.y=0.02; instance.material_override=_road_material; group.add_child(instance)
 	if not _prepare_resident_slot(key): group.free(); return
 	if _active.has(key): _evict_active_key(key)
-	add_child(group); _active[key]={"node":group,"lod":lod,"buildings":int(result.get("building_features",0)),"roads":int(result.get("road_features",0))}; group.visible=true
-	if desired_coverage_ready(_active,_desired): _retire_stale_active_cells()
+	add_child(group); _active[key]={"node":group,"lod":lod,"buildings":int(result.get("building_features",0)),"roads":int(result.get("road_features",0))}; group.visible=_presentation_visible
 	var build_ms := float(Time.get_ticks_usec()-started)/1000.0; _perf_build_ms += build_ms; _perf_build_max_ms=maxf(_perf_build_max_ms,build_ms); _perf_publishes += 1
 
 func _prepare_resident_slot(key: String) -> bool:
@@ -275,7 +278,6 @@ func _evict_active_key(key: String) -> void:
 	var node: Node = (_active[key] as Dictionary).get("node"); _active.erase(key)
 	if node != null:
 		if node is Node3D: (node as Node3D).visible=false
-		# Immediate release prevents a large queue_free backlog during continuous pan.
 		node.free()
 
 func _setup_materials() -> void:
@@ -298,7 +300,7 @@ func _stale_active_count() -> int:
 	return count
 
 func debug_snapshot() -> Dictionary:
-	return {"enabled":_enabled,"ready":_ready,"active_cells":_active.size(),"desired_cells":_desired.size(),"stale_cells":_stale_active_count(),"pending_cells":_queue.size()+_workers.size(),"ready_cells":_ready_results.size(),"query_workers":_workers.size(),"query_cache_cells":0,"screen_lod":"far" if _far_screen_lod else "near","max_resident_cells":max_resident_cells,"max_pending_cells":max_pending_cells,"max_ready_cells":max_ready_cells,"source":source_metadata()}
+	return {"enabled":_enabled,"ready":_ready,"presentation_visible":_presentation_visible,"active_cells":_active.size(),"desired_cells":_desired.size(),"stale_cells":_stale_active_count(),"pending_cells":_queue.size()+_workers.size(),"ready_cells":_ready_results.size(),"query_workers":_workers.size(),"query_cache_cells":0,"screen_lod":"far" if _far_screen_lod else "near","max_resident_cells":max_resident_cells,"max_pending_cells":max_pending_cells,"max_ready_cells":max_ready_cells,"source":source_metadata()}
 
 func consume_perf_metrics() -> Dictionary:
 	var result := {"renderer":"geodot","geodot_query_ms":_perf_query_ms,"geodot_query_max_ms":_perf_query_max_ms,"geodot_build_ms":_perf_build_ms,"geodot_build_max_ms":_perf_build_max_ms,"geodot_queries":_perf_queries,"geodot_publishes":_perf_publishes,"geodot_building_features":_perf_building_features,"geodot_road_features":_perf_road_features,"geodot_active_cells":_active.size(),"geodot_stale_cells":_stale_active_count(),"geodot_pending_cells":_queue.size()+_workers.size(),"geodot_ready_cells":_ready_results.size(),"geodot_workers":_workers.size(),"geodot_query_cache_cells":0,"geodot_screen_lod":"far" if _far_screen_lod else "near"}
