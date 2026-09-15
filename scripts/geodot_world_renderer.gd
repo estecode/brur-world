@@ -3,6 +3,7 @@ class_name GeoDotWorldRenderer
 
 const Source = preload("res://scripts/geodot_world_source.gd")
 const MeshBuilder = preload("res://scripts/geodot_world_mesh_builder.gd")
+const StreamingPolicy = preload("res://scripts/geodot_streaming_policy.gd")
 
 @export var cell_size_m := 2000.0
 @export var near_radius_cells := 1
@@ -99,19 +100,7 @@ static func coverage_radius_for_altitude(altitude_m: float, cell_size: float, ba
 	return clampi(maxi(base_radius, altitude_radius), maxi(1, base_radius), maxi(base_radius, max_radius))
 
 static func coverage_cell_size_for_bounds(bounds: Rect2, base_cell_size: float, margin_cells: int, max_cells: int) -> float:
-	var size := maxf(1.0, base_cell_size)
-	var margin := maxi(0, margin_cells)
-	var budget := maxi(1, max_cells)
-	# Increase only presentation/query granularity until the complete visible
-	# bounds plus preload margin fit the resident budget. World identity remains
-	# absolute-coordinate based; this scale is not a second spatial truth.
-	for _iteration in range(16):
-		var columns := maxi(1, ceili(bounds.size.x / size) + 1 + margin * 2)
-		var rows := maxi(1, ceili(bounds.size.y / size) + 1 + margin * 2)
-		if columns * rows <= budget: return size
-		var scale := sqrt(float(columns * rows) / float(budget))
-		size *= maxf(1.05, scale)
-	return size
+	return StreamingPolicy.bounded_cell_size_for_bounds(bounds, base_cell_size, margin_cells, max_cells)
 
 static func coverage_cells_for_bounds(bounds: Rect2, cell_size: float, margin_cells: int, max_cells: int, focus_abs: Vector2) -> Array[Vector2i]:
 	var safe_cell_size := maxf(1.0, cell_size)
@@ -185,17 +174,13 @@ func _refresh_desired(force: bool) -> void:
 		var delta := cell - focus_cell; var distance_cells := maxi(absi(delta.x), absi(delta.y)); var lod := MeshBuilder.LOD_NEAR
 		if distance_cells > near_radius_cells or altitude >= far_lod_altitude_m: lod = MeshBuilder.LOD_FAR
 		var key := _cell_key(cell, query_cell_size)
-		var request := {"cell": cell, "cell_size_m": query_cell_size, "lod": lod, "distance": distance_cells}; candidates.append(request); next_desired[key] = lod
+		var request := {"key": key, "cell": cell, "cell_size_m": query_cell_size, "lod": lod, "distance": distance_cells}; candidates.append(request); next_desired[key] = lod
 	var changed := force or next_desired.hash() != _desired.hash(); _desired = next_desired
 	if changed:
 		_generation += 1; _queue.clear(); _queued.clear()
 		if desired_coverage_ready(_active, _desired): _retire_stale_active_cells()
 	for request in candidates:
-		var key := String(request.get("key", ""))
-		if key.is_empty():
-			key = _cell_key(request["cell"] as Vector2i, float(request.get("cell_size_m", cell_size_m)))
-			request["key"] = key
-		var wanted_lod := int(_desired[key])
+		var key := String(request.get("key", "")); var wanted_lod := int(_desired[key])
 		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == wanted_lod: continue
 		_enqueue_request(request)
 	_trim_queue(); _start_query_if_needed()
