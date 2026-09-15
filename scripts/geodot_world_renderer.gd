@@ -7,8 +7,11 @@ const GeoDotWorldMeshBuilderScript = preload("res://scripts/geodot_world_mesh_bu
 @export var cell_size_m := 2000.0
 @export var near_radius_cells := 1
 @export var far_radius_cells := 3
-@export var max_resident_cells := 49
-@export var max_pending_cells := 32
+@export var max_view_radius_cells := 6
+@export var coverage_altitude_factor := 0.72
+@export var max_resident_cells := 169
+@export var max_pending_cells := 96
+@export var max_query_cache_cells := 192
 @export var max_buildings_per_cell := 3000
 @export var max_roads_per_cell := 2500
 @export var refresh_interval_s := 0.20
@@ -24,9 +27,10 @@ var _active: Dictionary = {}
 var _desired: Dictionary = {}
 var _queue: Array[Dictionary] = []
 var _queued: Dictionary = {}
+var _query_cache: Dictionary = {}
+var _query_cache_order: Array[String] = []
 var _query_thread: Thread = null
 var _query_key := ""
-var _query_generation := 0
 var _generation := 0
 var _building_material: StandardMaterial3D = null
 var _road_material: StandardMaterial3D = null
@@ -35,6 +39,7 @@ var _perf_query_max_ms := 0.0
 var _perf_build_ms := 0.0
 var _perf_build_max_ms := 0.0
 var _perf_queries := 0
+var _perf_cache_hits := 0
 var _perf_publishes := 0
 var _perf_building_features := 0
 var _perf_road_features := 0
@@ -58,6 +63,7 @@ func setup(world_coordinates, camera_rig: Node, gpkg_path: String) -> Dictionary
 func _exit_tree() -> void:
 	_shutdown_query_worker()
 	_clear_active(true)
+	_clear_query_cache()
 	_release_render_resources()
 	_release_source()
 
@@ -71,6 +77,7 @@ func shutdown() -> void:
 	_desired.clear()
 	_shutdown_query_worker()
 	_clear_active(true)
+	_clear_query_cache()
 	_release_render_resources()
 	_release_source()
 	_coordinates = null
@@ -122,6 +129,11 @@ func _process(delta: float) -> void:
 		_refresh_desired(false)
 	_start_query_if_needed()
 
+static func coverage_radius_for_altitude(altitude_m: float, cell_size: float, base_radius: int, max_radius: int, altitude_factor: float) -> int:
+	var safe_cell_size := maxf(1.0, cell_size)
+	var altitude_radius := ceili(maxf(0.0, altitude_m) * maxf(0.0, altitude_factor) / safe_cell_size) + 1
+	return clampi(maxi(base_radius, altitude_radius), maxi(1, base_radius), maxi(base_radius, max_radius))
+
 func _refresh_desired(force: bool) -> void:
 	if _camera_rig == null or not _camera_rig.has_method("get_focus_world"):
 		return
@@ -129,17 +141,19 @@ func _refresh_desired(force: bool) -> void:
 	var focus_abs: Vector2 = _coordinates.world_to_absolute(focus_world)
 	var center := Vector2i(floori(focus_abs.x / cell_size_m), floori(focus_abs.y / cell_size_m))
 	var altitude := float(_camera_rig.call("get_altitude")) if _camera_rig.has_method("get_altitude") else 0.0
+	var view_radius := coverage_radius_for_altitude(altitude, cell_size_m, far_radius_cells, max_view_radius_cells, coverage_altitude_factor)
 	var next_desired: Dictionary = {}
 	var candidates: Array[Dictionary] = []
-	for dy in range(-far_radius_cells, far_radius_cells + 1):
-		for dx in range(-far_radius_cells, far_radius_cells + 1):
+	for dy in range(-view_radius, view_radius + 1):
+		for dx in range(-view_radius, view_radius + 1):
 			var distance_cells := maxi(absi(dx), absi(dy))
-			if distance_cells > far_radius_cells:
-				continue
 			var cell := center + Vector2i(dx, dy)
 			var lod := GeoDotWorldMeshBuilderScript.LOD_NEAR
 			if distance_cells > near_radius_cells or altitude >= far_lod_altitude_m:
 				lod = GeoDotWorldMeshBuilderScript.LOD_FAR
+			# Coverage cells are ordered nearest-first, but every cell in the bounded
+			# camera-scaled footprint is desired. Existing visible cells remain until
+			# replacements are ready, so the internal grid is never intentionally exposed.
 			candidates.append({"cell": cell, "lod": lod, "distance": distance_cells})
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["distance"]) < int(b["distance"]))
 	var limit := mini(maxi(1, max_resident_cells), candidates.size())
@@ -151,16 +165,17 @@ func _refresh_desired(force: bool) -> void:
 	_desired = next_desired
 	if changed:
 		_generation += 1
-		# Requests queued for the old camera position are now counterproductive.
-		# Drop them immediately so the single native query worker spends its time
-		# preparing cells that can actually become visible next.
 		_queue.clear()
 		_queued.clear()
-	for key in _desired.keys():
+	for request in candidates:
+		var cell: Vector2i = request["cell"]
+		var key := _cell_key(cell)
+		if not _desired.has(key):
+			continue
 		var wanted_lod := int(_desired[key])
 		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == wanted_lod:
 			continue
-		_enqueue_cell(String(key), wanted_lod)
+		_enqueue_cell(key, wanted_lod)
 	_trim_queue()
 	_start_query_if_needed()
 
@@ -183,7 +198,15 @@ func _start_query_if_needed() -> void:
 	var queue_id := String(request.get("queue_id", ""))
 	_queued.erase(queue_id)
 	_query_key = queue_id
-	_query_generation = int(request.get("generation", _generation))
+	var key := String(request.get("key", ""))
+	if _query_cache.has(key):
+		var cached: Dictionary = (_query_cache[key] as Dictionary).duplicate(true)
+		cached["request"] = request
+		_perf_cache_hits += 1
+		_query_key = ""
+		_publish_query_result(cached)
+		_start_query_if_needed()
+		return
 	_query_thread = Thread.new()
 	var error := _query_thread.start(Callable(self, "_query_worker").bind(request))
 	if error != OK:
@@ -209,7 +232,9 @@ func _poll_query() -> void:
 	if typeof(value) != TYPE_DICTIONARY:
 		push_error("GeoDot cell query returned invalid data")
 		return
-	var result: Dictionary = value
+	_publish_query_result(value as Dictionary)
+
+func _publish_query_result(result: Dictionary) -> void:
 	if result.get("ok", false) != true:
 		push_error("GeoDot cell query failed: %s" % String(result.get("error", "unknown")))
 		return
@@ -219,12 +244,28 @@ func _poll_query() -> void:
 	if key.is_empty() or not _desired.has(key) or int(_desired[key]) != lod:
 		return
 	var query_ms := float(result.get("total_query_ms", 0.0))
-	_perf_query_ms += query_ms
-	_perf_query_max_ms = maxf(_perf_query_max_ms, query_ms)
-	_perf_queries += 1
+	if not _query_cache.has(key):
+		_perf_query_ms += query_ms
+		_perf_query_max_ms = maxf(_perf_query_max_ms, query_ms)
+		_perf_queries += 1
+		_cache_query_result(key, result)
 	_perf_building_features += int(result.get("building_features", 0))
 	_perf_road_features += int(result.get("road_features", 0))
 	_publish_cell(request, result)
+
+func _cache_query_result(key: String, result: Dictionary) -> void:
+	var cached := result.duplicate(true)
+	cached.erase("request")
+	_query_cache[key] = cached
+	_query_cache_order.erase(key)
+	_query_cache_order.append(key)
+	while _query_cache_order.size() > maxi(1, max_query_cache_cells):
+		var evicted := _query_cache_order.pop_front()
+		_query_cache.erase(evicted)
+
+func _clear_query_cache() -> void:
+	_query_cache.clear()
+	_query_cache_order.clear()
 
 func _publish_cell(request: Dictionary, result: Dictionary) -> void:
 	var started := Time.get_ticks_usec()
@@ -329,15 +370,16 @@ func _stale_active_count() -> int:
 	return count
 
 func debug_snapshot() -> Dictionary:
-	return {"enabled": _enabled, "ready": _ready, "active_cells": _active.size(), "desired_cells": _desired.size(), "stale_cells": _stale_active_count(), "pending_cells": _queue.size() + (1 if _query_thread != null else 0), "max_resident_cells": max_resident_cells, "max_pending_cells": max_pending_cells, "source": source_metadata()}
+	return {"enabled": _enabled, "ready": _ready, "active_cells": _active.size(), "desired_cells": _desired.size(), "stale_cells": _stale_active_count(), "pending_cells": _queue.size() + (1 if _query_thread != null else 0), "query_cache_cells": _query_cache.size(), "max_resident_cells": max_resident_cells, "max_pending_cells": max_pending_cells, "max_query_cache_cells": max_query_cache_cells, "source": source_metadata()}
 
 func consume_perf_metrics() -> Dictionary:
-	var result := {"geodot_query_ms": _perf_query_ms, "geodot_query_max_ms": _perf_query_max_ms, "geodot_build_ms": _perf_build_ms, "geodot_build_max_ms": _perf_build_max_ms, "geodot_queries": _perf_queries, "geodot_publishes": _perf_publishes, "geodot_building_features": _perf_building_features, "geodot_road_features": _perf_road_features, "geodot_active_cells": _active.size(), "geodot_stale_cells": _stale_active_count(), "geodot_pending_cells": _queue.size() + (1 if _query_thread != null else 0)}
+	var result := {"geodot_query_ms": _perf_query_ms, "geodot_query_max_ms": _perf_query_max_ms, "geodot_build_ms": _perf_build_ms, "geodot_build_max_ms": _perf_build_max_ms, "geodot_queries": _perf_queries, "geodot_cache_hits": _perf_cache_hits, "geodot_publishes": _perf_publishes, "geodot_building_features": _perf_building_features, "geodot_road_features": _perf_road_features, "geodot_active_cells": _active.size(), "geodot_stale_cells": _stale_active_count(), "geodot_pending_cells": _queue.size() + (1 if _query_thread != null else 0), "geodot_query_cache_cells": _query_cache.size()}
 	_perf_query_ms = 0.0
 	_perf_query_max_ms = 0.0
 	_perf_build_ms = 0.0
 	_perf_build_max_ms = 0.0
 	_perf_queries = 0
+	_perf_cache_hits = 0
 	_perf_publishes = 0
 	_perf_building_features = 0
 	_perf_road_features = 0
