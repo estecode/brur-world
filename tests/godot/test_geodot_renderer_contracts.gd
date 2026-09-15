@@ -88,7 +88,13 @@ func _test_building_adapter() -> void:
 func _test_geographic_source_conversion() -> void:
 	var lund_lonlat := Vector2(13.1910, 55.7047)
 	var absolute := GeoDotWorldSourceScript.source_to_absolute(lund_lonlat, 4326)
-	_assert(absf(absolute.x - 1468390.0) < 5000.0 and absf(absolute.y - 7494000.0) < 5000.0, "EPSG:4326 source coordinates map into BRUR projected metre space")
+	# BRUR's current absolute world coordinates use Web Mercator metres. Keep this
+	# assertion tied to the actual projection formula rather than an approximate
+	# hand-written Lund northing (which previously had the wrong value).
+	var expected_x := 6378137.0 * deg_to_rad(lund_lonlat.x)
+	var lat_rad := deg_to_rad(lund_lonlat.y)
+	var expected_y := 6378137.0 * log(tan(PI * 0.25 + lat_rad * 0.5))
+	_assert(absolute.distance_to(Vector2(expected_x, expected_y)) < 0.25, "EPSG:4326 source coordinates map into BRUR Web Mercator metre space")
 	var round_trip := GeoDotWorldSourceScript.absolute_to_source(absolute, 4326)
 	_assert(round_trip.distance_to(lund_lonlat) < 0.00001, "geographic/projected adapter conversion round-trips deterministically")
 
