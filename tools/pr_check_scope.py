@@ -13,13 +13,17 @@ BUILDING_TILE_OWNERS=frozenset({"tools/build_building_tiles.py","tools/build_bui
 NATIVE_GPS_EXACT_OWNERS=frozenset({"tools/build_native_gps.sh","requirements.txt"})
 
 def _paths(changed_paths: Iterable[str])->tuple[str,...]: return tuple(path.strip() for path in changed_paths if path.strip())
-def route_geometry_check_required(changed_paths: Iterable[str])->bool: return any(path in ROUTE_GEOMETRY_DATASET_OWNERS for path in _paths(changed_paths))
-def road_lod_rebuild_required(changed_paths: Iterable[str])->bool: return any(path in ROAD_LOD_DATASET_OWNERS for path in _paths(changed_paths))
+def _geodot_poc(paths: tuple[str,...])->bool: return any(path.startswith("scripts/geodot_") or path=="scenes/geodot_poc.tscn" for path in paths)
+def route_geometry_check_required(changed_paths: Iterable[str])->bool:
+    paths=_paths(changed_paths); return False if _geodot_poc(paths) else any(path in ROUTE_GEOMETRY_DATASET_OWNERS for path in paths)
+def road_lod_rebuild_required(changed_paths: Iterable[str])->bool:
+    paths=_paths(changed_paths); return False if _geodot_poc(paths) else any(path in ROAD_LOD_DATASET_OWNERS for path in paths)
 def native_gps_build_required(changed_paths: Iterable[str])->bool:
-    return any(path.startswith("native/") or path in NATIVE_GPS_EXACT_OWNERS for path in _paths(changed_paths))
+    paths=_paths(changed_paths); return any(path.startswith("native/") or path in NATIVE_GPS_EXACT_OWNERS for path in paths)
 def city_light_real_data_required(changed_paths: Iterable[str])->bool: return any(path in CITY_LIGHT_OWNERS for path in _paths(changed_paths))
 def world_showcase_real_data_required(changed_paths: Iterable[str])->bool: return any(path in WORLD_SHOWCASE_OWNERS for path in _paths(changed_paths))
-def building_tiles_required(changed_paths: Iterable[str])->bool: return any(path in BUILDING_TILE_OWNERS for path in _paths(changed_paths))
+def building_tiles_required(changed_paths: Iterable[str])->bool:
+    paths=_paths(changed_paths); return False if _geodot_poc(paths) else any(path in BUILDING_TILE_OWNERS for path in paths)
 SCOPES={"route-geometry":route_geometry_check_required,"road-lod":road_lod_rebuild_required,"native-gps":native_gps_build_required,"city-lights":city_light_real_data_required,"world-showcase":world_showcase_real_data_required,"building-tiles":building_tiles_required}
 def main()->None:
     parser=argparse.ArgumentParser(); parser.add_argument("scope",choices=tuple(SCOPES)); args=parser.parse_args(); changed=[line.strip() for line in sys.stdin if line.strip()]; print("required" if SCOPES[args.scope](changed) else "skip")
