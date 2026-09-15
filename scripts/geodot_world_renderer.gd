@@ -146,6 +146,7 @@ func _refresh_desired(force: bool) -> void:
 	if changed:
 		_generation += 1
 		_queue.clear(); _queued.clear()
+		_retire_stale_active_cells()
 	for request in candidates:
 		var cell: Vector2i = request["cell"]
 		var key := _cell_key(cell)
@@ -155,6 +156,14 @@ func _refresh_desired(force: bool) -> void:
 		_enqueue_cell(key, wanted_lod)
 	_trim_queue()
 	_start_query_if_needed()
+
+func _retire_stale_active_cells() -> void:
+	var stale_keys: Array[String] = []
+	for value in _active.keys():
+		var key := String(value)
+		if not _desired.has(key): stale_keys.append(key)
+	for key in stale_keys:
+		_evict_active_key(key)
 
 func _enqueue_cell(key: String, lod: int) -> void:
 	var queue_id := "%s:%d" % [key, lod]
@@ -307,7 +316,12 @@ func consume_perf_metrics() -> Dictionary:
 	_perf_query_ms = 0.0; _perf_query_max_ms = 0.0; _perf_build_ms = 0.0; _perf_build_max_ms = 0.0; _perf_queries = 0; _perf_cache_hits = 0; _perf_publishes = 0; _perf_building_features = 0; _perf_road_features = 0
 	return result
 
-func _cell_key(cell: Vector2i) -> String: return "%d:%d" % [cell.x, cell.y]
-func _parse_cell_key(key: String) -> Vector2i:
+func apply_render_origin_shift(delta_world: Vector3) -> void:
+	for value in _active.values():
+		var node: Node3D = (value as Dictionary).get("node") as Node3D
+		if node != null: node.position += delta_world
+
+static func _cell_key(cell: Vector2i) -> String: return "%d:%d" % [cell.x, cell.y]
+static func _parse_cell_key(key: String) -> Vector2i:
 	var parts := key.split(":")
-	return Vector2i(int(parts[0]), int(parts[1])) if parts.size() == 2 else Vector2i.ZERO
+	return Vector2i(int(parts[0]), int(parts[1]))
