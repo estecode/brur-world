@@ -162,6 +162,17 @@ TARGETED VALIDATION
 - Efficiency never weakens required merge gates, statuses, local PR checks, integration validation, or relevant regression.
 - Objective runtime invariants should be automated where reasonably possible; do not create brittle or disproportionately expensive automation merely because a property is theoretically measurable.
 
+### Agent-contract regression validation
+
+`tests/agent_contract/` validates this workflow contract itself. It is deliberately isolated from ordinary BRUR runtime/gameplay/world regression.
+
+- Run `python tests/agent_contract/test_agent_contract.py` when `AGENTS.md`, `tests/agent_contract/**`, or the dedicated agent-contract workflow changes.
+- Ordinary issue implementation does **not** require this suite merely because agent workflow rules exist; use the normal targeted -> integration -> final relevant regression ladder for product code.
+- The dedicated GitHub workflow is path-filtered to the agent-contract surface and may also be invoked manually.
+- Add a regression fixture when a real agent-workflow failure exposes a reusable contract case.
+- Static contract/fixture PASS proves that the documented invariants and fixture schema remain intact. It does **not** prove that every future model execution will obey them.
+- Do not build a custom agent framework, scheduler, database, RAG system, or orchestration service merely to make these fixtures executable. A live-model behavior runner requires a small stable supported invocation from the existing agent environment.
+
 Final delivery reporting includes issue, branch, delivery commit, actual validation/results, PR, issue-update status, outstanding notes, and the same merge decision as the PR.
 
 ## Project-leader workflow
