@@ -43,6 +43,7 @@ jobs:
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_renderer_contracts.gd
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_runtime_bounds.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_lod_policy.gd
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_view_coverage.gd
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_streaming_policy.gd
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_streaming_transition.gd
