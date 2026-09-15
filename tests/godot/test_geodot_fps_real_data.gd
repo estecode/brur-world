@@ -17,6 +17,7 @@ const MAX_P95_FRAME_MS := 50.0
 const MAX_P99_FRAME_MS := 100.0
 const MAX_WORST_FRAME_MS := 250.0
 const SURFACE_HEIGHT_TOLERANCE_M := 0.001
+const SHUTDOWN_SETTLE_FRAMES := 2
 
 var _main: Node3D
 var _camera_rig: Node
@@ -34,6 +35,8 @@ var _crossing_start_prepared := false
 var _crossing_low_x := 0.0
 var _crossing_high_x := 0.0
 var _switch_contract_checked := false
+var _shutdown_exit_code := -1
+var _shutdown_frames := 0
 
 func _initialize() -> void:
 	if OS.has_environment("BRUR_PARSE_ONLY"):
@@ -58,6 +61,11 @@ func _initialize() -> void:
 	print("GEODOT_DRIVE_FPS_REAL_DATA waiting for production player")
 
 func _process(delta: float) -> bool:
+	if _shutdown_exit_code >= 0:
+		_shutdown_frames += 1
+		if _shutdown_frames >= SHUTDOWN_SETTLE_FRAMES:
+			quit(_shutdown_exit_code)
+		return false
 	if _main == null:
 		return false
 	match _state:
@@ -233,12 +241,22 @@ func _consume_metrics() -> Dictionary:
 	return {}
 
 func _shutdown_and_quit(exit_code: int) -> void:
+	if _shutdown_exit_code >= 0:
+		return
 	if _geodot_layer != null and _geodot_layer.has_method("shutdown"):
 		_geodot_layer.call("shutdown")
+	_geodot_layer = null
+	_gps_layer = null
+	_camera_rig = null
+	_player = null
 	if _main != null:
 		_main.queue_free()
-		_main = null
-	call_deferred("quit", exit_code)
+	_main = null
+	# Let SceneTree process the queued production scene destruction before quit.
+	# In particular, this releases rendering resources while RenderingServer is
+	# still running instead of racing Metal/Vulkan teardown at process exit.
+	_shutdown_exit_code = exit_code
+	_shutdown_frames = 0
 
 func _fail(message: String) -> void:
 	push_error("GeoDot Drive FPS real-data test failed: " + message)
