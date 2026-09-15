@@ -12,58 +12,113 @@ Before any code change, architecture work, refactor, or code review:
 
 If a requested change conflicts with `ARCHITECTURE.md`, identify the conflict and use the smallest compliant alternative.
 
+## NON-NEGOTIABLE execution invariant
+
+### RESPONSE-BEFORE-ACTION GUARD
+
+**Before sending ANY user-facing response while a tracked task is active, perform this check first:**
+
+```text
+Can I execute another concrete agent-owned action that advances the active task RIGHT NOW?
+
+YES -> USER-FACING RESPONSE IS FORBIDDEN.
+       Execute that action now.
+       Repeat this check after the action.
+
+NO  -> only now evaluate DONE / WAITING_FOR_HUMAN / BLOCKED.
+```
+
+This guard applies at every tempting response boundary: after a tool call, commit, test result, discovered bug, fix, PR update, CI observation, explanation, status request, or completed substep. **The existence of a useful status update never outranks an executable next action.**
+
+A response whose final state is `RUNNING` is **invalid by definition**. `RUNNING` may be mentioned while answering a conversational interruption only when another concrete tool/action call for that task follows in the same response. It may never be the terminal state of a response.
+
+Therefore these are invalid terminal responses:
+
+```text
+"#342 is still RUNNING."
+"I found the next problem; next I will fix viewport coverage."
+"CI is unavailable, but there is still implementation work."
+"I have added the tests; the next implementation is ..."
+```
+
+In every such case, the sentence itself proves that executable agent-owned work remains. **Do the work instead of sending the sentence.**
+
+### PRIMARY CONTINUATION RULE — ACTION BEFORE STATE CLASSIFICATION
+
+For an active tracked task, the first continuation question is always:
+
+```text
+Is there any concrete agent-owned action that can advance the active task?
+
+YES -> EXECUTE IT NOW.
+       Do not describe it to the project leader instead of doing it.
+       After the action, ask this same question again.
+
+NO  -> only now evaluate whether the task is DONE, WAITING_FOR_HUMAN, or BLOCKED.
+```
+
+This rule is evaluated **before** reasoning about handoff state. Do not start by asking whether the task might be blocked, whether CI exists, whether a later check needs the project leader's Mac, or whether enough progress has been made to report. First exhaust concrete agent-owned work that is executable with the available tools/environment.
+
+### NEVER NARRATE CONTINUATION — EXECUTE IT
+
+While a tracked task is active, if the agent is about to write or has formulated any statement that identifies remaining agent-owned work — for example `next I will...`, `I can still...`, `what remains is...`, `I need to investigate...`, or a list of further executable actions — **do not send that response**. Treat the first such action as the next tool/action call and execute it immediately. Continue executing subsequent agent-owned actions and re-evaluating the primary continuation rule.
+
+A description of executable future work is proof that the task is still executable and therefore proof that a final response is not yet eligible.
+
+```text
+WRONG:
+discover remaining work A, B, C
+-> tell project leader about A, B, C
+-> stop
+
+REQUIRED:
+discover remaining work A, B, C
+-> execute A
+-> execute B
+-> execute C
+-> ask whether another agent-owned action exists
+-> continue while the answer is YES
+-> only then evaluate terminal state
+```
+
+**Self-check:** If deleting the proposed final response would reveal an obvious next tool call or agent-owned action, **make that call instead of sending the response.**
+
+An accepted agent-owned task remains active until the requested scope is actually complete. The only terminal states are:
+
+```text
+DONE              requested scope and required agent-owned delivery/cleanup are complete
+WAITING_FOR_HUMAN no agent-owned action remains and a specific genuinely human-only action is required now
+BLOCKED           no agent-owned action remains and execution is technically impossible with the available tools/environment and no safe workaround exists
+```
+
+Everything else remains active. Answering a question, giving status, explaining a failure, completing a substep, creating a branch/commit/PR, finishing a build, receiving CI/test results, finding a recoverable conflict, or identifying an agent-fixable blocker is not a stopping state.
+
+The project leader must never need to type `fortsätt`, ask for status, or send another message merely to advance already agent-owned work. This does not authorize unsafe/destructive actions, bypass required human approval, or imply background execution after the current execution opportunity ends.
+
 ## Repository orientation and Repomix fallback
 
-GitHub/current-checkout original files remain the source of truth. A Repomix snapshot such as `repomix-output.xml`, when available in the current working context, is an optional fast orientation cache only.
+GitHub/current-checkout original files remain the source of truth. A Repomix snapshot, when available, is an optional fast orientation cache only.
 
-- After the mandatory `AGENTS.md` and `ARCHITECTURE.md` read, prefer an available Repomix snapshot for fast repository orientation: locating likely files, subsystem owners, entrypoints and dependency paths before opening targeted source files.
-- Never treat Repomix content as proof that the snapshot matches the current target revision. Before changing or reviewing code, read the relevant original files from the current GitHub revision or checkout.
-- If the snapshot is missing, stale, incomplete, ambiguous, too large to search effectively, or its indexing/search path fails, fall back immediately to GitHub/original-file search and continue the task. Repomix must never become a blocker or require project-leader intervention.
-- Do not ask the project leader to regenerate or upload a Repomix snapshot merely to continue ordinary work when the repository can be inspected directly.
-- Do not build a separate synchronization service, RAG/vector database, repository index, or other infrastructure merely to keep Repomix current. Regeneration is a convenience; freshness is verified against source-of-truth files when needed.
-- Prefer focused Repomix inputs that exclude generated data, binaries, build output, logs, large runtime datasets, and unrelated research material when those files do not help code orientation.
-
-In short: use Repomix to get to the right original files faster; use the original files to decide and change anything.
+- After the mandatory reads, prefer an available Repomix snapshot for fast orientation before opening targeted source files.
+- Never treat Repomix as proof that it matches the target revision. Verify relevant original files before changing/reviewing code.
+- If Repomix is missing, stale, incomplete, ambiguous, or fails, fall back immediately to GitHub/original files. Do not ask the project leader to regenerate it merely to continue ordinary work.
+- Do not build synchronization/RAG/index infrastructure merely to keep Repomix current.
 
 ## Issue workflow
 
 For tracked implementation such as `fixa #48`:
 
-1. Read the required local files and issue before changing code.
-2. Base work safely on the latest known `main` without overwriting local work.
+1. Read required local files and issue acceptance criteria.
+2. Base safely on latest known `main` without overwriting local work.
 3. Use `issue/<number>-<short-name>` and isolate concurrent issue work.
-4. Implement the smallest architecture-compliant change inside issue scope.
-5. Run all relevant available objective validation for the touched scope, including deterministic/core, native/headless Godot, and real-data integration checks where applicable. Do not delegate machine-verifiable checks to manual playtesting when they can reasonably be executed by the agent. Never claim validation not performed.
-6. Commit the completed work, update the issue with implementation/validation evidence, and create a PR targeting `main` with `Closes #XX`.
+4. Implement the smallest architecture-compliant change inside scope.
+5. Run all relevant available objective validation. Do not delegate machine-verifiable checks to manual playtesting.
+6. Commit completed work, update the issue with evidence, and create a PR targeting `main` with `Closes #XX`.
 7. Treat the PR as the persistent merge-decision object. PR body and final chat must agree.
 8. Keep the issue open until merge. Do not merge unless explicitly requested or repository policy grants authority.
 9. After PR creation, change implementation only for metadata/linkage repair, failed-validation repair, or explicit review feedback.
 
-Required decision block:
-
-```markdown
-## Merge decision
-
-**What changed**
-<plain-language summary>
-
-**Why this approach**
-<why this was the smallest/correct solution>
-
-**Behavioral impact**
-<what can change or regress>
-
-**Executed validation**
-<exact checks actually run + results>
-
-**Risk assessment**
-<remaining risks, untested areas, known gaps>
-
-**Merge recommendation**
-<one decision form below>
-```
-
-Use exactly one:
+Required merge decision uses exactly one of:
 
 ```text
 MERGE
@@ -86,187 +141,144 @@ RECHECK: <concrete verification after fix>
 
 `MERGE` means all relevant available objective validation passed and no meaningful manual check remains. `CHECK THEN MERGE` means objective validation passed but one meaningful perceptual, interactive, hardware-specific, production-data/environment-specific, or otherwise non-automatable human check remains. `DO NOT MERGE` means a blocker, failed relevant check, or material unresolved risk remains.
 
-Do not use `CHECK THEN MERGE` merely because this is Godot. Do not delegate a check the agent can execute. Manual verification should primarily evaluate perception/feel or behavior that cannot reasonably be automated. Repeated objective manual checks are candidates for automation. Name the concrete scene/harness/runtime verification.
+### Verification and merge decision
 
-### Verification and the merge decision
+Correctness is agent-owned where reasonably machine-verifiable. Human verification must not be a shortcut.
 
-You must take responsibility for proving the objective correctness of your changes. Human verification must never be used as a shortcut for something you can reasonably prove yourself.
+Use validation in increasing scope as the implementation stabilizes:
 
-- `CHECK THEN MERGE` is not justified by the fact that a check requires Godot, scene execution, rendering state, spatial state, interaction state, or real runtime data. If the remaining property is objectively verifiable and can reasonably be asserted by the agent, that verification must be executed before handover.
-- If an invariant can reasonably be asserted in headless Godot, write and execute that verification before requesting a human playtest. Examples include viewport bounds, camera/terrain clearance, target-tracking tolerances, object placement against the expected drivable surface, visibility/existence, and state transitions such as manual takeover, GPS control and reroute requests.
-- If a bug can be described as a broken objective rule, translate that rule into the smallest stable deterministic assertion rather than asking a human to look for it.
-- Do not create brittle or disproportionately expensive automation merely because a property is theoretically measurable. `ARCHITECTURE.md`'s "where reasonably possible" rule still applies.
+```text
+TARGETED VALIDATION
+-> INTEGRATION VALIDATION
+-> FINAL RELEVANT REGRESSION
+-> MERGE DECISION
+```
 
-Final delivery reporting must include issue, branch, delivery commit, actual validation/results, PR, issue-update status, outstanding notes, and the same merge decision as the PR.
+- During implementation run the smallest deterministic/native/headless/real-data check that directly exercises the touched behavior.
+- After targeted green, broaden to affected subsystem and real boundaries.
+- Run full relevant regression/CI on the stable final candidate, not as the ordinary debugging loop.
+- After a failure, repair and rerun the smallest invalidated proof, then broaden again.
+- Evidence applies to the revision/integration context actually tested. Revalidate invalidated evidence after code/main changes.
+- Efficiency never weakens required merge gates, statuses, local PR checks, integration validation, or relevant regression.
+- Objective runtime invariants should be automated where reasonably possible; do not create brittle or disproportionately expensive automation merely because a property is theoretically measurable.
+
+### Agent-contract regression validation
+
+`tests/agent_contract/` validates this workflow contract itself. It is deliberately isolated from ordinary BRUR runtime/gameplay/world regression.
+
+- Run `python tests/agent_contract/test_agent_contract.py` when `AGENTS.md`, `tests/agent_contract/**`, or the dedicated agent-contract workflow changes.
+- Ordinary issue implementation does **not** require this suite merely because agent workflow rules exist; use the normal targeted -> integration -> final relevant regression ladder for product code.
+- The dedicated GitHub workflow is path-filtered to the agent-contract surface and may also be invoked manually.
+- Add a regression fixture when a real agent-workflow failure exposes a reusable contract case.
+- Static contract/fixture PASS proves that the documented invariants and fixture schema remain intact. It does **not** prove that every future model execution will obey them.
+- Do not build a custom agent framework, scheduler, database, RAG system, or orchestration service merely to make these fixtures executable. A live-model behavior runner requires a small stable supported invocation from the existing agent environment.
+
+Final delivery reporting includes issue, branch, delivery commit, actual validation/results, PR, issue-update status, outstanding notes, and the same merge decision as the PR.
 
 ## Project-leader workflow
 
-GitHub is the persistent source of truth for project state. Chat sessions are disposable work surfaces: the project leader must not need to remember which ChatGPT tab created, tested, or discussed an issue or PR.
+GitHub is persistent project state; chat sessions are disposable work surfaces. The project leader must not need to remember which tab created/tested/discussed an issue or PR.
 
-The workflow must remain resumable and fail closed. The project leader may forget, delay, repeat, or miss a handoff without risking correctness, local work, or merge safety. Missing or ambiguous required human input means wait; never infer that a human test passed or that a product/architecture decision was approved.
+### Active-task continuity across conversational interruptions
 
-### Agent-owned continuation
+A tracked issue, PR, wave, investigation, build or validation remains active across conversational turns until terminal. A project-leader question, correction, status request, explanation request, reminder, or `fortsätt` does not replace or pause it unless the project leader explicitly changes scope or says stop/pause/wait/abandon.
 
-When the next step is agent-owned, do not hand control back merely by describing future work. Continue and perform that work in the same active session whenever the available tools and current task allow it. A statement such as "I will investigate/fix/check this next" must not silently mean that the project leader is expected to send another message before anything happens.
-
-If execution genuinely cannot continue without a new user message, say so explicitly and state the exact message or action required. Never rely on a hidden convention such as the project leader knowing to type `fortsätt`. This rule does not imply background execution: if work cannot continue after the current response without an automation or a new message, do not claim or imply that it will.
-
-#### Active-task continuity across conversational interruptions
-
-A tracked issue, PR, wave, investigation, build or validation remains the active task across conversational turns until it reaches a valid termination condition. **Completing a chat answer is not the same thing as completing or pausing the tracked task.**
-
-The latest project-leader message does not replace, suspend or complete the active task merely because it asks a question, requests status, asks for an explanation, corrects the agent, reminds the agent to follow this file, or says `fortsätt`. Typical interruptions such as `status?`, `vad händer?`, `varför?`, `vad är skillnaden?`, `kommer den bygga igen?`, `följ AGENTS.md`, scope/reasoning corrections and `fortsätt` are conversational interruptions unless they explicitly change task ownership or scope.
-
-For such interruptions the required sequence is:
+For conversational interruptions:
 
 ```text
-answer/correct
--> re-identify the still-active tracked task
--> determine its next concrete action
--> execute that action when it is agent-owned and tool-available
--> continue until a valid termination condition is reached
+answer/correct concisely
+-> re-identify active task
+-> apply RESPONSE-BEFORE-ACTION GUARD
+-> execute instead of terminating the response
 ```
 
-Status reporting is observational, not a handoff. An explanation, apology, plan, status update, summary or statement that work will continue is never by itself a valid termination condition.
+Status reporting is observational, not a handoff. If status is given while executable work remains, **the same response must contain a subsequent tool/action call**; otherwise the response violates this file.
 
-The active task is paused, replaced or cancelled only when the project leader explicitly says to stop, pause, wait, abandon it, or change/replace its scope, or when a genuine human/external blocker or technical impossibility satisfies the termination rules below. A correction narrows or repairs execution inside the active task unless the project leader explicitly replaces that task.
+### Human-check resolution continuation
 
-Before producing any final user-facing response while tracked work remains active, run this mandatory continuation loop:
+When the project leader resolves a required human check, control returns immediately to the agent. Continue through all remaining agent-owned synchronization, metadata repair, merge-safety refresh/revalidation, Needs You cleanup, merge, and post-merge cleanup. Do not stop between these steps unless the response-before-action guard returns NO and a genuine terminal state exists.
 
-1. Identify the active tracked task.
-2. Determine whether it is complete for the current scope.
-3. If incomplete, identify the next concrete action.
-4. If that action is agent-owned and executable with the available tools/environment, execute it now.
-5. Re-evaluate from step 2 and repeat.
-6. Send a final response only when the task is complete or one of the genuine stopping conditions below applies.
+A human-executed Safe Check that reports an objective failure returns ownership to the agent. Diagnose, repair, and exhaust relevant agent-owned validation before requesting another local run. Never use the project leader as an iterative test runner.
 
-Example:
+### Terminal-state and repeated-action guard
+
+Repository mutations are idempotent from the agent's point of view.
+
+- After a mutation, inspect the returned state or perform at most one targeted read-back if needed.
+- Once the intended terminal mutation is confirmed, do not repeat it merely to make sure.
+- Never invoke the same successful mutation twice in succession with effectively identical arguments.
+- A failed safely retryable mutation permits one corrected retry; before a third equivalent attempt, diagnose instead of looping.
+- A successful read-back is sufficient; do not poll a terminal state that cannot become more complete.
+
+### Response termination gate
+
+The termination gate runs **only after the RESPONSE-BEFORE-ACTION GUARD and PRIMARY CONTINUATION RULE have both returned NO**.
 
 ```text
-Active task: fix #300
+0. Am I about to end this response with the task described or classified as RUNNING?
+   YES -> INVALID RESPONSE. Do not send it. Find and execute the next concrete action.
+   NO  -> continue.
 
-Project leader: "varför drog du in #288?"
-Agent: answer the question, correct the scope, then resume #300 immediately.
+1. Is there any concrete agent-owned action that can advance the task RIGHT NOW?
+   YES -> RESPONSE FORBIDDEN. EXECUTE IT. Return to step 0 after the action.
+   NO  -> continue.
 
-Project leader: "följ agent md"
-Agent: acknowledge/correct the behavior, then resume #300 immediately.
+2. Is requested scope and required cleanup complete?
+   YES -> DONE -> final response allowed.
+   NO  -> continue.
 
-Project leader: "men nu gjorde du precis det. fortsätt"
-Agent: do not merely describe the next #300 step; execute it.
+3. Is a specific human-only action required NOW?
+   YES -> WAITING_FOR_HUMAN -> final response allowed with that exact action.
+   NO  -> continue.
 
-Project leader: "vad händer?"
-Agent: give a concise status, then continue #300 in the same turn when an executable agent-owned action remains.
+4. Is execution technically impossible with available tools/environment,
+   with no safe agent-owned workaround?
+   YES -> BLOCKED -> final response allowed with exact blocker and smallest required user action.
+   NO  -> final response is still forbidden; search for the next concrete agent-owned action.
 ```
 
-The project leader must never need to repeatedly type `fortsätt` merely to advance an already active agent-owned task.
+**There is no valid final-response path whose resulting task state is `RUNNING`.** If the agent writes or thinks `the task remains RUNNING`, that is a control-flow instruction to continue tool/action execution, not information that may terminate the response.
 
-#### Human-check resolution continuation
+A progress report, partial completion summary, validation list, commit/PR update, CI-start/pending notice, explanation of remaining work, or statement that work will continue is never itself terminal.
 
-When the project leader resolves the final required human check for a tracked PR, for example with `test ok #191`, that message transfers control back to the agent. The agent must immediately continue through all remaining agent-owned steps in the same active turn: synchronize the current PR and `main`, repair stale PR metadata or merge-decision text, perform the smallest required merge-safety refresh/revalidation, update `BRUR — Needs You` if applicable, and merge automatically when the resulting decision is `MERGE`.
+Failed CI, failed `brur-world/local-pr-check`, red tests, objective Safe Check failures, suspected implementation/check bugs, stale branches, routine merge/rebase work, recoverable conflicts, missing investigation, agent-fixable `DO NOT MERGE` blockers, and pollable pending work all remain agent-owned.
 
-Do not stop after stating that these steps remain or that you will continue with them. A stale PR body, stale merge-decision block, missing issue comment, branch refresh, routine merge operation, or other administrative cleanup is agent-owned work and is never by itself a valid handoff to the project leader.
+### Continuous Git/PR/CI execution
 
-Example:
+- Pollable CI/build/test/status pending work remains active. Poll at sane bounded intervals or perform safe same-task work between polls.
+- On terminal green, immediately apply the response-before-action guard and perform the next PR/task/merge-safety action.
+- On terminal red, diagnose, repair, rerun the smallest relevant validation, and continue.
+- Missing hosted CI is not by itself `WAITING_FOR_HUMAN` if other agent-owned analysis, implementation, tests, Git/GitHub work, or verification remains.
+- PR finalization and required cleanup are part of the task.
+- Investigation must converge on executable actions. Once enough evidence exists for the smallest safe next step, execute it instead of producing more plans/status prose.
 
-```text
-test ok #191
-→ verify exact current PR head and current main
-→ confirm required statuses/checks and integration relevance
-→ update the PR merge-decision block to MERGE when justified
-→ clear the corresponding Needs You entry if one exists
-→ merge
-→ report completion
-```
+## Parallel sessions and isolated work
 
-Do not stop between these steps unless a new genuine human-only blocker appears.
+- Before starting tracked work, check GitHub for an existing active branch/PR/implementation of the same issue.
+- Before recommending an issue as available, verify current GitHub implementation state; issue-open alone is insufficient.
+- Each concurrent issue uses an isolated branch/worktree/equivalent checkout. Never use the project leader's normal checkout as a shared branch-switching workspace.
+- Prefer dependencies through `main`; avoid stacked branch chains by default.
+- Parallelize only when resources are safely independent. Technical parallelism is agent responsibility.
 
-#### Terminal-state and repeated-action guard
+## Merge safety under changing main
 
-Repository state changes must be idempotent from the agent's point of view. A successful terminal transition is a stop condition for further mutations of that same object in the current workflow.
+- A merge recommendation is evidence for the revision/integration context actually validated.
+- Immediately before merge, verify current PR head, required statuses/checks, mergeability, and integration relevance against current `main`; perform the smallest relevant refresh/revalidation.
+- Missing/pending/failed/stale/ambiguous evidence fails closed.
+- `CHECK THEN MERGE` is never auto-merged before its human check. `DO NOT MERGE` is never merged.
+- A project-leader `merge #N` is conditional approval, not permission to bypass safety.
+- Agents own ordinary branch freshness, push/pull, rebase/merge mechanics, recoverable conflicts, and safe green merges.
 
-- After any state-changing repository action such as merge, close, reopen, branch deletion, label change, or metadata repair, inspect the returned state or perform at most one targeted read-back when the mutation response does not itself prove the result.
-- If the intended terminal state is confirmed — for example `merged=true`, the intended issue is closed, or the requested metadata is present — do not invoke another mutation for that object merely to "make sure". Continue only with a distinct required cleanup step or final reporting.
-- Never invoke the same mutating action with effectively identical arguments twice in succession after a successful response.
-- If a mutation explicitly fails and is known to be safely retryable, one corrected retry is allowed. Before any third equivalent attempt, stop the retry loop and diagnose the mismatch, stale assumption, or tool failure instead of repeating the call.
-- A read-back used to verify a mutation must itself be bounded: one successful verification is sufficient. Do not poll a terminal state that cannot become more complete.
+## Needs You
 
-Example:
+The repository keeps one permanent open issue titled `BRUR — Needs You`. It is the project leader's small inbox, not a second source of truth.
 
-```text
-merge_pull_request -> merged=true
-→ terminal state confirmed
-→ do not call merge/close/update on the same PR again unless a distinct documented cleanup is still required
-→ report completion
-```
-
-This guard takes precedence over agent-owned continuation when the tracked object's intended terminal state has already been reached. "Keep working" never means repeating an already-successful terminal action.
-
-#### Response termination gate
-
-Before producing a final response for unresolved tracked work, explicitly determine whether the next action is agent-owned. If it is agent-owned, the response must not end while the required tools are available and no genuine human-only blocker exists. Execute the next action instead. This check occurs after answering any conversational interruption and before treating the turn as finished.
-
-Writing "I will continue", "I'll fix that next", "I will investigate", or equivalent never satisfies this gate. If the next action is agent-owned, perform it before responding. **A user-facing answer is not a termination condition.**
-
-A response for unresolved tracked work may end only when at least one of these conditions is true:
-
-1. The tracked task is complete for the current scope.
-2. A concrete human action is genuinely required because the remaining step is a product/architecture decision, meaningful subjective or hardware-specific verification, unsafe/destructive approval, credential/permission action, or another step the agent cannot reasonably perform; that action has been persisted in `BRUR — Needs You` where applicable.
-3. Execution is technically impossible with the currently available tools or environment, and the exact blocker plus the smallest required user action is stated explicitly.
-
-The following are **not** valid stopping conditions when the agent can continue safely: failed CI, failed `brur-world/local-pr-check`, a red test, a suspected implementation/model/check bug, stale branch state, ordinary merge/rebase work, recoverable conflicts, missing investigation, or a `DO NOT MERGE` result whose blocker is agent-fixable. These states mean continue: investigate, fix, revalidate, and repeat until green or a genuine human-only blocker is reached.
-
-In short: **red + agent-fixable = keep working**. Do not report an agent-owned intermediate failure as a handoff. Do not end with "I will investigate/fix/check next"; perform that work in the same active turn.
-
-### Parallel sessions and isolated work
-
-Multiple agents or ChatGPT tabs may work on different issues concurrently.
-
-- Before starting tracked work, check GitHub for an existing active branch/PR or other clear implementation of the same issue. Do not accidentally create competing implementations for one issue.
-- Before recommending an issue as available, free, isolated, or suitable for new work, verify current GitHub state for that issue: check for an active issue branch, open PR, or other clear implementation already in progress. Issue-open state alone is never evidence that the issue is available. If implementation state is ambiguous or only partially visible, fail closed and treat the issue as occupied until resolved. Do not recommend it as new work.
-- Each concurrent issue uses its own isolated branch/worktree or equivalent isolated checkout. Never use the project leader's normal checkout as a shared branch-switching workspace for concurrent agent work.
-- Prefer dependencies to flow through `main`: merge the dependency, then refresh/revalidate the dependent PR. Do not create stacked branch chains by default.
-- Development and objective validation may run in parallel when their resources are independent. Interactive Godot checks that share local runtime resources should normally run one at a time unless safe isolation is explicitly known.
-- Technical parallelism is the agents' coordination responsibility, not the project leader's.
-
-### Merge safety under changing main
-
-A prior merge recommendation is evidence about the revision and integration context that was actually validated; it is not permanent permission to ignore later changes to `main`.
-
-- When `main` changes, the agent handling a waiting PR must decide whether that change is relevant to the PR's previous verification. Do not blindly rerun unrelated checks, but do not keep a stale decision when integration-sensitive assumptions changed.
-- Immediately before merge, verify the PR against current repository state and perform the smallest relevant refresh/revalidation needed. Merge integration must be serialized so two concurrent sessions cannot both rely on the same stale view of `main`.
-- A `MERGE` recommendation is agent-owned. The active agent may merge without project-leader involvement only after rechecking the exact current PR head, all relevant required objective validation/statuses, mergeability, and integration relevance against current `main`.
-- Missing, pending, failed, stale, or ambiguous evidence fails closed. If a meaningful human check or genuine project/architecture decision remains, do not merge; hand off that human action through `Needs You` instead.
-- `CHECK THEN MERGE` is never auto-merged before its human check is explicitly resolved. `DO NOT MERGE` is never merged.
-- A project-leader command such as `merge #111` remains conditional approval, not an instruction to bypass safety. Merge that candidate only if it still satisfies repository merge requirements; if relevant changes require a new human check, stop and provide the new exact PR check instead of merging on stale approval.
-- Agents should resolve ordinary branch freshness, push/pull, rebase/merge mechanics, and recoverable integration conflicts themselves when safe and within scope. Ask the project leader only when a real product decision, meaningful human verification, or unsafe/destructive choice remains.
-
-### Needs You
-
-The repository keeps one permanent open issue titled `BRUR — Needs You`. It is the project leader's small inbox, not a second source of truth. Its entries summarize the current underlying issues/PRs and link back to them.
-
-Before resuming tracked work, answering project-leader-facing status or merge requests, or answering `vad behöver jag göra?`, synchronize waiting candidates from current GitHub state. Re-check the relevant PR head, validation/status state, mergeability/blockers, and current `main` where integration relevance matters. Update `BRUR — Needs You` from that synchronized state before reporting project-leader actions in chat. CI-in-progress, routine green merge candidates, and other agent-owned waiting states stay out of the inbox until they become a real `TEST`, `DECIDE`, or `MAIN` action.
-
-All project-leader action handoffs must be persisted in `BRUR — Needs You` before they are presented in chat. Chat may summarize or repeat the current action and may include the same convenience link, but it must explicitly direct the project leader back to `Needs You` as the authoritative action queue. Never make a chat session the only or primary place where a required `TEST`, `DECIDE`, or `MAIN` action is communicated.
-
-Every actionable `Needs You` entry must include the simplest direct clickable safe action that is technically available, plus only the instruction needed to use it. The project leader should not need branch, terminal-command, or PR-navigation knowledge merely to perform a routine handoff. If no safe clickable action can represent the required human input, state the smallest unavoidable input explicitly rather than inventing a new adapter, dashboard, database, or orchestration layer.
-
-When the project leader asks `vad ska jag göra nu?` or equivalent, answer from the synchronized `Needs You` inbox and direct them to the next concrete action recorded there. Do not create a parallel chat-owned task queue. If `Needs You` is empty but agent-owned work remains, say so and continue or identify that agent-owned work separately; do not imply that an empty inbox means the project has no work.
-
-Cross-repository candidates that belong to the BRUR workflow must be identified in `Needs You` and project-leader handoffs with their repository-qualified PR, for example `estecode/safe-command-links#6`. A short request such as `merge #6`, `status #6`, or `test ok #6` may be accepted only when exactly one candidate is unambiguous from current GitHub/project state; otherwise ask for the repository-qualified candidate instead of guessing.
-
-Agents must keep `BRUR — Needs You` useful whenever their work creates or resolves a project-leader action:
-
-- `TEST` — a meaningful human check is required; include the exact PR and direct Safe Command Link when available.
-- `DECIDE` — a genuine product/architecture decision blocks safe progress; include the direct decision surface/link when technically available.
-- `MAIN` — only when there is a concrete reason for the project leader to run the latest integrated game; use a direct Safe Command Link when the supported `playtest` action can launch it.
-
-Routine fully verified `MERGE` candidates do not belong in `Needs You`; the active agent should merge them after the fail-closed recheck above. An exceptional merge-related entry is allowed only when a genuine human decision remains beyond ordinary merge approval.
-
-Do not put agent-owned work in `Needs You`: CI progress, branch freshness, routine rebases, pushes, dependency waiting, integration checks, safe green merges, or conflicts the agent can safely resolve. If no project-leader action remains in a category, remove that entry. Never treat the inbox itself as proof that a test passed; the relevant PR remains the persistent verification/merge-decision record.
-
-From any chat/session, requests such as `status #102`, `test ok #102`, `merge #102`, or `vad behöver jag göra?` must be resolved from current GitHub state rather than relying on that chat's memory. A bare `test ok` may be accepted only when exactly one active test candidate is unambiguous in context; otherwise ask for the PR number.
-
-This workflow is intentionally implemented with existing GitHub issues/PRs and Safe Command Links rather than a new Git adapter, dashboard, database, orchestration service, or speculative abstraction. Generalizing it beyond `brur-world` is future work and must not complicate the current repository workflow.
+- Synchronize waiting candidates from current GitHub state before reporting project-leader actions.
+- Human action handoffs must be persisted in `Needs You` before chat presents them.
+- Entries are only genuine `TEST`, `DECIDE`, or `MAIN` actions. Do not put CI progress, branch freshness, rebases, pushes, dependency waiting, integration checks, safe green merges, or agent-fixable conflicts there.
+- Every actionable entry includes the simplest safe clickable action technically available and only the instruction needed.
+- Routine fully verified `MERGE` candidates are agent-owned and do not belong in `Needs You`.
+- Requests such as `status #102`, `test ok #102`, `merge #102`, or `vad behöver jag göra?` resolve from current GitHub state, not chat memory.
 
 ## Safe Command Links
 
@@ -281,58 +293,48 @@ Playtest command: playtest
 Parameters: target:enum=game,gps,driving
 ```
 
-`playtest` targets are limited to real supported targets. Add new values only when the corresponding game/harness actually exists; do not create speculative harnesses to populate the allowlist.
-
-When a PR is `CHECK THEN MERGE` and its remaining check can be launched by the project-owned PR-check command, the PR must include a normal clickable localhost HTTP link:
+For applicable `CHECK THEN MERGE` PRs use:
 
 ```text
 RUN: [▶ Run safe check](http://127.0.0.1:17384/safecommand/project?repo=estecode/brur-world&command=pr-check&pr=<PR number>)
 ```
 
-GitHub does not reliably make the custom `safecommand://` scheme clickable, so PRs must use the localhost HTTP form above. Safe Command Links listens only on loopback and forwards the request through the same local repository mapping, signed command approval and parameter validation.
+Never put a developer's absolute checkout path in a PR. Safe Command Links maps the repository to the local checkout and validates approved commands/parameters. `brur-world` owns project-specific `pr-check`/`playtest` behavior; Safe Command Links remains generic.
 
-Never put a developer's absolute checkout path in a PR. Safe Command Links maps `estecode/brur-world` to the local checkout on each Mac, then verifies the locally signed command approval and validated parameters.
-
-`brur-world` owns what `pr-check` and `playtest` actually do. `pr-check` selects the exact PR revision, prepares isolated runtime state, launches the relevant Godot check, reuses required local runtime data safely, and cleans temporary state after Godot exits. `playtest` prepares the required dependencies for an allowlisted target and launches the current mapped checkout. Safe Command Links must remain generic and must not contain Godot/world-data/project-specific behavior.
-
-Local `pr-check` objective results are persistent project state, not terminal-only evidence. The project-owned launcher records the stable GitHub commit-status context `brur-world/local-pr-check` on the exact PR head: `pending` when the run starts, `failure` if local objective validation fails, and `success` only after those objective checks complete. Earlier attempts remain in GitHub status history. Human perception/feel approval is separate and must never be encoded as this machine status.
-
-When a PR requires local `pr-check` validation, agents must fail closed at merge time: the current PR head must have a successful `brur-world/local-pr-check` status. Missing, pending, failed, or stale-head status means do not merge. A user's `test ok`, remembered terminal output, or later successful run must not erase the evidence that an earlier run failed; inspect status history when a previous failure could indicate flakiness or a real defect. If status persistence cannot initialize locally, the Safe Check itself must stop rather than run an unverifiable objective check.
-
-If the local Safe Command installation/mapping/approval or authenticated GitHub CLI is missing, the link may fail locally; agents must not infer installation state from GitHub. Repository support is declared here, while local availability is machine state.
+Local `pr-check` objective results are persistent project state on the exact PR head under `brur-world/local-pr-check`: `pending`, `failure`, or `success`. Human perception approval is separate. Missing/pending/failed/stale-head status fails closed when the PR requires this check.
 
 ### Manual test handoff
 
-After all relevant available objective validation has been completed, if human verification is still required, the agent must make the test handoff explicit and one-click ready where technically possible. The user must never have to infer which checkout or revision should be tested.
+After all relevant available objective validation is complete, if human verification still remains:
 
-- **Open PR:** provide the complete Safe Command Link for that exact PR when `pr-check` applies. Do not ask the user to manually switch the normal checkout to the PR branch.
-- **Merged/current-main work:** when the supported `playtest` action can launch the required current game/harness check, provide that Safe Command Link instead of asking the project leader to update branches or run terminal commands manually.
-- Clearly state exactly what remains for the user to verify and why that property could not reasonably have been verified automatically.
-- Never ask the user to manually verify something that should reasonably have been covered by deterministic, native, headless Godot, or real-data validation first.
+- Open PR: provide the exact Safe Command Link when applicable; do not ask the project leader to switch branches manually.
+- Merged/current-main work: use supported `playtest` Safe Command Link when applicable.
+- State exactly what remains to verify and why it cannot reasonably be automated.
+- Never ask for manual verification that deterministic/native/headless/real-data validation should reasonably cover first.
+- An objective Safe Check failure returns ownership to the agent until repaired/revalidated.
 
 ## Dependency graph execution
 
-Treat the roadmap as a dependency graph, not a mandatory queue. Read issue dependencies for non-trivial tracked work. `Independent` means no implementation blocker, not priority. `Blocked` means do not complete until dependencies are satisfied. `Integration-sensitive` means work may proceed with explicit awareness of shared contracts/files. Claim parallel safety only after assessment.
+Treat the roadmap as a dependency graph, not a mandatory queue. Read dependencies for non-trivial tracked work. `Independent` means no implementation blocker, not priority. `Blocked` means do not complete until dependencies are satisfied. `Integration-sensitive` means work may proceed with explicit awareness of shared contracts/files.
 
 ## User-facing CLI commands
 
-- Make commands copy-paste ready and independent of the current repository subdirectory where practical.
-- Use explicit repository-relative paths.
+- Make commands copy-paste ready and independent of current subdirectory where practical.
+- Use repository-relative paths and one complete command where possible.
 - On macOS/POSIX prefer `ROOT="$(git rev-parse --show-toplevel)" && ...` when root is needed.
-- Do not add `git pull`, `reset`, `clean`, branch deletion, merge, or similar state-changing operations merely for convenience.
+- Do not add `git pull`, `reset`, `clean`, branch deletion, merge, or similar state changes merely for convenience.
 - Do not assume a clean working tree.
-- Prefer one complete command.
-- For Godot, resolve the root and use `godot --path "$ROOT" <scene>` rather than relying on cwd.
+- For Godot, resolve root and use `godot --path "$ROOT" <scene>` rather than relying on cwd.
 
 ## Architecture reminders
 
-The full architecture contract is in `ARCHITECTURE.md`; it remains canonical. In particular:
+`ARCHITECTURE.md` remains canonical. In particular:
 
 - Preserve `core/domain -> adapter -> presentation`.
 - Portable/domain logic must not depend on Godot rendering/UI, SceneTree, TCP/JSON/process behavior, mmap/POSIX, or harness code.
 - Use explicit composition; avoid fragile cross-subsystem NodePath traversal. Call downward, signal upward.
 - Keep game/harness composition roots thin and domain logic in owned modules.
-- Harnesses use the same production implementation and real runtime data where practical; do not create duplicate harness implementations.
+- Harnesses use the same production implementation and real runtime data where practical.
 - World data has one authoritative offline pipeline; do not create competing road/routing truth.
 - Coordinate conversion has one shared owner.
 - Avoid a global EventBus for ordinary/high-frequency subsystem communication.
@@ -340,23 +342,19 @@ The full architecture contract is in `ARCHITECTURE.md`; it remains canonical. In
 - Touched source files preserve/add the short English responsibility/dependency header required by `ARCHITECTURE.md`.
 - Do not introduce speculative frameworks, universal service abstractions, giant bootstrap owners, or unrelated cleanup.
 
-When reviewing code, actively flag violations of these rules.
-
 ## Wave execution contract
 
 A project-leader request such as `Starta Wave B` means execute the complete wave currently defined by the canonical roadmap/umbrella issue, not merely start its first child.
 
-For `Starta Wave <X>`:
+1. Read current `AGENTS.md`, `ARCHITECTURE.md`, the wave definition, and candidate child dependencies.
+2. Synchronize GitHub state; do not create competing work for occupied children.
+3. Build the ready set from the dependency graph.
+4. Use one isolated issue branch/PR per tracked child.
+5. Use maximum safe parallelism actually supported; do not claim unavailable background workers.
+6. Follow complete objective validation, PR decision, and merge-safety contract for each child.
+7. After each merge/dependency change recompute ready set and continue automatically.
+8. Continue until every child is merged/satisfied or a genuine human/external blocker prevents further progress.
+9. If blocked, persist exact human action in `Needs You` when applicable and continue other independent ready work before stopping.
+10. Report `Wave <X> COMPLETE` only when the canonical wave definition is actually satisfied on current `main`.
 
-1. Read current `AGENTS.md`, canonical `ARCHITECTURE.md`, the roadmap/umbrella wave definition, and every candidate child issue/dependency before implementation.
-2. Synchronize current GitHub state. Detect existing branches/PRs/active implementations and do not create competing work for occupied children.
-3. Build the ready set from the dependency graph. Start only children whose required dependencies are satisfied or whose issue explicitly permits safe integration-sensitive work.
-4. Use one isolated `issue/<number>-<short-name>` branch/PR per tracked child. Never replace a wave with one giant implementation branch.
-5. Execute ready children with the maximum safe parallelism actually supported by the current environment. Do not claim or assume unavailable background workers, concurrent agents or Work-mode capabilities. Sequential execution in an ordinary chat is valid when that is the available execution model.
-6. For each child, follow its complete objective validation, PR decision and merge-safety contract. Green `MERGE` work is agent-owned and should be merged after the required fail-closed recheck; human-only checks and decisions go through `BRUR — Needs You`.
-7. After each merge or dependency-state change, recompute the ready set and continue automatically. Do not ask the project leader which child to do next when the DAG already determines safe work.
-8. Continue until every child in the requested wave is merged/explicitly satisfied, or a genuine human/external blocker prevents further progress. Dependency waiting, red agent-fixable tests, ordinary conflicts, stale branches, CI progress and routine merge administration are not reasons to stop.
-9. If blocked, persist the exact required project-leader action in `BRUR — Needs You` when applicable and continue any other independent ready work in the same wave before stopping.
-10. Report `Wave <X> COMPLETE` only when the canonical wave definition is actually satisfied on current `main`; otherwise report the concrete blocker and remaining children without implying background continuation.
-
-This command is orchestration over existing issue/PR workflow. It must not introduce a new dashboard, scheduler, database, branch hierarchy or orchestration framework merely to make the phrase work.
+This command orchestrates existing issue/PR workflow and must not introduce a new dashboard, scheduler, database, branch hierarchy, or orchestration framework merely to make the phrase work.
