@@ -23,6 +23,27 @@
       "regression_example": "CI is still running; tell the project leader to say follow CI later."
     },
     {
+      "id": "resume_existing_ci_before_trigger",
+      "situation": "An agent resumes a tracked PR and relevant queued/running checks already exist for its current candidate.",
+      "expected": "FOLLOW_EXISTING_CI",
+      "forbidden_terminal": ["TRIGGER_NEW_CI", "PUSH_TO_RETRIGGER", "RUNNING", "DONE"],
+      "regression_example": "Resume #343 by starting fresh workflows without first inspecting the six existing jobs."
+    },
+    {
+      "id": "single_flight_ci_per_candidate",
+      "situation": "A relevant CI run for the current candidate and validation purpose is still queued or running.",
+      "expected": "FOLLOW_EXISTING_CI",
+      "forbidden_terminal": ["TRIGGER_DUPLICATE_CI", "PUSH_TO_RETRIGGER", "WORKFLOW_DISPATCH_DUPLICATE"],
+      "regression_example": "Start another equivalent GeoDot validation while the previous run is six minutes old and still running."
+    },
+    {
+      "id": "unrelated_regression_not_run",
+      "situation": "A GeoDot/world-renderer-only implementation iteration has no changed dependency or required final gate involving police/dispatch.",
+      "expected": "SKIP_UNRELATED_TEST",
+      "forbidden_terminal": ["RUN_POLICE_DISPATCH", "RUN_UNRELATED_FULL_REGRESSION"],
+      "regression_example": "Run police dispatch regression merely because a new GeoDot renderer implementation was built."
+    },
+    {
       "id": "red_test_returns_to_agent",
       "situation": "An objective test is red and the failure can be diagnosed or repaired with available tools.",
       "expected": "CONTINUE",
