@@ -30,8 +30,9 @@ jobs:
           chmod +x "$BIN"
           echo "GODOT_BIN=$BIN" >> "$GITHUB_ENV"
       - name: Import project scripts
-        run: |
-          timeout 30s "$GODOT_BIN" --headless --path . --editor --quit
+        run: timeout 30s "$GODOT_BIN" --headless --path . --editor --quit
+      - name: Check GeoDot renderer parse directly
+        run: "$GODOT_BIN" --headless --path . --check-only --script scripts/geodot_world_renderer.gd
       - name: Run GeoDot renderer contracts
         run: |
           set -euo pipefail
@@ -108,5 +109,4 @@ jobs:
       - name: Prove native extension plus GeoPackage exits cleanly
         env:
           BRUR_GEODOT_GPKG: ${{ github.workspace }}/geodot-upstream/demo/geodata/geopackage_sample.gpkg
-        run: |
-          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_native_lifecycle.gd
+        run: "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_native_lifecycle.gd
