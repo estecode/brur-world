@@ -16,9 +16,6 @@ func set_enabled(value: bool) -> void:
 func set_presentation_visible(value: bool) -> void: _presentation_visible = value; _apply_presentation_visibility()
 
 func _apply_presentation_visibility() -> void:
-	# Residency and visibility are intentionally separate. A resident cell stays
-	# visible while its requested replacement is loading. Hiding it merely because
-	# _desired changed exposed streaming latency as empty world during fast zoom.
 	for key_value in _active.keys():
 		var key := String(key_value); var entry: Dictionary = _active[key]; var node := entry.get("node") as Node3D
 		if node == null: continue
@@ -47,6 +44,15 @@ static func choose_lru_stale_eviction_key(active: Dictionary, desired: Dictionar
 		var touch := int((active[key] as Dictionary).get("last_touch", 0))
 		if candidate.is_empty() or touch < oldest or (touch == oldest and key < candidate): candidate = key; oldest = touch
 	return candidate
+
+func evict_warm_for_pressure(max_warm_cells: int = 0) -> int:
+	var evicted := 0
+	var keep_warm := maxi(0, max_warm_cells)
+	while _active.size() > _desired.size() + keep_warm:
+		var stale := choose_lru_stale_eviction_key(_active, _desired, "")
+		if stale.is_empty(): break
+		_evict_active_key(stale); evicted += 1
+	return evicted
 
 func _prepare_resident_slot(key: String) -> bool:
 	if _active.has(key): return true
