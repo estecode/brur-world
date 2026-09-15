@@ -29,6 +29,9 @@ jobs:
           BIN="$DIR/Godot_v${VERSION}_linux.x86_64"
           chmod +x "$BIN"
           echo "GODOT_BIN=$BIN" >> "$GITHUB_ENV"
+      - name: Import project scripts
+        run: |
+          timeout 30s "$GODOT_BIN" --headless --path . --editor --quit
       - name: Run GeoDot renderer contracts
         run: |
           set -euo pipefail
