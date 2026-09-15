@@ -9,3 +9,8 @@ script = ExtResource("2_poc")
 
 [node name="GeoDotWorldLayer" type="Node3D" parent="World" index="0"]
 script = ExtResource("3_geodot")
+# Keep the same bounded 7x7 resident set while extending prepared coverage from
+# 14 km to 21 km. This substantially reduces partition crossings at map speed;
+# cells remain an internal streaming unit rather than a visible world boundary.
+cell_size_m = 3000.0
+refresh_interval_s = 0.1
