@@ -8,11 +8,10 @@ if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^scripts/(drive_hud|drive_hud_adap
 if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(harness/driving/|scripts/(route_driving_policy|vehicle_route_follower|vehicle_dynamics|player_vehicle|player_vehicle_controller)\.gd$|scenes/player_vehicle\.tscn$)'; then DRIVING_VISUAL_SCOPE="required"; fi
 if ! printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(geodot[^/]*|test_geodot[^/]*)'; then
   STANDARD_HOOK="$WORKTREE/tools/pr_check_standard.sh"
+  if [[ ! -f "$STANDARD_HOOK" && -n "${GITHUB_WORKSPACE:-}" && -f "$GITHUB_WORKSPACE/tools/pr_check_standard.sh" ]]; then STANDARD_HOOK="$GITHUB_WORKSPACE/tools/pr_check_standard.sh"; fi
   if [[ ! -f "$STANDARD_HOOK" && -f "$(pwd)/tools/pr_check_standard.sh" ]]; then STANDARD_HOOK="$(pwd)/tools/pr_check_standard.sh"; fi
   if [[ -f "$STANDARD_HOOK" ]]; then exec bash "$STANDARD_HOOK"; fi
-  if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then
-    printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud\n'; printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=driving-harness\n'; "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"; exit 0
-  fi
+  if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud\n'; printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=driving-harness\n'; "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"; exit 0; fi
   if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"; exit 0; fi
   exit 0
 fi
