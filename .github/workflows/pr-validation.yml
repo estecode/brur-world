@@ -1,14 +1,9 @@
 name: PR validation
 
+# Full repository validation is an explicit final-candidate gate.
+# It must not run automatically on every PR synchronize/push while implementation is active.
 on:
-  pull_request:
-    branches:
-      - main
-    paths-ignore:
-      - AGENTS.md
-      - tests/agent_contract/**
-      - .github/workflows/agent-contract-validation.yml
-      - .github/workflows/pr-validation.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -141,36 +136,28 @@ jobs:
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_building_mesh_compact_codec.gd
 
       - name: Run road surface query tests
-        run: |
-          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_road_surface_query.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_road_surface_query.gd
 
       - name: Run continuous world showcase tests
-        run: |
-          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_showcase.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_world_showcase.gd
 
       - name: Run portable vehicle dynamics tests
-        run: |
-          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_dynamics.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_dynamics.gd
 
       - name: Run vehicle integration tests
-        run: |
-          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_integration.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_vehicle_integration.gd
 
       - name: Run Person foundation tests
-        run: |
-          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_person_foundation.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_person_foundation.gd
 
       - name: Run pedestrian population tests
-        run: |
-          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_pedestrian_population.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_pedestrian_population.gd
 
       - name: Run police observation store tests
-        run: |
-          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_police_observation_store.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_police_observation_store.gd
 
       - name: Run map controls regression tests
-        run: |
-          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_map_controls.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_map_controls.gd
 
       - name: Run player map presentation regression tests
         run: |
@@ -178,8 +165,7 @@ jobs:
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_player_vehicle_presentation.gd
 
       - name: Run POI startup default regression test
-        run: |
-          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_poi_default_disabled.gd
+        run: timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_poi_default_disabled.gd
 
       - name: Run objective GPS regression suite
         env:
