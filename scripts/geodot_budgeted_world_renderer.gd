@@ -5,6 +5,55 @@ class_name GeoDotBudgetedWorldRenderer
 @export var max_publishes_per_frame := 1
 var _last_publish_frame_ms := 0.0
 var _over_budget_publishes := 0
+var _presentation_visible := true
+
+func set_enabled(value: bool) -> void:
+	# Streaming activity and residency are deliberately separate. A temporary LOD
+	# demotion must not destroy completed geometry: rapid reverse zoom should reuse
+	# the warm representation instead of rebuilding it from the GeoPackage.
+	_enabled = value and _ready
+	set_process(_enabled)
+	if not _enabled:
+		_generation += 1
+		_queue.clear()
+		_queued.clear()
+		_ready_results.clear()
+		_desired.clear()
+		_shutdown_query_workers()
+		_apply_presentation_visibility()
+		return
+	_refresh_desired(true)
+	_apply_presentation_visibility()
+
+func set_presentation_visible(value: bool) -> void:
+	_presentation_visible = value
+	_apply_presentation_visibility()
+
+func _apply_presentation_visibility() -> void:
+	for key_value in _active.keys():
+		var key := String(key_value)
+		var entry: Dictionary = _active[key]
+		var node := entry.get("node") as Node3D
+		if node == null:
+			continue
+		var owns_desired := _desired.has(key) and int(entry.get("lod", -1)) == int(_desired[key])
+		node.visible = _presentation_visible and _enabled and owns_desired
+
+func _publish_cell(request: Dictionary, result: Dictionary) -> void:
+	super._publish_cell(request, result)
+	_apply_presentation_visibility()
+
+func _refresh_desired(force: bool) -> void:
+	super._refresh_desired(force)
+	_apply_presentation_visibility()
+
+func ready_desired_cells() -> int:
+	var count := 0
+	for key_value in _desired.keys():
+		var key := String(key_value)
+		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == int(_desired[key]):
+			count += 1
+	return count
 
 func _process(delta: float) -> void:
 	if not _enabled: return
@@ -27,4 +76,7 @@ func debug_snapshot() -> Dictionary:
 	snapshot["streaming_budget_ms"] = streaming_budget_ms
 	snapshot["last_publish_frame_ms"] = _last_publish_frame_ms
 	snapshot["over_budget_publishes"] = _over_budget_publishes
+	snapshot["presentation_visible"] = _presentation_visible
+	snapshot["ready_desired_cells"] = ready_desired_cells()
+	snapshot["warm_resident_cells"] = _active.size()
 	return snapshot
