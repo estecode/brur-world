@@ -119,8 +119,11 @@ func _trim_transition_overlap()->void:
 func _active_coverage_rects()->Array[Rect2]:
 	var out:Array[Rect2]=[]
 	if not _streaming_enabled:return out
-	for e_value in _active.values():
-		var e:Dictionary=e_value;if _entry_rect(e).intersects(_current_bounds):out.append(_entry_rect(e))
+	for key_value in _desired.keys():
+		var key:=String(key_value)
+		if not _active.has(key):continue
+		var e:Dictionary=_active[key]
+		if _entry_rect(e).intersects(_current_bounds):out.append(_entry_rect(e))
 	return out
 static func desired_coverage_ready(active:Dictionary,desired:Dictionary)->bool:
 	if desired.is_empty():return false
