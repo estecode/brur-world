@@ -6,8 +6,10 @@ on:
     paths:
       - 'tools/register_safe_check.sh'
       - 'tools/pr_check_entry.sh'
+      - 'tools/run_pr_owned_check.sh'
       - 'tests/test_safe_check_registration.sh'
       - 'tests/test_pr_check_entry.sh'
+      - 'tests/test_safe_check_handoff_gate.sh'
       - '.github/workflows/safe-check-bootstrap-validation.yml'
   workflow_dispatch:
 
@@ -16,7 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate branch-independent bootstrap
+      - name: Validate branch-independent bootstrap and handoff gate
         run: |
           bash tests/test_safe_check_registration.sh
           bash tests/test_pr_check_entry.sh
+          bash tests/test_safe_check_handoff_gate.sh
