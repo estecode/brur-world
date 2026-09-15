@@ -99,7 +99,7 @@ func _refresh_desired(force:bool)->void:
 		var key:=String(request.key);if _active.has(key) and int((_active[key] as Dictionary).get("lod",-1))==lod:continue
 		if _restore_warm(key,lod):continue
 		_enqueue_request(request)
-	_trim_queue();_trim_warm();_trim_active_to_budget();_start_queries_if_needed()
+	_trim_queue();_trim_warm();_start_queries_if_needed()
 func _active_coverage_rects()->Array[Rect2]:
 	var out:Array[Rect2]=[]
 	if not _streaming_enabled:return out
@@ -139,14 +139,13 @@ func _publish_cell(request:Dictionary,result:Dictionary)->void:
 	var cell:Vector2i=request.cell;var key:=String(request.key);var lod:=int(request.lod);var size:=float(request.cell_size_m);var origin:=Vector2(float(cell.x)*size,float(cell.y)*size);var group:=Node3D.new();group.position=_coordinates.absolute_to_world(origin);group.visible=false
 	var buildings:=MeshBuilder.build_buildings(result.get("buildings",[]),origin,lod);if buildings!=null:var bi:=MeshInstance3D.new();bi.mesh=buildings;bi.material_override=_building_material;group.add_child(bi)
 	var roads:=MeshBuilder.build_roads(result.get("roads",[]),origin,lod);if roads!=null:var ri:=MeshInstance3D.new();ri.mesh=roads;ri.material_override=_road_material;group.add_child(ri)
-	if not _prepare_resident_slot(key):group.free();return
 	if _active.has(key):_park_warm(key)
-	add_child(group);_active[key]={"node":group,"lod":lod,"origin_abs":origin,"cell_size_m":size,"buildings":int(result.get("building_features",0)),"warm_tick":Time.get_ticks_msec()};group.visible=_presentation_visible;_park_obsolete_after_publish();coverage_changed.emit()
-func _park_obsolete_after_publish()->void:
-	var keys:=_active.keys()
-	for value in keys:
-		var key:=String(value)
-		if not _desired.has(key):_park_warm(key)
+	add_child(group);_active[key]={"node":group,"lod":lod,"origin_abs":origin,"cell_size_m":size,"buildings":int(result.get("building_features",0)),"warm_tick":Time.get_ticks_msec()};group.visible=_presentation_visible;_retire_obsolete_after_publish();coverage_changed.emit()
+func _retire_obsolete_after_publish()->void:
+	while _active.size()>maxi(1,max_resident_cells):
+		var stale:=choose_stale_eviction_key(_active,_desired,"")
+		if stale.is_empty():break
+		_park_warm(stale)
 func _warm_key(key:String,lod:int)->String:return "%s:%d"%[key,lod]
 func _park_warm(key:String)->void:
 	if not _active.has(key):return
@@ -154,12 +153,12 @@ func _park_warm(key:String)->void:
 	if node!=null:node.visible=false
 	entry["warm_tick"]=Time.get_ticks_msec();var wk:=_warm_key(key,int(entry.get("lod",-1)))
 	if _warm.has(wk):var old:Node=(_warm[wk] as Dictionary).get("node") as Node;if old!=null:old.free()
-	_warm[wk]=entry
+	_warm[wk]=entry;_trim_warm()
 func _restore_warm(key:String,lod:int)->bool:
 	var wk:=_warm_key(key,lod);if not _warm.has(wk):return false
 	if _active.has(key):_park_warm(key)
 	var entry:Dictionary=_warm[wk];_warm.erase(wk);_active[key]=entry;var node:Node3D=entry.get("node") as Node3D;if node!=null:node.visible=_presentation_visible
-	coverage_changed.emit();return true
+	_retire_obsolete_after_publish();coverage_changed.emit();return true
 func _trim_warm()->void:
 	var cap:=maxi(4,max_resident_cells/4)
 	while _warm.size()>cap:
@@ -176,10 +175,6 @@ func evict_warm_for_pressure(target_bytes:int=0)->void:
 	var _unused:=target_bytes
 	_clear_warm(true)
 	if not _streaming_enabled:_clear_active(true)
-func _prepare_resident_slot(key:String)->bool:
-	if _active.has(key):return true
-	while _active.size()>=maxi(1,max_resident_cells):var stale:=choose_stale_eviction_key(_active,_desired,key);if stale.is_empty():return false;_park_warm(stale)
-	return true
 static func choose_stale_eviction_key(active:Dictionary,desired:Dictionary,publishing_key:String)->String:
 	var keys:=active.keys();keys.sort();for v in keys:var k:=String(v);if k!=publishing_key and not desired.has(k):return k
 	return ""
