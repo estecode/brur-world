@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "description": "Regression cases for the documented agent workflow contract; these fixtures do not claim to execute or prove a live model.",
+  "cases": [
+    {
+      "id": "running_must_continue",
+      "situation": "A tracked task is active, a substep has completed, and another concrete agent-owned repository action is executable now.",
+      "expected": "CONTINUE",
+      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "BLOCKED", "DONE"],
+      "regression_example": "#342 is still RUNNING."
+    },
+    {
+      "id": "missing_ci_must_continue",
+      "situation": "Hosted CI is unavailable or did not start, but implementation, investigation, deterministic tests, Git, or GitHub work remains agent-owned and executable.",
+      "expected": "CONTINUE",
+      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "BLOCKED", "DONE"]
+    },
+    {
+      "id": "red_test_returns_to_agent",
+      "situation": "An objective test is red and the failure can be diagnosed or repaired with available tools.",
+      "expected": "CONTINUE",
+      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "DONE"]
+    },
+    {
+      "id": "safe_check_failure_returns_to_agent",
+      "situation": "A human-executed Safe Check reports an objective failure and agent-owned diagnosis or repair remains.",
+      "expected": "CONTINUE",
+      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "DONE"]
+    },
+    {
+      "id": "targeted_before_full_regression",
+      "situation": "A small implementation edit is still in the debugging loop and a smaller deterministic validation can answer the current question.",
+      "expected": "TARGETED_VALIDATION",
+      "forbidden_terminal": ["FULL_REGRESSION_AS_DEBUG_LOOP"]
+    },
+    {
+      "id": "genuine_human_handoff",
+      "situation": "All relevant available objective validation is complete and the only remaining requirement is a genuinely perceptual, interactive, hardware-specific, or otherwise non-automatable human check.",
+      "expected": "WAITING_FOR_HUMAN",
+      "forbidden_terminal": ["RUNNING", "BLOCKED", "DONE"]
+    },
+    {
+      "id": "done_may_stop",
+      "situation": "Requested scope, required objective validation, delivery metadata, and agent-owned cleanup are complete and no human-only check remains.",
+      "expected": "DONE",
+      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "BLOCKED"]
+    }
+  ]
+}
