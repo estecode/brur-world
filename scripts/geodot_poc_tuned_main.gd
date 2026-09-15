@@ -18,6 +18,14 @@ func _apply_tuning() -> void:
 		geodot_world_layer.set("far_enter_pixels",clampf(float(_tuning.get("individual_threshold_px",1.0)),0.1,16.0))
 		geodot_world_layer.set("far_exit_pixels",clampf(float(_tuning.get("full_3d_threshold_px",4.0)),0.2,32.0))
 
+func _geodot_activation_coverage_ready() -> bool:
+	if geodot_world_layer == null or not geodot_world_layer.has_method("debug_snapshot"): return false
+	var snapshot: Dictionary = geodot_world_layer.call("debug_snapshot")
+	var desired := int(snapshot.get("desired_cells",0)); var ready := int(snapshot.get("ready_desired_cells",snapshot.get("active_cells",0)))
+	# Initial legacy -> GeoDot ownership follows the same photo-zoom invariant as
+	# runtime LOD: the old complete layer stays visible until the replacement is complete.
+	return desired > 0 and ready >= desired
+
 func _update_distance_policy() -> void:
 	if not _geodot_ready: return
 	var distance := _camera_distance_to_focus()
@@ -38,27 +46,15 @@ func _update_distance_policy() -> void:
 	var prefetch_distance := TransitionPolicy.prefetch_distance(FAR_PRESENTATION_M,prefetch_scale)
 	var want_detail := distance <= prefetch_distance
 	if want_detail != _detail_streaming_enabled:
-		_detail_streaming_enabled = want_detail
-		geodot_world_layer.call("set_enabled",want_detail)
-		_transition_prefetching = want_detail
-		_transition_detail_ready = false
-	if want_detail:
-		_transition_detail_ready = TransitionPolicy.detail_ready(geodot_world_layer.call("debug_snapshot"))
-	else:
-		_transition_detail_ready = false
+		_detail_streaming_enabled = want_detail; geodot_world_layer.call("set_enabled",want_detail); _transition_prefetching = want_detail; _transition_detail_ready = false
+	if want_detail: _transition_detail_ready = TransitionPolicy.detail_ready(geodot_world_layer.call("debug_snapshot"))
+	else: _transition_detail_ready = false
 
-	# Exactly one layer owns presentation. Detail may prefetch invisibly, but it is
-	# never shown over the far aggregate. Once complete requested coverage is warm,
-	# ownership changes in this frame; reverse zoom gives ownership back to the far
-	# representation before detail streaming is demoted.
 	_detail_owns_presentation = TransitionPolicy.detail_owns_presentation(distance,FAR_PRESENTATION_M,want_detail,_transition_detail_ready)
-	if geodot_world_layer.has_method("set_presentation_visible"):
-		geodot_world_layer.call("set_presentation_visible",_detail_owns_presentation)
+	if geodot_world_layer.has_method("set_presentation_visible"): geodot_world_layer.call("set_presentation_visible",_detail_owns_presentation)
 	if geodot_far_layer != null:
-		if geodot_far_layer.has_method("set_detail_owner"):
-			geodot_far_layer.call("set_detail_owner",_detail_owns_presentation)
-		if geodot_far_layer.has_method("set_transition_hold"):
-			geodot_far_layer.call("set_transition_hold",TransitionPolicy.hold_far(distance,FAR_PRESENTATION_M,want_detail,_transition_detail_ready))
+		if geodot_far_layer.has_method("set_detail_owner"): geodot_far_layer.call("set_detail_owner",_detail_owns_presentation)
+		if geodot_far_layer.has_method("set_transition_hold"): geodot_far_layer.call("set_transition_hold",TransitionPolicy.hold_far(distance,FAR_PRESENTATION_M,want_detail,_transition_detail_ready))
 
 func geodot_debug_snapshot() -> Dictionary:
 	var snapshot := super.geodot_debug_snapshot()
