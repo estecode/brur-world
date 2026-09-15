@@ -144,6 +144,8 @@ def main() -> None:
         return
     if args.gpkg is None: raise SystemExit("gpkg is required unless --footprint-only is used")
     if args.source_pbf is None: raise SystemExit("--source-pbf is required unless --footprint-only is used")
+    if args.baseline_runtime_bytes is None:
+        raise SystemExit("--baseline-runtime-bytes is required for full #220 acceptance; measure current-main BMC2 production runtime first")
 
     gpkg = args.gpkg.resolve(); pbf = args.source_pbf.resolve(); report_path = args.report.resolve()
     if not gpkg.is_file(): raise SystemExit(f"GeoPackage missing: {gpkg}")
@@ -204,10 +206,9 @@ def main() -> None:
         "warm_all_blocks_cache_hit": all_warm_hits,
         "production_runtime_selection_valid": runtime_bytes > 0,
         "shipped_runtime_pack_valid": shipped_runtime_bytes > 0,
+        "production_runtime_reduction_30pct": bool(footprint["production_runtime_reduction_30pct"]),
         "road_tiles_present": roads_present,
     }
-    if args.baseline_runtime_bytes is not None:
-        checks["production_runtime_reduction_30pct"] = bool(footprint["production_runtime_reduction_30pct"])
     report = {
         "issue":220, "gpkg":str(gpkg), "source_pbf":str(pbf), "gpkg_identity":gpkg_identity, "pbf_identity":pbf_identity,
         "source_counts":source_counts, "normalized_counts":{"highway_records":highway_records,"building_records":building_records,"traffic_signals":signal_records,"addresses":address_records},
