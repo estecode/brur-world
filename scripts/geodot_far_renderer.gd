@@ -41,9 +41,7 @@ func setup(world_coordinates,camera_rig:Node,cache_path:String)->Dictionary:
 
 func shutdown()->void:
 	set_process(false); _enabled=false; _active=false; _transition_hold=false; _detail_owner=false; _last_signature=""; _cache.close()
-	if _instance!=null:
-		_instance.visible=false
-		_instance.multimesh=null
+	if _instance!=null:_instance.visible=false; _instance.multimesh=null
 	if _quad!=null:_quad.material=null
 	if _instance!=null:_instance.free()
 	_instance=null; _quad=null; _material=null; _coordinates=null; _camera_rig=null
@@ -52,9 +50,13 @@ func _exit_tree()->void: shutdown()
 func set_detail_owner(value:bool)->void:
 	_detail_owner=value
 	if value:
-		visible=false
-	elif _enabled and (_active or _transition_hold):
-		visible=true
+		# Far remains resident and continues refreshing while hidden. It is the ready
+		# fallback for an immediate reverse zoom.
+		_active=true; visible=false
+	elif _enabled:
+		# Ownership is synchronous: never wait for the 250 ms refresh timer to restore
+		# a representation after detail relinquishes the screen.
+		_active=true; visible=_instance!=null and _instance.multimesh!=null
 
 func set_transition_hold(value:bool)->void:
 	_transition_hold=value
@@ -83,11 +85,11 @@ func _refresh()->void:
 	var camera:=get_viewport().get_camera_3d() if get_viewport()!=null else null
 	if camera==null:return
 	var distance:=camera.global_position.distance_to(focus)
-	if _transition_hold:
+	if _detail_owner or _transition_hold:
 		_active=true
 	else:
 		_active=distance>=exit_distance_m if _active else distance>=enter_distance_m
-	visible=_active and not _detail_owner
+	visible=_active and not _detail_owner and _instance!=null and _instance.multimesh!=null
 	if not _active:return
 	var bounds:=_view_bounds(focus,distance); var viewport:=get_viewport().get_visible_rect().size; _last_mpp=LodPolicy.meters_per_pixel(bounds,viewport)
 	var level:=_cache.choose_level(maxf(2000.0,_last_mpp*target_screen_cell_px))
@@ -95,8 +97,7 @@ func _refresh()->void:
 	_last_pressure=_renderer_memory_pressure()
 	var budget:=LodPolicy.sample_budget(base_sample_budget,density_scale*LodPolicy.quality_scale_for_pressure(_last_pressure),hard_sample_cap)
 	var cell_m:=_cache.level_cell_size(level)
-	var qmin:=Vector2(floor(bounds.position.x/cell_m),floor(bounds.position.y/cell_m))
-	var qmax:=Vector2(ceil(bounds.end.x/cell_m),ceil(bounds.end.y/cell_m))
+	var qmin:=Vector2(floor(bounds.position.x/cell_m),floor(bounds.position.y/cell_m)); var qmax:=Vector2(ceil(bounds.end.x/cell_m),ceil(bounds.end.y/cell_m))
 	var signature:="%d:%d:%d:%d:%d:%d:%.3f" % [level,int(qmin.x),int(qmin.y),int(qmax.x),int(qmax.y),budget,density_scale]
 	if signature==_last_signature:return
 	var started:=Time.get_ticks_usec(); var samples:=_cache.query_bounds(bounds,level,budget,density_scale); _publish(samples)
@@ -104,9 +105,6 @@ func _refresh()->void:
 	if not samples.is_empty():_last_cell_m=float(samples[0].cell_m)
 
 static func fallback_radius_for_distance(distance_m:float)->float:
-	# Ground-ray intersection can disappear when the camera is almost top-down or
-	# beyond its practical ray range. Never collapse that case to a zero-area cell:
-	# the far cache must still expose city mass at 82/300/500 km.
 	return maxf(4000.0,maxf(0.0,distance_m)*0.90)
 
 func _view_bounds(focus:Vector3,distance_m:float)->Rect2:
