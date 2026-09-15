@@ -32,9 +32,6 @@ static func build_buildings(records: Array, cell_origin_absolute: Vector2, lod: 
 				outer = polygon.get("outer", []).duplicate(true)
 			if outer.size() < 3:
 				continue
-			# Holes are detail at far distance. The exterior remains the same physical
-			# footprint (within a bounded simplification tolerance), so LOD cannot make
-			# a building jump to an unrelated bounding box as the old POC did.
 			stable_polygons.append({"outer": outer, "holes": []})
 		if stable_polygons.is_empty():
 			continue
@@ -77,22 +74,19 @@ static func build_roads(records: Array, cell_origin_absolute: Vector2, lod: int)
 		if points.size() < 2:
 			continue
 		var road_class := int(record.get("road_class", 5))
-		# Width is a physical presentation fact and must not change with LOD.
 		var width := RoadLodPolicyScript.road_width_m(road_class)
 		var color := _road_color(road_class)
 		var sampled := points if lod == LOD_NEAR else _simplify_polyline(points, 2.0)
 		var has_clip := record.has("clip_min") and record.has("clip_max")
 		var clip_min: Vector2 = record.get("clip_min", Vector2.ZERO)
 		var clip_max: Vector2 = record.get("clip_max", Vector2.ZERO)
-		var clipped := _clip_polyline(sampled, clip_min, clip_max) if has_clip else sampled
-		if clipped.size() < 2:
-			continue
-		emitted += _emit_polyline(st, clipped, width, color, cell_origin_absolute)
+		emitted += _emit_polyline(st, sampled, width, color, cell_origin_absolute, clip_min, clip_max, has_clip)
 	if emitted == 0:
 		return null
+	st.index()
 	return st.commit()
 
-static func _emit_polyline(st: SurfaceTool, points: PackedVector2Array, width: float, color: Color, origin: Vector2) -> int:
+static func _emit_polyline(st: SurfaceTool, points: PackedVector2Array, width: float, color: Color, origin: Vector2, cell_min: Vector2, cell_max: Vector2, has_clip: bool) -> int:
 	var count := points.size()
 	if count < 2:
 		return 0
@@ -121,12 +115,24 @@ static func _emit_polyline(st: SurfaceTool, points: PackedVector2Array, width: f
 		right.append(points[index] - normal * scale)
 	var emitted := 0
 	for index in range(count - 1):
-		for absolute_vertex in [left[index], right[index], right[index + 1], left[index], right[index + 1], left[index + 1]]:
-			var local: Vector2 = absolute_vertex - origin
-			st.set_color(color)
-			st.set_normal(Vector3.UP)
-			st.add_vertex(Vector3(local.x, 0.0, -local.y))
-			emitted += 1
+		var strip := PackedVector2Array([left[index], right[index], right[index + 1], left[index + 1]])
+		if has_clip:
+			strip = clip_polygon_to_cell(strip, cell_min, cell_max)
+		if strip.size() < 3:
+			continue
+		var local_points := PackedVector2Array()
+		for point in strip:
+			local_points.append(point - origin)
+		var triangles := Geometry2D.triangulate_polygon(local_points)
+		if triangles.is_empty():
+			continue
+		for triangle_index in range(0, triangles.size(), 3):
+			for vertex_index in [triangles[triangle_index], triangles[triangle_index + 1], triangles[triangle_index + 2]]:
+				var local: Vector2 = local_points[vertex_index]
+				st.set_color(color)
+				st.set_normal(Vector3.UP)
+				st.add_vertex(Vector3(local.x, 0.0, -local.y))
+			emitted += triangles.size()
 	return emitted
 
 static func _simplify_polyline(points: PackedVector2Array, epsilon_m: float) -> PackedVector2Array:
@@ -144,19 +150,6 @@ static func _simplify_polyline(points: PackedVector2Array, epsilon_m: float) -> 
 		if distance >= epsilon_m:
 			result.append(current)
 	result.append(points[points.size() - 1])
-	return result
-
-static func _clip_polyline(points: PackedVector2Array, cell_min: Vector2, cell_max: Vector2) -> PackedVector2Array:
-	# Keep a connected ordered line through the partition. Clipping is only a
-	# storage boundary; shared endpoints remain deterministic on both sides.
-	var result := PackedVector2Array()
-	for index in range(points.size() - 1):
-		var segment := clip_segment_to_cell(points[index], points[index + 1], cell_min, cell_max)
-		if segment.size() != 2:
-			continue
-		if result.is_empty() or not result[result.size() - 1].is_equal_approx(segment[0]):
-			result.append(segment[0])
-		result.append(segment[1])
 	return result
 
 static func clip_segment_to_cell(a: Vector2, b: Vector2, cell_min: Vector2, cell_max: Vector2) -> PackedVector2Array:
