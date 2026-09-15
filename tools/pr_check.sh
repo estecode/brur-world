@@ -79,14 +79,18 @@ CURRENT_STAGE="local-prerequisites"
 [[ -d "$WORLD_DATA" ]] || { printf 'PR_CHECK=FAIL missing %s\n' "$WORLD_DATA" >&2; exit 66; }
 [[ -f "$WORLD_DATA/manifest.json" ]] || { printf 'PR_CHECK=FAIL missing %s/manifest.json\n' "$WORLD_DATA" >&2; exit 66; }
 
-if command -v godot >/dev/null 2>&1; then
+if [[ -n "${BRUR_GODOT_BIN:-}" ]]; then
+  [[ -x "$BRUR_GODOT_BIN" ]] || { printf 'PR_CHECK=FAIL BRUR_GODOT_BIN is not executable: %s\n' "$BRUR_GODOT_BIN" >&2; exit 69; }
+  GODOT="$BRUR_GODOT_BIN"
+elif command -v godot >/dev/null 2>&1; then
   GODOT="$(command -v godot)"
 elif [[ -x /Applications/Godot.app/Contents/MacOS/Godot ]]; then
   GODOT=/Applications/Godot.app/Contents/MacOS/Godot
 else
-  printf 'PR_CHECK=FAIL Godot executable not found\n' >&2
-  exit 69
+  GODOT="$(find /Applications -maxdepth 3 -type f -path '/Applications/Godot*.app/Contents/MacOS/Godot' -perm -111 -print 2>/dev/null | LC_ALL=C sort -V | tail -n1)"
+  [[ -n "$GODOT" ]] || { printf 'PR_CHECK=FAIL Godot executable not found; set BRUR_GODOT_BIN if Godot is installed outside /Applications\n' >&2; exit 69; }
 fi
+printf 'PR_CHECK=GODOT path=%s version=%s\n' "$GODOT" "$("$GODOT" --version | head -n1)"
 
 ensure_runtime_ports_free() {
   "$PYTHON_BIN" - <<'PY'
