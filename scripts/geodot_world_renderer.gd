@@ -190,7 +190,6 @@ func _trim_active_to_budget()->void:
 func evict_warm_for_pressure(target_bytes:int=0)->void:
 	var _unused:=target_bytes
 	_clear_warm(true)
-	if not _streaming_enabled:_clear_active(true)
 static func choose_stale_eviction_key(active:Dictionary,desired:Dictionary,publishing_key:String)->String:
 	var keys:=active.keys();keys.sort();for v in keys:var k:=String(v);if k!=publishing_key and not desired.has(k):return k
 	return ""
