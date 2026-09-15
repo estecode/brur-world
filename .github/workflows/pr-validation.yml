@@ -119,7 +119,7 @@ jobs:
           bash -n tools/pr_check_native_gps_policy.sh
           python tests/test_pr_check_status.py
           python tests/test_pr_check_native_gps.py
-          python -m pytest -q tests/test_pr_check_handoff_contract.py
+          python -m unittest tests.test_pr_check_handoff_contract
 
       - name: Parse production Drive real-data FPS contract
         env:
