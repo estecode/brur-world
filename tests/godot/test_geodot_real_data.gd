@@ -37,7 +37,7 @@ func _run() -> void:
 	_assert(building_mesh != null, "real Lund buildings batch into a mesh"); _assert(road_mesh != null, "real Lund roads batch into a mesh"); _assert(int(result.get("building_features", 0)) <= MAX_BUILDING_SOURCE_FEATURES and int(result.get("road_features", 0)) <= MAX_ROAD_SOURCE_FEATURES, "feature query is explicitly bounded")
 	print("GEODOT_REAL_DATA metadata=", opened); print("GEODOT_REAL_DATA lund_abs=", lund_abs, " cell=", cell, " buildings=", result.get("building_features"), " roads=", result.get("road_features"), " raw_buildings=", result.get("raw_building_features"), " raw_roads=", result.get("raw_road_features"), " building_query_ms=", result.get("building_query_ms"), " road_query_ms=", result.get("road_query_ms"), " build_ms=", build_ms)
 	# Drop every GeoDot feature/native dataset reference before the extension teardown.
-	result.clear(); building_mesh = null; road_mesh = null; source.close(); source = null
+	result.clear(); building_mesh = null; road_mesh = null; source.close()
 	if _failed: quit(1); return
 	if gpkg.get_file() == "sweden-brur.gpkg": _run_production_ab_performance()
 	if _failed: quit(1); return
@@ -53,8 +53,6 @@ func _run_child_test(script: String, marker: String, label: String) -> bool:
 	for line in output:
 		var text := String(line); combined += text + "\n"; print(text)
 	var completed := marker in combined
-	# A success marker is necessary but not sufficient: the process must also exit
-	# cleanly. A post-marker native abort is a portability/runtime failure, not PASS.
 	if exit_code != 0: _assert(false, "%s performance child exited with %d after completed=%s" % [label, exit_code, str(completed)]); return false
 	if not completed: _assert(false, "%s performance child exited without completion marker" % label); return false
 	print("GEODOT_AB_PERF %s=OK clean_exit=true" % label); return true
