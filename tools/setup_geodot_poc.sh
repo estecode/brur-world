@@ -133,8 +133,26 @@ try_artifact() {
   return 1
 }
 
+ensure_macos_build_dependencies() {
+  command -v brew >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL Homebrew required for macOS source build\n' >&2; return 1; }
+  local missing=()
+  command -v scons >/dev/null 2>&1 || missing+=(scons)
+  brew --prefix gdal >/dev/null 2>&1 || missing+=(gdal)
+  command -v dylibbundler >/dev/null 2>&1 || missing+=(dylibbundler)
+  if (( ${#missing[@]} > 0 )); then
+    printf 'GEODOT_SETUP=BOOTSTRAP macos dependencies=%s\n' "${missing[*]}"
+    HOMEBREW_NO_AUTO_UPDATE=1 brew install "${missing[@]}"
+  fi
+  command -v scons >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL scons unavailable after Homebrew bootstrap\n' >&2; return 1; }
+  brew --prefix gdal >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL gdal unavailable after Homebrew bootstrap\n' >&2; return 1; }
+}
+
 build_from_source() {
-  command -v scons >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL scons missing\n' >&2; return 1; }
+  if [[ "$platform" == "Darwin" ]]; then
+    ensure_macos_build_dependencies
+  else
+    command -v scons >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL scons missing\n' >&2; return 1; }
+  fi
   prepare_source
   git -C "$SRC" submodule update --init --recursive
   pin_godot_cpp
@@ -142,7 +160,6 @@ build_from_source() {
 
   case "$platform" in
     Darwin)
-      command -v brew >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL Homebrew required for source fallback\n' >&2; return 1; }
       local osgeo
       osgeo="$(brew --prefix gdal)"
       (cd "$SRC/godot-cpp" && scons platform=macos arch=arm64 generate_bindings=yes)
@@ -156,7 +173,7 @@ build_from_source() {
       (cd "$SRC" && scons platform=linux)
       # Match upstream packaging: keep runtime dependencies beside the extension so
       # the POC does not silently depend on the build machine's exact GDAL SONAME.
-      (cd "$SRC/demo/addons/geodot/x11" && ldd libgeodot.so | awk '/=> \// {print $3}' | xargs -r -I '{}' cp -n '{}' ./)
+      (cd "$SRC/demo/addons/geodot/x11" && ldd libgeodot.so | awk '/=> \/\// {print $3}' | xargs -r -I '{}' cp -n '{}' ./)
       ;;
   esac
   mkdir -p "$ROOT/addons"
