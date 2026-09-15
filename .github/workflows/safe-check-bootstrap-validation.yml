@@ -1,0 +1,22 @@
+name: Safe Check bootstrap validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/register_safe_check.sh'
+      - 'tools/pr_check_entry.sh'
+      - 'tests/test_safe_check_registration.sh'
+      - 'tests/test_pr_check_entry.sh'
+      - '.github/workflows/safe-check-bootstrap-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate branch-independent bootstrap
+        run: |
+          bash tests/test_safe_check_registration.sh
+          bash tests/test_pr_check_entry.sh
