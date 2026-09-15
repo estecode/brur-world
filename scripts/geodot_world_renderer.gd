@@ -104,10 +104,9 @@ static func coverage_cell_size_for_bounds(bounds: Rect2, base_cell_size: float, 
 
 static func coverage_cells_for_bounds(bounds: Rect2, cell_size: float, margin_cells: int, max_cells: int, focus_abs: Vector2) -> Array[Vector2i]:
 	var safe_cell_size := maxf(1.0, cell_size)
-	var margin := maxi(0, margin_cells)
-	var min_cell := Vector2i(floori(bounds.position.x / safe_cell_size) - margin, floori(bounds.position.y / safe_cell_size) - margin)
-	var max_point := bounds.position + bounds.size
-	var max_cell := Vector2i(floori(max_point.x / safe_cell_size) + margin, floori(max_point.y / safe_cell_size) + margin)
+	var cell_range: Rect2i = StreamingPolicy.cell_range_for_bounds(bounds, safe_cell_size, margin_cells)
+	var min_cell := cell_range.position
+	var max_cell := cell_range.position + cell_range.size - Vector2i.ONE
 	var focus_cell := Vector2i(floori(focus_abs.x / safe_cell_size), floori(focus_abs.y / safe_cell_size))
 	var candidates: Array[Dictionary] = []
 	for cell_y in range(min_cell.y, max_cell.y + 1):
@@ -125,7 +124,9 @@ static func coverage_cells_for_bounds(bounds: Rect2, cell_size: float, margin_ce
 	)
 	var result: Array[Vector2i] = []
 	var limit := mini(maxi(1, max_cells), candidates.size())
-	for index in range(limit): result.append(candidates[index]["cell"] as Vector2i)
+	for index in range(limit):
+		var cell: Vector2i = candidates[index]["cell"]
+		result.append(cell)
 	return result
 
 func _view_world_points(focus_world: Vector3) -> Array[Vector3]:
