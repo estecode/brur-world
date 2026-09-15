@@ -10,8 +10,100 @@ permissions:
   contents: read
 
 jobs:
-  syntax-check:
+  geodot-contracts:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - run: echo "GEODOT_WORKFLOW_SYNTAX=PASS"
+      - name: Validate deterministic far cache builder
+        run: python3 tests/test_geodot_far_cache.py
+      - name: Install Godot 4 headless runtime
+        run: |
+          set -euo pipefail
+          VERSION="4.5.1-stable"
+          ZIP="$RUNNER_TEMP/godot.zip"
+          DIR="$RUNNER_TEMP/godot"
+          mkdir -p "$DIR"
+          curl -fsSL "https://github.com/godotengine/godot/releases/download/$VERSION/Godot_v${VERSION}_linux.x86_64.zip" -o "$ZIP"
+          unzip -q "$ZIP" -d "$DIR"
+          BIN="$DIR/Godot_v${VERSION}_linux.x86_64"
+          chmod +x "$BIN"
+          echo "GODOT_BIN=$BIN" >> "$GITHUB_ENV"
+      - name: Run GeoDot renderer contracts
+        run: |
+          set -euo pipefail
+          for test in test_geodot_hlod_residency.gd test_geodot_runtime_hlod_integration.gd test_geodot_renderer_contracts.gd test_geodot_runtime_bounds.gd test_geodot_lod_policy.gd test_geodot_tuning_contract.gd test_geodot_view_coverage.gd test_geodot_streaming_policy.gd test_geodot_streaming_transition.gd test_geodot_atomic_ownership.gd test_geodot_photo_zoom_contract.gd test_geodot_cell_geometry.gd test_geodot_lod_continuity.gd test_geodot_composition_contract.gd test_geodot_failure_contract.gd; do
+            timeout 20s "$GODOT_BIN" --headless --path . --script "tests/godot/$test"
+          done
+
+  macos-render-lifecycle:
+    runs-on: macos-14
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        godot:
+          - 4.6.3-stable
+          - 4.7.2-stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install exact Godot macOS runtime
+        run: |
+          set -euo pipefail
+          VERSION="${{ matrix.godot }}"
+          ZIP="$RUNNER_TEMP/godot.zip"
+          curl -fsSL "https://github.com/godotengine/godot/releases/download/$VERSION/Godot_v${VERSION}_macos.universal.zip" -o "$ZIP"
+          ditto -x -k "$ZIP" "$RUNNER_TEMP/godot"
+          BIN="$(find "$RUNNER_TEMP/godot" -path '*/Godot.app/Contents/MacOS/Godot' -type f | head -1)"
+          test -n "$BIN"
+          chmod +x "$BIN"
+          echo "GODOT_BIN=$BIN" >> "$GITHUB_ENV"
+      - name: Prove HLOD lifecycle
+        run: |
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_hlod_residency.gd
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_runtime_hlod_integration.gd
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_photo_zoom_contract.gd
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_renderer_contracts.gd
+
+  macos-native-geodot-lifecycle:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out GeoDot
+        uses: actions/checkout@v4
+        with:
+          repository: boku-ilen/geodot-plugin
+          ref: 9999e5976f9efd75d5f756e008dfe6bbac6e6f71
+          path: geodot-upstream
+          submodules: recursive
+      - name: Build Apple Silicon GeoDot bundle
+        run: |
+          set -euo pipefail
+          brew install gdal scons
+          find geodot-upstream -name '*.dylib' -delete
+          (cd geodot-upstream/godot-cpp && scons -j3 platform=macos use_hot_reload=yes arch=arm64 generate_bindings=yes)
+          (cd geodot-upstream && scons -j3 platform=macos arch=arm64 osgeo_path="$(brew --prefix gdal)")
+          PLUGIN="geodot-upstream/demo/addons/geodot/macos"
+          GDAL="$(brew --prefix gdal)/lib/libgdal.38.dylib"
+          cp "$GDAL" "$PLUGIN/libgdal.38.dylib"
+          install_name_tool -change @rpath/libgdal.38.dylib @loader_path/libgdal.38.dylib "$PLUGIN/libgeodot.dylib"
+          rm -rf addons/geodot
+          mkdir -p addons
+          cp -R geodot-upstream/demo/addons/geodot addons/geodot
+      - name: Install Godot 4.7.2
+        run: |
+          set -euo pipefail
+          VERSION="4.7.2-stable"
+          ZIP="$RUNNER_TEMP/godot.zip"
+          curl -fsSL "https://github.com/godotengine/godot/releases/download/$VERSION/Godot_v${VERSION}_macos.universal.zip" -o "$ZIP"
+          ditto -x -k "$ZIP" "$RUNNER_TEMP/godot"
+          BIN="$(find "$RUNNER_TEMP/godot" -path '*/Godot.app/Contents/MacOS/Godot' -type f | head -1)"
+          test -n "$BIN"
+          chmod +x "$BIN"
+          echo "GODOT_BIN=$BIN" >> "$GITHUB_ENV"
+      - name: Prove native extension plus GeoPackage exits cleanly
+        env:
+          BRUR_GEODOT_GPKG: ${{ github.workspace }}/geodot-upstream/demo/geodata/geopackage_sample.gpkg
+        run: |
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_native_lifecycle.gd
