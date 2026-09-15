@@ -101,10 +101,11 @@ static func build_roads(records: Array, cell_origin_absolute: Vector2, lod: int)
 				continue
 			for tri_index in range(1, strip.size() - 1):
 				for absolute_vertex in [strip[0], strip[tri_index], strip[tri_index + 1]]:
-					var local := absolute_vertex - cell_origin_absolute
+					var absolute_vertex_2d: Vector2 = absolute_vertex
+					var local_vertex: Vector2 = absolute_vertex_2d - cell_origin_absolute
 					st.set_color(color)
 					st.set_normal(Vector3.UP)
-					st.add_vertex(Vector3(local.x, 0.0, -local.y))
+					st.add_vertex(Vector3(local_vertex.x, 0.0, -local_vertex.y))
 					emitted += 1
 	if emitted == 0:
 		return null
