@@ -1,15 +1,22 @@
 extends "res://scripts/geodot_poc_main.gd"
 
-const TransitionPolicy = preload("res://scripts/geodot_transition_policy.gd")
 const LodPolicy = preload("res://scripts/geodot_lod_policy.gd")
+const HlodResidency = preload("res://scripts/geodot_hlod_residency.gd")
 const FAR_PRESENTATION_M := 55000.0
 const ORDINARY_BUILDING_M := 10.0
 const TALL_BUILDING_M := 30.0
 
-var _transition_prefetching := false
-var _transition_detail_ready := false
 var _effective_resident_cells := 128
-var _detail_owns_presentation := false
+var _hlod := HlodResidency.new()
+var _base_ready := false
+
+func _ready() -> void:
+	# The far aggregate is the mandatory base representation. Gameplay presentation
+	# is never allowed to depend on detail streaming completing.
+	_hlod.register_base("world", 0)
+	_base_ready = true
+	super._ready()
+	_apply_hlod_ownership()
 
 func _apply_tuning() -> void:
 	super._apply_tuning()
@@ -19,12 +26,8 @@ func _apply_tuning() -> void:
 		geodot_world_layer.set("far_exit_pixels",clampf(float(_tuning.get("full_3d_threshold_px",4.0)),0.2,32.0))
 
 func _geodot_activation_coverage_ready() -> bool:
-	if geodot_world_layer == null or not geodot_world_layer.has_method("debug_snapshot"): return false
-	var snapshot: Dictionary = geodot_world_layer.call("debug_snapshot")
-	var desired := int(snapshot.get("desired_cells",0)); var ready := int(snapshot.get("ready_desired_cells",snapshot.get("active_cells",0)))
-	# Initial legacy -> GeoDot ownership follows the same photo-zoom invariant as
-	# runtime LOD: the old complete layer stays visible until the replacement is complete.
-	return desired > 0 and ready >= desired
+	# Base HLOD is the bounded readiness contract; detail is refinement only.
+	return _base_ready and _hlod.has_coverage("world")
 
 func _update_distance_policy() -> void:
 	if not _geodot_ready: return
@@ -43,20 +46,33 @@ func _update_distance_policy() -> void:
 	geodot_world_layer.set("max_resident_cells",_effective_resident_cells)
 
 	var prefetch_scale := clampf(float(_tuning.get("prefetch_scale",1.35)),1.0,3.0)
-	var prefetch_distance := TransitionPolicy.prefetch_distance(FAR_PRESENTATION_M,prefetch_scale)
+	var prefetch_distance := FAR_PRESENTATION_M * prefetch_scale
 	var want_detail := distance <= prefetch_distance
 	if want_detail != _detail_streaming_enabled:
-		_detail_streaming_enabled = want_detail; geodot_world_layer.call("set_enabled",want_detail); _transition_prefetching = want_detail; _transition_detail_ready = false
-	if want_detail: _transition_detail_ready = TransitionPolicy.detail_ready(geodot_world_layer.call("debug_snapshot"))
-	else: _transition_detail_ready = false
+		_detail_streaming_enabled = want_detail
+		geodot_world_layer.call("set_enabled",want_detail)
+	_hlod.set_desired_lod("world",1 if distance < FAR_PRESENTATION_M else 0)
+	if want_detail:
+		_hlod.request("world",1)
+		var snapshot: Dictionary = geodot_world_layer.call("debug_snapshot")
+		var desired := int(snapshot.get("desired_cells",0))
+		var ready := int(snapshot.get("ready_desired_cells",snapshot.get("active_cells",0)))
+		if desired > 0 and ready >= desired:
+			_hlod.mark_ready("world",1)
+	_apply_hlod_ownership()
 
-	_detail_owns_presentation = TransitionPolicy.detail_owns_presentation(distance,FAR_PRESENTATION_M,want_detail,_transition_detail_ready)
-	if geodot_world_layer.has_method("set_presentation_visible"): geodot_world_layer.call("set_presentation_visible",_detail_owns_presentation)
+func _apply_hlod_ownership() -> void:
+	var detail_owner := _hlod.visible_lod("world") == 1
+	if geodot_world_layer != null and geodot_world_layer.has_method("set_presentation_visible"):
+		geodot_world_layer.call("set_presentation_visible",detail_owner)
 	if geodot_far_layer != null:
-		if geodot_far_layer.has_method("set_detail_owner"): geodot_far_layer.call("set_detail_owner",_detail_owns_presentation)
-		if geodot_far_layer.has_method("set_transition_hold"): geodot_far_layer.call("set_transition_hold",TransitionPolicy.hold_far(distance,FAR_PRESENTATION_M,want_detail,_transition_detail_ready))
+		if geodot_far_layer.has_method("set_detail_owner"): geodot_far_layer.call("set_detail_owner",detail_owner)
+		if geodot_far_layer.has_method("set_transition_hold"): geodot_far_layer.call("set_transition_hold",not detail_owner)
 
 func geodot_debug_snapshot() -> Dictionary:
 	var snapshot := super.geodot_debug_snapshot()
-	snapshot["transition"] = {"prefetching":_transition_prefetching,"detail_ready":_transition_detail_ready,"detail_owner":_detail_owns_presentation,"prefetch_scale":float(_tuning.get("prefetch_scale",1.35)),"prefetch_distance_m":TransitionPolicy.prefetch_distance(FAR_PRESENTATION_M,float(_tuning.get("prefetch_scale",1.35))),"effective_resident_cells":_effective_resident_cells,"tall_3d_distance_m":float(_tuning.get("tall_3d_distance_m",6000.0))}
+	snapshot["hlod"] = _hlod.snapshot()
+	snapshot["hlod"]["visible_lod"] = _hlod.visible_lod("world")
+	snapshot["hlod"]["base_ready"] = _base_ready
+	snapshot["transition"] = {"detail_owner":_hlod.visible_lod("world")==1,"effective_resident_cells":_effective_resident_cells,"tall_3d_distance_m":float(_tuning.get("tall_3d_distance_m",6000.0))}
 	return snapshot
