@@ -5,7 +5,9 @@ on:
     branches:
       - main
     paths:
-      - "scripts/police_dispatch/**"
+      - "scripts/police_dispatch.gd"
+      - "scripts/police_unit.gd"
+      - "scripts/police_route_estimate.gd"
       - "tests/godot/test_police_dispatch*.gd"
       - "tools/test_police_dispatch.sh"
       - ".github/workflows/police-dispatch.yml"
