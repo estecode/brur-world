@@ -63,10 +63,10 @@ func _activate_prepared_geodot() -> void:
 	_legacy_buildings_enabled_before_geodot = _legacy_buildings_streaming_enabled()
 	if legacy_building_layer is Node3D: (legacy_building_layer as Node3D).visible = false
 	if legacy_building_layer != null and legacy_building_layer.has_method("set_streaming_enabled"): legacy_building_layer.call("set_streaming_enabled", false)
-	_clear_legacy_roads()
+	_clear_legacy_presentation()
 	_sync_geodot_surface_height()
 	_geodot_active = true
-	print("GEODOT_RENDERER_READY coverage_progressive=true")
+	print("GEODOT_RENDERER_READY coverage_progressive=true legacy_presentation=false")
 
 func set_geodot_renderer_enabled(enabled: bool) -> bool:
 	if enabled and not _geodot_ready: return false
@@ -94,20 +94,25 @@ func _legacy_buildings_streaming_enabled() -> bool:
 	if legacy_building_layer != null and legacy_building_layer.has_method("is_streaming_enabled"): return bool(legacy_building_layer.call("is_streaming_enabled"))
 	return false
 
-func _clear_legacy_roads() -> void:
+func _clear_legacy_presentation() -> void:
 	for instance_value in loaded.values():
 		var instance := instance_value as Node
 		if instance != null: instance.queue_free()
-	loaded.clear(); pending_tiles.clear(); pending_wanted.clear(); pending_lod = -1; pending_lod_swap = false; current_lod = -1
+	loaded.clear()
+	# GeoDot is the sole road/building presentation while active. Keeping legacy
+	# ArrayMesh cache entries here retained an entire second world representation.
+	mesh_cache.clear()
+	mesh_cache_order.clear()
+	pending_tiles.clear(); pending_wanted.clear(); pending_lod = -1; pending_lod_swap = false; current_lod = -1
 	last_min_tile = Vector2i(999999, 999999); last_max_tile = Vector2i(-999999, -999999)
 
 func is_geodot_ready() -> bool: return _geodot_ready
 func is_geodot_active() -> bool: return _geodot_active
 
 func consume_perf_metrics() -> Dictionary:
-	var metrics: Dictionary = {}
-	if geodot_world_layer != null and geodot_world_layer.has_method("consume_perf_metrics"): metrics = geodot_world_layer.call("consume_perf_metrics")
-	return {"road_build_ms": float(metrics.get("geodot_build_ms", 0.0)), "road_build_max_ms": float(metrics.get("geodot_build_max_ms", 0.0)), "road_tiles_built": int(metrics.get("geodot_publishes", 0)), "road_refresh_ms": float(metrics.get("geodot_query_ms", 0.0)), "road_refresh_max_ms": float(metrics.get("geodot_query_max_ms", 0.0)), "road_cache_hits": 0, "road_cache_misses": int(metrics.get("geodot_queries", 0)), "road_pending": int(metrics.get("geodot_pending_cells", 0))}
+	if geodot_world_layer != null and geodot_world_layer.has_method("consume_perf_metrics"):
+		return geodot_world_layer.call("consume_perf_metrics")
+	return {}
 
 func geodot_debug_snapshot() -> Dictionary:
 	if geodot_world_layer != null and geodot_world_layer.has_method("debug_snapshot"): return geodot_world_layer.call("debug_snapshot")
