@@ -22,10 +22,9 @@ from windows_build.prepare_runtime_data import selected_runtime_files
 from windows_build.runtime_pack import prepare_cached_runtime_pack
 
 MAX_WARM_SECONDS = 30.0
-# The recorded pre-#220 run spent this long in spool finalization/publication alone;
-# the true cold baseline was slower because its PBF scan/spool write happened earlier.
 MINIMUM_COLD_BASELINE_SECONDS = 5329.7
 MIN_BUILDINGS = 3_800_000
+MIN_RUNTIME_REDUCTION = 0.30
 TOOLS_DIR = Path(__file__).resolve().parent
 
 
@@ -101,7 +100,7 @@ def _shipped_runtime_footprint(world_dir: Path) -> tuple[int, dict]:
         return pack_path.stat().st_size, report
 
 
-def _print_footprint(world_dir: Path) -> None:
+def _footprint_payload(world_dir: Path, baseline_runtime_bytes: int | None = None) -> dict:
     runtime_bytes, runtime_by_dataset = _runtime_footprint(world_dir)
     shipped_bytes, shipped_report = _shipped_runtime_footprint(world_dir)
     payload = {
@@ -113,7 +112,19 @@ def _print_footprint(world_dir: Path) -> None:
         "shipped_runtime_pack_gib": round(shipped_bytes / 1024**3, 3),
         "shipped_runtime_pack": shipped_report,
     }
-    print(json.dumps(payload, indent=2, sort_keys=True), flush=True)
+    if baseline_runtime_bytes is not None:
+        reduction = 1.0 - runtime_bytes / baseline_runtime_bytes
+        payload.update({
+            "baseline_production_runtime_bytes": baseline_runtime_bytes,
+            "production_runtime_reduction_fraction": reduction,
+            "production_runtime_reduction_percent": round(reduction * 100.0, 3),
+            "production_runtime_reduction_30pct": reduction >= MIN_RUNTIME_REDUCTION,
+        })
+    return payload
+
+
+def _print_footprint(world_dir: Path, baseline_runtime_bytes: int | None = None) -> None:
+    print(json.dumps(_footprint_payload(world_dir, baseline_runtime_bytes), indent=2, sort_keys=True), flush=True)
 
 
 def main() -> None:
@@ -123,12 +134,13 @@ def main() -> None:
     parser.add_argument("--world-dir", type=Path, default=Path("/tmp/brur-220-world-data"))
     parser.add_argument("--report", type=Path, default=Path("/tmp/brur-220-benchmark.json"))
     parser.add_argument("--footprint-only", action="store_true", help="Measure an existing completed world build without rebuilding it")
+    parser.add_argument("--baseline-runtime-bytes", type=int, help="Measured current-main BMC2 production-runtime baseline for the same Sweden source")
     args = parser.parse_args()
 
     world_dir = args.world_dir.resolve()
     if args.footprint_only:
         if not world_dir.is_dir(): raise SystemExit(f"world data missing: {world_dir}")
-        _print_footprint(world_dir)
+        _print_footprint(world_dir, args.baseline_runtime_bytes)
         return
     if args.gpkg is None: raise SystemExit("gpkg is required unless --footprint-only is used")
     if args.source_pbf is None: raise SystemExit("--source-pbf is required unless --footprint-only is used")
@@ -174,8 +186,9 @@ def main() -> None:
         isinstance(source_hashes.get("osm_pbf"), dict) and source_hashes["osm_pbf"].get("digest") == pbf_identity["digest"]
     )
 
-    runtime_bytes, runtime_bytes_by_dataset = _runtime_footprint(world_dir)
-    shipped_runtime_bytes, shipped_runtime_report = _shipped_runtime_footprint(world_dir)
+    footprint = _footprint_payload(world_dir, args.baseline_runtime_bytes)
+    runtime_bytes = int(footprint["production_runtime_bytes"])
+    shipped_runtime_bytes = int(footprint["shipped_runtime_pack_bytes"])
     roads_present = all((world_dir/f"lod{lod}").is_dir() and any((world_dir/f"lod{lod}").glob("*.brtile")) for lod in range(3))
 
     checks = {
@@ -193,6 +206,8 @@ def main() -> None:
         "shipped_runtime_pack_valid": shipped_runtime_bytes > 0,
         "road_tiles_present": roads_present,
     }
+    if args.baseline_runtime_bytes is not None:
+        checks["production_runtime_reduction_30pct"] = bool(footprint["production_runtime_reduction_30pct"])
     report = {
         "issue":220, "gpkg":str(gpkg), "source_pbf":str(pbf), "gpkg_identity":gpkg_identity, "pbf_identity":pbf_identity,
         "source_counts":source_counts, "normalized_counts":{"highway_records":highway_records,"building_records":building_records,"traffic_signals":signal_records,"addresses":address_records},
@@ -200,8 +215,7 @@ def main() -> None:
         "full_build_seconds":full_seconds, "warm_seconds":warm_seconds, "world_dir":str(world_dir),
         "world_bytes":sum(path.stat().st_size for path in world_dir.rglob("*") if path.is_file()),
         "source_cache_bytes":sum(path.stat().st_size for path in cache_dir.rglob("*") if path.is_file()),
-        "production_runtime_bytes":runtime_bytes, "production_runtime_bytes_by_dataset":runtime_bytes_by_dataset,
-        "shipped_runtime_pack_bytes":shipped_runtime_bytes, "shipped_runtime_pack":shipped_runtime_report,
+        **{key:value for key,value in footprint.items() if key != "world_dir"},
         "cold_blocks":cold_blocks, "warm_blocks":warm_blocks, "checks":checks, "passed":all(checks.values()), "completed_at":_now(),
     }
     report_path.parent.mkdir(parents=True,exist_ok=True); report_path.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
