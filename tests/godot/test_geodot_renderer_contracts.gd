@@ -49,6 +49,7 @@ func _init() -> void:
 
 func _run() -> void:
 	_test_building_adapter()
+	_test_geographic_source_conversion()
 	_test_real_osm_feature_filtering()
 	_test_cell_ownership_is_unique()
 	_test_road_adapter()
@@ -83,6 +84,13 @@ func _test_building_adapter() -> void:
 	var tags: Dictionary = record.get("tags", {})
 	_assert(tags.get("building:levels") == "4", "GDAL other_tags are normalized for BRUR height policy")
 	_assert(is_equal_approx(float(record.get("x", 0.0)), 1010.0), "building center remains in projected metres")
+
+func _test_geographic_source_conversion() -> void:
+	var lund_lonlat := Vector2(13.1910, 55.7047)
+	var absolute := GeoDotWorldSourceScript.source_to_absolute(lund_lonlat, 4326)
+	_assert(absf(absolute.x - 1468390.0) < 5000.0 and absf(absolute.y - 7494000.0) < 5000.0, "EPSG:4326 source coordinates map into BRUR projected metre space")
+	var round_trip := GeoDotWorldSourceScript.absolute_to_source(absolute, 4326)
+	_assert(round_trip.distance_to(lund_lonlat) < 0.00001, "geographic/projected adapter conversion round-trips deterministically")
 
 func _test_real_osm_feature_filtering() -> void:
 	var landuse := FakePolygonFeature.new()
