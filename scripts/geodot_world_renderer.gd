@@ -48,7 +48,7 @@ func set_streaming_enabled(value:bool)->void:
 	if next==_streaming_enabled:return
 	_streaming_enabled=next
 	if not _streaming_enabled:
-		_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_shutdown_query_workers();coverage_changed.emit();return
+		_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_shutdown_query_workers();_trim_active_to_budget();coverage_changed.emit();return
 	_refresh_desired(true)
 func set_presentation_visible(value:bool)->void:
 	_presentation_visible=value
@@ -98,7 +98,7 @@ func _refresh_desired(force:bool)->void:
 		var key:=String(request.key);if _active.has(key) and int((_active[key] as Dictionary).get("lod",-1))==lod:continue
 		if _restore_warm(key,lod):continue
 		_enqueue_request(request)
-	_trim_queue();_trim_warm();_start_queries_if_needed()
+	_trim_queue();_trim_warm();_trim_active_to_budget();_start_queries_if_needed()
 func _active_coverage_rects()->Array[Rect2]:
 	var out:Array[Rect2]=[]
 	if not _streaming_enabled:return out
@@ -161,6 +161,9 @@ func _trim_warm()->void:
 		for k in _warm.keys():var e:Dictionary=_warm[k];var t:=int(e.get("warm_tick",0));if t<tick:tick=t;oldest=String(k)
 		if oldest.is_empty():break
 		var node:Node=(_warm[oldest] as Dictionary).get("node") as Node;_warm.erase(oldest);if node!=null:node.free()
+func _trim_active_to_budget()->void:
+	while _active.size()>maxi(1,max_resident_cells):
+		var keys:=_active.keys();keys.sort();var key:=String(keys[0]);_evict_active_key(key,false)
 func evict_warm_for_pressure(target_bytes:int=0)->void:
 	var _unused:=target_bytes
 	_clear_warm(true)
