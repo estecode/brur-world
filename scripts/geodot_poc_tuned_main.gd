@@ -67,8 +67,10 @@ func _update_distance_policy() -> void:
 	_ram_hard_pressure = pressure >= 1.0
 	_effective_resident_cells = clampi(roundi(float(base_resident) * LodPolicy.quality_scale_for_pressure(pressure)), 16, base_resident)
 	geodot_world_layer.set("max_resident_cells", _effective_resident_cells)
-	var prefetch_distance := maxf(tall_3d_distance, full_3d_distance * clampf(float(_tuning.get("prefetch_scale", 1.35)), 1.0, 3.0))
-	var want_detail := distance <= prefetch_distance and not _ram_hard_pressure
+	# FAR is the permanent coverage safety net. Keep the bounded detail scheduler warm at
+	# every camera height so zooming in never crosses a distance threshold that starts
+	# streaming from zero. Screen-space LOD decides quality; residency bounds decide cost.
+	var want_detail := not _ram_hard_pressure
 	if geodot_world_layer.has_method("set_streaming_enabled"):
 		geodot_world_layer.call("set_streaming_enabled", want_detail)
 	elif want_detail != _detail_streaming_enabled:
@@ -80,5 +82,5 @@ func _update_distance_policy() -> void:
 
 func geodot_debug_snapshot() -> Dictionary:
 	var snapshot := super.geodot_debug_snapshot()
-	snapshot["spatial_hlod"] = {"base_ready": _base_ready, "initial_view_covered": _base_ready, "loading_gate_visible": _loading_layer != null and _loading_layer.visible, "ready_detail_regions": geodot_world_layer.call("ready_coverage_rects").size() if geodot_world_layer != null and geodot_world_layer.has_method("ready_coverage_rects") else 0, "global_owner_switch": false, "effective_resident_cells": _effective_resident_cells, "ram_hard_pressure": _ram_hard_pressure, "tall_3d_distance_m": float(_tuning.get("tall_3d_distance_m", 6000.0)), "detail_prefetch_distance_m": maxf(float(_tuning.get("tall_3d_distance_m", 6000.0)), float(_tuning.get("full_3d_distance_m", 3000.0)) * clampf(float(_tuning.get("prefetch_scale", 1.35)), 1.0, 3.0))}
+	snapshot["spatial_hlod"] = {"base_ready": _base_ready, "initial_view_covered": _base_ready, "loading_gate_visible": _loading_layer != null and _loading_layer.visible, "ready_detail_regions": geodot_world_layer.call("ready_coverage_rects").size() if geodot_world_layer != null and geodot_world_layer.has_method("ready_coverage_rects") else 0, "global_owner_switch": false, "effective_resident_cells": _effective_resident_cells, "ram_hard_pressure": _ram_hard_pressure, "tall_3d_distance_m": float(_tuning.get("tall_3d_distance_m", 6000.0)), "detail_prefetch_continuous": true}
 	return snapshot
