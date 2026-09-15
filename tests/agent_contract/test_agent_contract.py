@@ -22,9 +22,9 @@ REQUIRED_AGENT_CONTRACT = {
     "red_tests_agent_owned": "red tests",
     "safe_check_agent_owned": "objective Safe Check failure returns ownership to the agent",
     "missing_ci_not_handoff": "Missing hosted CI is not by itself `WAITING_FOR_HUMAN`",
-    "safe_check_handoff_readiness": "SAFE CHECK HANDOFF READINESS GATE",
-    "safe_check_exact_head": "exact PR head",
-    "safe_check_objective_prerequisites": "agent-executable objective prerequisites",
+    "safe_check_objective_first": "After all relevant available objective validation is complete, if human verification still remains",
+    "safe_check_exact_head_status": "Local `pr-check` objective results are persistent project state on the exact PR head",
+    "safe_check_no_iterative_human_runner": "Never use the project leader as an iterative test runner.",
 }
 
 REQUIRED_CASES = {
