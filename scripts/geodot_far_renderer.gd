@@ -21,7 +21,7 @@ var _enabled:=false
 var _active:=false
 var _transition_hold:=false
 var _detail_owner:=false
-var _refresh_accum:=0.0
+var _refresh_accum:=0.25
 var _last_samples:=0
 var _last_level:=-1
 var _last_cell_m:=0.0
@@ -37,12 +37,10 @@ func setup(world_coordinates,camera_rig:Node,cache_path:String)->Dictionary:
 	_material=StandardMaterial3D.new(); _material.shading_mode=BaseMaterial3D.SHADING_MODE_UNSHADED; _material.albedo_color=Color(0.32,0.33,0.34,0.72); _material.transparency=BaseMaterial3D.TRANSPARENCY_ALPHA; _material.cull_mode=BaseMaterial3D.CULL_DISABLED
 	_quad=QuadMesh.new(); _quad.orientation=PlaneMesh.FACE_Y; _quad.size=Vector2.ONE; _quad.material=_material
 	_instance=MultiMeshInstance3D.new(); _instance.name="GeoDotFarAggregate"; add_child(_instance)
-	_enabled=true; set_process(true); return opened
+	_enabled=true; _refresh_accum=0.25; set_process(true); return opened
 
 func shutdown()->void:
 	set_process(false); _enabled=false; _active=false; _transition_hold=false; _detail_owner=false; _last_signature=""; _cache.close()
-	# Break render-resource ownership explicitly before Node/engine teardown. This
-	# keeps MultiMesh/mesh/material RIDs from surviving into Godot Main::cleanup().
 	if _instance!=null:
 		_instance.visible=false
 		_instance.multimesh=null
@@ -53,8 +51,6 @@ func _exit_tree()->void: shutdown()
 
 func set_detail_owner(value:bool)->void:
 	_detail_owner=value
-	# Ownership changes are synchronous: never leave a 250 ms refresh window where
-	# far and detail draw the same ground and z-fight.
 	if value:
 		visible=false
 	elif _enabled and (_active or _transition_hold):
@@ -93,7 +89,7 @@ func _refresh()->void:
 		_active=distance>=exit_distance_m if _active else distance>=enter_distance_m
 	visible=_active and not _detail_owner
 	if not _active:return
-	var bounds:=_view_bounds(focus); var viewport:=get_viewport().get_visible_rect().size; _last_mpp=LodPolicy.meters_per_pixel(bounds,viewport)
+	var bounds:=_view_bounds(focus,distance); var viewport:=get_viewport().get_visible_rect().size; _last_mpp=LodPolicy.meters_per_pixel(bounds,viewport)
 	var level:=_cache.choose_level(maxf(2000.0,_last_mpp*target_screen_cell_px))
 	if level<0:return
 	_last_pressure=_renderer_memory_pressure()
@@ -107,14 +103,22 @@ func _refresh()->void:
 	_last_signature=signature; _last_level=level; _last_samples=samples.size(); _last_build_ms=float(Time.get_ticks_usec()-started)/1000.0
 	if not samples.is_empty():_last_cell_m=float(samples[0].cell_m)
 
-func _view_bounds(focus:Vector3)->Rect2:
+static func fallback_radius_for_distance(distance_m:float)->float:
+	# Ground-ray intersection can disappear when the camera is almost top-down or
+	# beyond its practical ray range. Never collapse that case to a zero-area cell:
+	# the far cache must still expose city mass at 82/300/500 km.
+	return maxf(4000.0,maxf(0.0,distance_m)*0.90)
+
+func _view_bounds(focus:Vector3,distance_m:float)->Rect2:
 	var points:Array[Vector3]=[]
 	if _camera_rig.has_method("get_ground_view_corners"):
 		var corners:Variant=_camera_rig.call("get_ground_view_corners")
 		if typeof(corners)==TYPE_ARRAY or typeof(corners)==TYPE_PACKED_VECTOR3_ARRAY:
 			for value in corners:
 				if typeof(value)==TYPE_VECTOR3 and (value as Vector3).is_finite():points.append(value)
-	if points.is_empty():points=[focus]
+	if points.is_empty():
+		var radius:=fallback_radius_for_distance(distance_m)
+		points=[focus+Vector3(-radius,0,-radius),focus+Vector3(radius,0,-radius),focus+Vector3(radius,0,radius),focus+Vector3(-radius,0,radius)]
 	var first:Vector2=_coordinates.world_to_absolute(points[0]); var minp:=first; var maxp:=first
 	for point in points:
 		var absolute:Vector2=_coordinates.world_to_absolute(point); minp.x=minf(minp.x,absolute.x); minp.y=minf(minp.y,absolute.y); maxp.x=maxf(maxp.x,absolute.x); maxp.y=maxf(maxp.y,absolute.y)
