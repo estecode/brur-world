@@ -187,18 +187,12 @@ func _restore_warm(key:String,lod:int)->bool:
 	var entry:Dictionary=_warm[wk];_warm.erase(wk);_active[key]=entry;var node:Node3D=entry.get("node") as Node3D;if node!=null:node.visible=_presentation_visible
 	_trim_transition_overlap();_retire_obsolete_after_publish();coverage_changed.emit();return true
 func _trim_warm()->void:
-	var cap:=maxi(4,max_resident_cells/4)
+	var cap:=maxi(16,max_resident_cells/2)
 	while _warm.size()>cap:
 		var oldest:="";var tick:=9223372036854775807
 		for k in _warm.keys():var e:Dictionary=_warm[k];var t:=int(e.get("warm_tick",0));if t<tick:tick=t;oldest=String(k)
 		if oldest.is_empty():break
 		var node:Node=(_warm[oldest] as Dictionary).get("node") as Node;_warm.erase(oldest);if node!=null:node.free()
-func _trim_active_to_budget()->void:
-	while _active.size()>maxi(1,max_resident_cells):
-		var stale:=choose_stale_eviction_key(_active,_desired,"")
-		if stale.is_empty():break
-		_park_warm(stale)
-	_trim_warm()
 func evict_warm_for_pressure(target_bytes:int=0)->void:
 	var _unused:=target_bytes
 	_clear_warm(true)
