@@ -167,6 +167,7 @@ func _trim_active_to_budget()->void:
 func evict_warm_for_pressure(target_bytes:int=0)->void:
 	var _unused:=target_bytes
 	_clear_warm(true)
+	if not _streaming_enabled:_clear_active(true)
 func _prepare_resident_slot(key:String)->bool:
 	if _active.has(key):return true
 	while _active.size()>=maxi(1,max_resident_cells):var stale:=choose_stale_eviction_key(_active,_desired,key);if stale.is_empty():return false;_evict_active_key(stale)
