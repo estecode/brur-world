@@ -5,12 +5,16 @@ class_name GeoDotWorldSource
 ##
 ## Dependencies:
 ## - Dynamically loads the optional GeoDot GDExtension before opening GeoPackage data.
+## - Converts provider CRS coordinates at the adapter boundary into BRUR projected absolute metres.
 ## - Returns provider-independent dictionaries consumed by BRUR presentation builders.
-## - Owns no coordinate conversion, gameplay semantics, camera policy, or rendering nodes.
+## - Owns no gameplay semantics, camera policy, or rendering nodes.
 
 const GEODOT_EXTENSION_PATH := "res://addons/geodot/geodot.gdextension"
 const BUILDING_LAYER_CANDIDATES := ["buildings", "building", "multipolygons"]
 const ROAD_LAYER_CANDIDATES := ["roads", "road", "lines"]
+const EPSG_WGS84 := 4326
+const WEB_MERCATOR_RADIUS := 6378137.0
+const WEB_MERCATOR_MAX_LAT := 85.05112878
 
 var dataset = null
 var building_layer = null
@@ -92,21 +96,28 @@ func query_cell(top_left_absolute: Vector2, size_m: float, max_buildings: int, m
 		return {"ok": false, "error": "GeoDot world source is not ready"}
 	var cell_min := Vector2(top_left_absolute.x, top_left_absolute.y - size_m)
 	var cell_max := Vector2(top_left_absolute.x + size_m, top_left_absolute.y)
+	var source_top_left := absolute_to_source(top_left_absolute, epsg_code)
+	var source_bottom_right := absolute_to_source(Vector2(top_left_absolute.x + size_m, top_left_absolute.y - size_m), epsg_code)
+	# GeoDot's vector query API takes one square size in layer units. For geographic
+	# source data, use the larger transformed span and then apply the exact BRUR
+	# projected half-open cell filter below. This can over-query slightly but never
+	# changes BRUR cell ownership or coordinate truth.
+	var source_size := maxf(absf(source_bottom_right.x - source_top_left.x), absf(source_bottom_right.y - source_top_left.y))
 	var started := Time.get_ticks_usec()
-	var raw_buildings: Array = building_layer.call("get_features_in_square", top_left_absolute.x, top_left_absolute.y, size_m, max_buildings)
+	var raw_buildings: Array = building_layer.call("get_features_in_square", source_top_left.x, source_top_left.y, source_size, max_buildings)
 	var building_query_ms := float(Time.get_ticks_usec() - started) / 1000.0
 	started = Time.get_ticks_usec()
-	var raw_roads: Array = road_layer.call("get_features_in_square", top_left_absolute.x, top_left_absolute.y, size_m, max_roads)
+	var raw_roads: Array = road_layer.call("get_features_in_square", source_top_left.x, source_top_left.y, source_size, max_roads)
 	var road_query_ms := float(Time.get_ticks_usec() - started) / 1000.0
 	var buildings: Array[Dictionary] = []
 	for feature in raw_buildings:
-		var record := building_record(feature)
+		var record := building_record(feature, epsg_code)
 		if record.is_empty() or not record_owned_by_cell(record, cell_min, cell_max):
 			continue
 		buildings.append(record)
 	var roads: Array[Dictionary] = []
 	for feature in raw_roads:
-		var record := road_record(feature)
+		var record := road_record(feature, epsg_code)
 		if record.is_empty():
 			continue
 		record["clip_min"] = cell_min
@@ -130,7 +141,7 @@ static func record_owned_by_cell(record: Dictionary, cell_min: Vector2, cell_max
 		return false
 	return point.x >= cell_min.x and point.x < cell_max.x and point.y >= cell_min.y and point.y < cell_max.y
 
-static func building_record(feature: Variant) -> Dictionary:
+static func building_record(feature: Variant, source_epsg: int = 0) -> Dictionary:
 	if feature == null or not feature.has_method("get_outer_vertices"):
 		return {}
 	var attrs := _feature_attributes(feature)
@@ -140,9 +151,12 @@ static func building_record(feature: Variant) -> Dictionary:
 	var outer_value: Variant = feature.call("get_outer_vertices")
 	if typeof(outer_value) != TYPE_PACKED_VECTOR2_ARRAY:
 		return {}
-	var outer: PackedVector2Array = outer_value
-	if outer.size() < 3:
+	var source_outer: PackedVector2Array = outer_value
+	if source_outer.size() < 3:
 		return {}
+	var outer := PackedVector2Array()
+	for point in source_outer:
+		outer.append(source_to_absolute(point, source_epsg))
 	var ring := _packed_ring_to_array(outer)
 	var holes: Array = []
 	if feature.has_method("get_holes"):
@@ -151,8 +165,11 @@ static func building_record(feature: Variant) -> Dictionary:
 			for hole_value in raw_holes:
 				if typeof(hole_value) != TYPE_PACKED_VECTOR2_ARRAY:
 					continue
-				var hole: PackedVector2Array = hole_value
-				if hole.size() >= 3:
+				var source_hole: PackedVector2Array = hole_value
+				if source_hole.size() >= 3:
+					var hole := PackedVector2Array()
+					for point in source_hole:
+						hole.append(source_to_absolute(point, source_epsg))
 					holes.append(_packed_ring_to_array(hole))
 	var center := Vector2.ZERO
 	for point in outer:
@@ -166,7 +183,7 @@ static func building_record(feature: Variant) -> Dictionary:
 		"tags": tags,
 	}
 
-static func road_record(feature: Variant) -> Dictionary:
+static func road_record(feature: Variant, source_epsg: int = 0) -> Dictionary:
 	if feature == null or not feature.has_method("get_curve3d"):
 		return {}
 	var attrs := _feature_attributes(feature)
@@ -182,13 +199,31 @@ static func road_record(feature: Variant) -> Dictionary:
 	var points := PackedVector2Array()
 	for index in range(count):
 		var p: Vector3 = curve_value.call("get_point_position", index)
-		points.append(Vector2(p.x, -p.z))
+		points.append(source_to_absolute(Vector2(p.x, -p.z), source_epsg))
 	return {
 		"id": _feature_id(feature),
 		"points": points,
 		"tags": tags,
 		"road_class": road_class_from_highway(String(tags.get("highway", ""))),
 	}
+
+static func source_to_absolute(point: Vector2, source_epsg: int) -> Vector2:
+	if source_epsg != EPSG_WGS84:
+		return point
+	var lon_rad := deg_to_rad(point.x)
+	var lat_rad := deg_to_rad(clampf(point.y, -WEB_MERCATOR_MAX_LAT, WEB_MERCATOR_MAX_LAT))
+	return Vector2(
+		WEB_MERCATOR_RADIUS * lon_rad,
+		WEB_MERCATOR_RADIUS * log(tan(PI * 0.25 + lat_rad * 0.5))
+	)
+
+static func absolute_to_source(point: Vector2, source_epsg: int) -> Vector2:
+	if source_epsg != EPSG_WGS84:
+		return point
+	return Vector2(
+		rad_to_deg(point.x / WEB_MERCATOR_RADIUS),
+		rad_to_deg(2.0 * atan(exp(point.y / WEB_MERCATOR_RADIUS)) - PI * 0.5)
+	)
 
 static func road_class_from_highway(highway: String) -> int:
 	match highway.to_lower():
