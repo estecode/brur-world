@@ -19,7 +19,7 @@ signal coverage_changed
 @export var far_enter_pixels := 1.5
 @export var far_exit_pixels := 2.25
 var _coordinates=null; var _camera_rig:Node=null; var _source=null
-var _enabled:=false; var _ready:=false; var _presentation_visible:=true; var _refresh_accum:=0.0
+var _enabled:=false; var _streaming_enabled:=true; var _ready:=false; var _presentation_visible:=true; var _refresh_accum:=0.0
 var _active:Dictionary={}; var _warm:Dictionary={}; var _desired:Dictionary={}; var _queue:Array[Dictionary]=[]; var _queued:Dictionary={}; var _ready_results:Array[Dictionary]=[]; var _workers:Array[Dictionary]=[]; var _generation:=0; var _far_screen_lod:=false
 var _building_material:StandardMaterial3D=null; var _road_material:StandardMaterial3D=null
 
@@ -29,7 +29,7 @@ func setup(world_coordinates,camera_rig:Node,gpkg_path:String)->Dictionary:
 	_setup_materials();_ready=true;set_enabled(true);return opened
 func _exit_tree()->void:shutdown()
 func shutdown()->void:
-	_enabled=false;_ready=false;set_process(false);_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_shutdown_query_workers();_clear_active(true);_clear_warm(true);_building_material=null;_road_material=null
+	_enabled=false;_streaming_enabled=false;_ready=false;set_process(false);_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_shutdown_query_workers();_clear_active(true);_clear_warm(true);_building_material=null;_road_material=null
 	if _source!=null:
 		if _source.has_method("close"):_source.close()
 		_source=null
@@ -41,7 +41,14 @@ func _shutdown_query_workers()->void:
 	_workers.clear()
 func set_enabled(value:bool)->void:
 	_enabled=value and _ready;set_process(_enabled)
-	if not _enabled:_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_shutdown_query_workers();return
+	if not _enabled:_streaming_enabled=false;_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_shutdown_query_workers();return
+	_streaming_enabled=true;_refresh_desired(true)
+func set_streaming_enabled(value:bool)->void:
+	var next:=value and _enabled and _ready
+	if next==_streaming_enabled:return
+	_streaming_enabled=next
+	if not _streaming_enabled:
+		_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_shutdown_query_workers();coverage_changed.emit();return
 	_refresh_desired(true)
 func set_presentation_visible(value:bool)->void:
 	_presentation_visible=value
@@ -53,9 +60,9 @@ func is_ready()->bool:return _ready
 func source_metadata()->Dictionary:return _source.metadata() if _source!=null else {}
 func _process(delta:float)->void:
 	if not _enabled:return
-	_poll_queries();_publish_one_ready_result();_refresh_accum+=delta
-	if _refresh_accum>=refresh_interval_s:_refresh_accum=0.0;_refresh_desired(false)
-	_start_queries_if_needed()
+	if _streaming_enabled:_poll_queries();_publish_one_ready_result();_refresh_accum+=delta
+	if _streaming_enabled and _refresh_accum>=refresh_interval_s:_refresh_accum=0.0;_refresh_desired(false)
+	if _streaming_enabled:_start_queries_if_needed()
 static func coverage_cell_size_for_bounds(_bounds:Rect2,base_cell_size:float,_margin_cells:int,_max_cells:int)->float:return maxf(1.0,base_cell_size)
 static func coverage_cells_for_bounds(bounds:Rect2,size:float,margin:int,max_cells:int,focus_abs:Vector2)->Array[Vector2i]:
 	var safe:=maxf(1.0,size);var cr:Rect2i=StreamingPolicy.cell_range_for_bounds(bounds,safe,margin);var minc:=cr.position;var maxc:=cr.position+cr.size-Vector2i.ONE;var fc:=Vector2i(floori(focus_abs.x/safe),floori(focus_abs.y/safe));var cands:Array[Dictionary]=[]
@@ -82,7 +89,7 @@ static func choose_screen_lod(was_far:bool,pixels:float,enter:float,exit:float)-
 	if was_far:return MeshBuilder.LOD_NEAR if pixels>=exit else MeshBuilder.LOD_FAR
 	return MeshBuilder.LOD_FAR if pixels<=enter else MeshBuilder.LOD_NEAR
 func _refresh_desired(force:bool)->void:
-	if _camera_rig==null or not _camera_rig.has_method("get_focus_world"):return
+	if not _streaming_enabled or _camera_rig==null or not _camera_rig.has_method("get_focus_world"):return
 	var focus:Vector3=_camera_rig.call("get_focus_world");var abs:Vector2=_coordinates.world_to_absolute(focus);var bounds:=_view_absolute_bounds(focus);var size:=coverage_cell_size_for_bounds(bounds,cell_size_m,viewport_margin_cells,max_resident_cells);var cells:=coverage_cells_for_bounds(bounds,size,viewport_margin_cells,max_resident_cells,abs);var vp:=get_viewport().get_visible_rect().size if get_viewport()!=null else Vector2(1920,1080);var px:=projected_pixels_for_size(representative_building_m,bounds,vp);var lod:=choose_screen_lod(_far_screen_lod,px,far_enter_pixels,far_exit_pixels);_far_screen_lod=lod==MeshBuilder.LOD_FAR;var next:Dictionary={};var candidates:Array[Dictionary]=[]
 	for cell in cells:var key:=_cell_key(cell,size);next[key]=lod;candidates.append({"key":key,"cell":cell,"cell_size_m":size,"lod":lod})
 	var changed:=force or next.hash()!=_desired.hash();_desired=next
@@ -94,9 +101,8 @@ func _refresh_desired(force:bool)->void:
 	_trim_queue();_trim_warm();_start_queries_if_needed()
 func _active_coverage_rects()->Array[Rect2]:
 	var out:Array[Rect2]=[]
-	for key in _desired.keys():
-		if not _active.has(key):continue
-		var e:Dictionary=_active[key];var o:Vector2=e.get("origin_abs",Vector2.ZERO);var s:=float(e.get("cell_size_m",0.0));if s>0.0:out.append(Rect2(o,Vector2(s,s)))
+	for e_value in _active.values():
+		var e:Dictionary=e_value;var o:Vector2=e.get("origin_abs",Vector2.ZERO);var s:=float(e.get("cell_size_m",0.0));if s>0.0:out.append(Rect2(o,Vector2(s,s)))
 	return out
 static func desired_coverage_ready(active:Dictionary,desired:Dictionary)->bool:
 	if desired.is_empty():return false
@@ -111,7 +117,7 @@ func _worker_has_queue_id(id:String)->bool:
 func _trim_queue()->void:
 	while _queue.size()>maxi(1,max_pending_cells):var d:Dictionary=_queue.pop_back();_queued.erase(String(d.get("queue_id","")))
 func _start_queries_if_needed()->void:
-	while _workers.size()<maxi(1,query_workers) and not _queue.is_empty() and _enabled and _ready_results.size()<maxi(1,max_ready_cells):var r:Dictionary=_queue.pop_front();_queued.erase(String(r.queue_id));var t:=Thread.new();if t.start(Callable(self,"_query_worker").bind(r))==OK:_workers.append({"thread":t,"queue_id":String(r.queue_id)})
+	while _workers.size()<maxi(1,query_workers) and not _queue.is_empty() and _enabled and _streaming_enabled and _ready_results.size()<maxi(1,max_ready_cells):var r:Dictionary=_queue.pop_front();_queued.erase(String(r.queue_id));var t:=Thread.new();if t.start(Callable(self,"_query_worker").bind(r))==OK:_workers.append({"thread":t,"queue_id":String(r.queue_id)})
 func _query_worker(request:Dictionary)->Dictionary:
 	var started:=Time.get_ticks_usec();var cell:Vector2i=request.cell;var size:=float(request.cell_size_m);var result:Dictionary=_source.query_cell(Vector2(float(cell.x)*size,float(cell.y+1)*size),size,max_buildings_per_cell,max_roads_per_cell);result.request=request;result.total_query_ms=float(Time.get_ticks_usec()-started)/1000.0;return result
 func _poll_queries()->void:
@@ -177,7 +183,7 @@ func _clear_warm(immediate:bool=false)->void:
 	for v in _warm.values():var n:Node=(v as Dictionary).get("node");if n!=null:if immediate:n.free();else:n.queue_free()
 	_warm.clear()
 func ready_coverage_rects()->Array[Rect2]:return _active_coverage_rects()
-func debug_snapshot()->Dictionary:return {"enabled":_enabled,"ready":_ready,"presentation_visible":_presentation_visible,"active_cells":_active.size(),"warm_cells":_warm.size(),"desired_cells":_desired.size(),"ready_desired_cells":ready_coverage_rects().size(),"desired_lod_ready":desired_coverage_ready(_active,_desired),"pending_cells":_queue.size()+_workers.size(),"ready_cells":_ready_results.size(),"screen_lod":"far" if _far_screen_lod else "near","max_resident_cells":max_resident_cells,"stable_cell_size_m":cell_size_m,"source":source_metadata()}
+func debug_snapshot()->Dictionary:return {"enabled":_enabled,"streaming_enabled":_streaming_enabled,"ready":_ready,"presentation_visible":_presentation_visible,"active_cells":_active.size(),"warm_cells":_warm.size(),"desired_cells":_desired.size(),"ready_desired_cells":ready_coverage_rects().size(),"desired_lod_ready":desired_coverage_ready(_active,_desired),"pending_cells":_queue.size()+_workers.size(),"ready_cells":_ready_results.size(),"screen_lod":"far" if _far_screen_lod else "near","max_resident_cells":max_resident_cells,"stable_cell_size_m":cell_size_m,"source":source_metadata()}
 func consume_perf_metrics()->Dictionary:return {"renderer":"geodot","geodot_active_cells":_active.size(),"geodot_warm_cells":_warm.size(),"geodot_pending_cells":_queue.size()+_workers.size()}
 func apply_render_origin_shift(delta_world:Vector3)->void:
 	for v in _active.values():var n:Node3D=(v as Dictionary).get("node") as Node3D;if n!=null:n.position+=delta_world
