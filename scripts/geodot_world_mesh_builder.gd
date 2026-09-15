@@ -2,7 +2,8 @@ extends RefCounted
 class_name GeoDotWorldMeshBuilder
 
 ## Builds batched presentation meshes from provider-independent GeoDot adapter records.
-## Dependencies: BuildingMeshBuilder for BRUR's existing building height/appearance contract.
+## LOD may remove vertices/detail, but never replaces a building with a different
+## footprint or changes road width. Spatial identity stays stable across tiers.
 
 const BuildingMeshBuilderScript = preload("res://scripts/building_mesh_builder.gd")
 const RoadLodPolicyScript = preload("res://scripts/road_lod_policy.gd")
@@ -10,6 +11,7 @@ const RoadLodPolicyScript = preload("res://scripts/road_lod_policy.gd")
 const LOD_FAR := 0
 const LOD_NEAR := 1
 const CELL_EDGE_EPSILON_M := 0.001
+const FAR_SIMPLIFY_EPSILON_M := 1.5
 
 static func build_buildings(records: Array, cell_origin_absolute: Vector2, lod: int) -> ArrayMesh:
 	if lod != LOD_FAR:
@@ -20,36 +22,48 @@ static func build_buildings(records: Array, cell_origin_absolute: Vector2, lod: 
 			continue
 		var record: Dictionary = value
 		var polygons: Array = record.get("geometry", [])
-		if polygons.is_empty() or typeof(polygons[0]) != TYPE_DICTIONARY:
-			continue
-		var raw_outer: Array = (polygons[0] as Dictionary).get("outer", [])
-		if raw_outer.size() < 3:
-			continue
-		var min_x := INF
-		var min_y := INF
-		var max_x := -INF
-		var max_y := -INF
-		for point_value in raw_outer:
-			if typeof(point_value) != TYPE_ARRAY:
+		var stable_polygons: Array = []
+		for polygon_value in polygons:
+			if typeof(polygon_value) != TYPE_DICTIONARY:
 				continue
-			var pair: Array = point_value
-			if pair.size() < 2:
+			var polygon: Dictionary = polygon_value
+			var outer := _simplify_ring(polygon.get("outer", []), FAR_SIMPLIFY_EPSILON_M)
+			if outer.size() < 3:
+				outer = polygon.get("outer", []).duplicate(true)
+			if outer.size() < 3:
 				continue
-			var x := float(pair[0])
-			var y := float(pair[1])
-			min_x = minf(min_x, x)
-			min_y = minf(min_y, y)
-			max_x = maxf(max_x, x)
-			max_y = maxf(max_y, y)
-		if not is_finite(min_x) or max_x - min_x < 0.5 or max_y - min_y < 0.5:
+			# Holes are detail at far distance. The exterior remains the same physical
+			# footprint (within a bounded simplification tolerance), so LOD cannot make
+			# a building jump to an unrelated bounding box as the old POC did.
+			stable_polygons.append({"outer": outer, "holes": []})
+		if stable_polygons.is_empty():
 			continue
 		var proxy := record.duplicate(true)
-		proxy["geometry"] = [{
-			"outer": [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]],
-			"holes": [],
-		}]
+		proxy["geometry"] = stable_polygons
 		simplified.append(proxy)
 	return BuildingMeshBuilderScript.build_tile_mesh(simplified, cell_origin_absolute)
+
+static func _simplify_ring(raw: Array, epsilon_m: float) -> Array:
+	if raw.size() <= 4:
+		return raw.duplicate(true)
+	var points: Array[Vector2] = []
+	for value in raw:
+		if typeof(value) == TYPE_ARRAY and (value as Array).size() >= 2:
+			points.append(Vector2(float(value[0]), float(value[1])))
+	if points.size() <= 4:
+		return raw.duplicate(true)
+	var result: Array = []
+	for index in range(points.size()):
+		var previous := points[(index - 1 + points.size()) % points.size()]
+		var current := points[index]
+		var next := points[(index + 1) % points.size()]
+		var baseline := next - previous
+		var distance := current.distance_to(previous)
+		if baseline.length_squared() > 0.0001:
+			distance = absf(baseline.cross(current - previous)) / baseline.length()
+		if distance >= epsilon_m or current.distance_to(previous) >= epsilon_m * 3.0:
+			result.append([current.x, current.y])
+	return result if result.size() >= 3 else raw.duplicate(true)
 
 static func build_roads(records: Array, cell_origin_absolute: Vector2, lod: int) -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -63,53 +77,87 @@ static func build_roads(records: Array, cell_origin_absolute: Vector2, lod: int)
 		if points.size() < 2:
 			continue
 		var road_class := int(record.get("road_class", 5))
+		# Width is a physical presentation fact and must not change with LOD.
 		var width := RoadLodPolicyScript.road_width_m(road_class)
-		if lod == LOD_FAR:
-			width = maxf(2.0, width * 0.70)
 		var color := _road_color(road_class)
-		var stride := 2 if lod == LOD_FAR else 1
-		var sampled := PackedVector2Array()
-		for index in range(0, points.size(), stride):
-			sampled.append(points[index])
-		if sampled.is_empty() or not sampled[sampled.size() - 1].is_equal_approx(points[points.size() - 1]):
-			sampled.append(points[points.size() - 1])
+		var sampled := points if lod == LOD_NEAR else _simplify_polyline(points, 2.0)
 		var has_clip := record.has("clip_min") and record.has("clip_max")
 		var clip_min: Vector2 = record.get("clip_min", Vector2.ZERO)
 		var clip_max: Vector2 = record.get("clip_max", Vector2.ZERO)
-		for index in range(sampled.size() - 1):
-			var segment_a := sampled[index]
-			var segment_b := sampled[index + 1]
-			if has_clip:
-				var clipped := clip_segment_to_cell(segment_a, segment_b, clip_min, clip_max)
-				if clipped.size() != 2:
-					continue
-				segment_a = clipped[0]
-				segment_b = clipped[1]
-			var delta := segment_b - segment_a
-			if delta.length_squared() < 0.01:
-				continue
-			var side := Vector2(-delta.y, delta.x).normalized() * width * 0.5
-			var strip := PackedVector2Array([
-				segment_a - side,
-				segment_a + side,
-				segment_b + side,
-				segment_b - side,
-			])
-			if has_clip:
-				strip = clip_polygon_to_cell(strip, clip_min, clip_max)
-			if strip.size() < 3:
-				continue
-			for tri_index in range(1, strip.size() - 1):
-				for absolute_vertex in [strip[0], strip[tri_index], strip[tri_index + 1]]:
-					var absolute_vertex_2d: Vector2 = absolute_vertex
-					var local_vertex: Vector2 = absolute_vertex_2d - cell_origin_absolute
-					st.set_color(color)
-					st.set_normal(Vector3.UP)
-					st.add_vertex(Vector3(local_vertex.x, 0.0, -local_vertex.y))
-					emitted += 1
+		var clipped := _clip_polyline(sampled, clip_min, clip_max) if has_clip else sampled
+		if clipped.size() < 2:
+			continue
+		emitted += _emit_polyline(st, clipped, width, color, cell_origin_absolute)
 	if emitted == 0:
 		return null
 	return st.commit()
+
+static func _emit_polyline(st: SurfaceTool, points: PackedVector2Array, width: float, color: Color, origin: Vector2) -> int:
+	var count := points.size()
+	if count < 2:
+		return 0
+	var half := width * 0.5
+	var left := PackedVector2Array()
+	var right := PackedVector2Array()
+	for index in range(count):
+		var tangent: Vector2
+		if index == 0:
+			tangent = (points[1] - points[0]).normalized()
+		elif index == count - 1:
+			tangent = (points[index] - points[index - 1]).normalized()
+		else:
+			var incoming := (points[index] - points[index - 1]).normalized()
+			var outgoing := (points[index + 1] - points[index]).normalized()
+			tangent = (incoming + outgoing).normalized()
+			if tangent.length_squared() < 0.01:
+				tangent = outgoing
+		var normal := Vector2(-tangent.y, tangent.x)
+		var scale := half
+		if index > 0 and index < count - 1:
+			var incoming_normal := Vector2(-(points[index] - points[index - 1]).normalized().y, (points[index] - points[index - 1]).normalized().x)
+			var denom := maxf(0.35, absf(normal.dot(incoming_normal)))
+			scale = minf(half / denom, half * 2.0)
+		left.append(points[index] + normal * scale)
+		right.append(points[index] - normal * scale)
+	var emitted := 0
+	for index in range(count - 1):
+		for absolute_vertex in [left[index], right[index], right[index + 1], left[index], right[index + 1], left[index + 1]]:
+			var local := absolute_vertex - origin
+			st.set_color(color)
+			st.set_normal(Vector3.UP)
+			st.add_vertex(Vector3(local.x, 0.0, -local.y))
+			emitted += 1
+	return emitted
+
+static func _simplify_polyline(points: PackedVector2Array, epsilon_m: float) -> PackedVector2Array:
+	if points.size() <= 2:
+		return points
+	var result := PackedVector2Array([points[0]])
+	for index in range(1, points.size() - 1):
+		var previous := result[result.size() - 1]
+		var current := points[index]
+		var next := points[index + 1]
+		var baseline := next - previous
+		var distance := current.distance_to(previous)
+		if baseline.length_squared() > 0.0001:
+			distance = absf(baseline.cross(current - previous)) / baseline.length()
+		if distance >= epsilon_m:
+			result.append(current)
+	result.append(points[points.size() - 1])
+	return result
+
+static func _clip_polyline(points: PackedVector2Array, cell_min: Vector2, cell_max: Vector2) -> PackedVector2Array:
+	# Keep a connected ordered line through the partition. Clipping is only a
+	# storage boundary; shared endpoints remain deterministic on both sides.
+	var result := PackedVector2Array()
+	for index in range(points.size() - 1):
+		var segment := clip_segment_to_cell(points[index], points[index + 1], cell_min, cell_max)
+		if segment.size() != 2:
+			continue
+		if result.is_empty() or not result[result.size() - 1].is_equal_approx(segment[0]):
+			result.append(segment[0])
+		result.append(segment[1])
+	return result
 
 static func clip_segment_to_cell(a: Vector2, b: Vector2, cell_min: Vector2, cell_max: Vector2) -> PackedVector2Array:
 	var effective_max := _effective_cell_max(cell_min, cell_max)
