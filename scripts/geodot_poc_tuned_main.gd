@@ -4,6 +4,11 @@ const DETAIL_DISABLE_M := 60000.0
 const DETAIL_REENABLE_M := 50000.0
 const FULL_3D_GUARANTEE_M := 3000.0
 
+func _apply_tuning() -> void:
+	super._apply_tuning()
+	if geodot_world_layer != null:
+		geodot_world_layer.set("streaming_budget_ms",clampf(float(_tuning.get("streaming_ms",3.0)),0.25,12.0))
+
 func _update_distance_policy() -> void:
 	if not _geodot_ready: return
 	var distance := _camera_distance_to_focus()
