@@ -122,7 +122,7 @@ static func _emit_polyline(st: SurfaceTool, points: PackedVector2Array, width: f
 	var emitted := 0
 	for index in range(count - 1):
 		for absolute_vertex in [left[index], right[index], right[index + 1], left[index], right[index + 1], left[index + 1]]:
-			var local := absolute_vertex - origin
+			var local: Vector2 = absolute_vertex - origin
 			st.set_color(color)
 			st.set_normal(Vector3.UP)
 			st.add_vertex(Vector3(local.x, 0.0, -local.y))
