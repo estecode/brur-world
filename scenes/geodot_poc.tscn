@@ -25,3 +25,5 @@ streaming_budget_ms = 3.0
 max_publishes_per_frame = 4
 [node name="GeoDotFarLayer" type="Node3D" parent="World" index="1"]
 script = ExtResource("5_far")
+enter_distance_m = 55000.0
+exit_distance_m = 40000.0
