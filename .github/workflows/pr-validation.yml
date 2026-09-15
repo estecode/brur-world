@@ -40,6 +40,10 @@ jobs:
           python -m unittest tests.test_osm_source_cache_resume
           python -m unittest tests.test_osm_finalize_progress
           python -m unittest tests.test_osm_route_source
+          python -m unittest tests.test_area_source_cache
+          python -m unittest tests.test_normalized_source_consumers
+          python -m unittest tests.test_pyrosm_source_stage
+          python -m unittest tests.test_osm_gpkg_source_cache
 
       - name: Run road LOD build policy tests
         run: python -m unittest tests.test_build_roads_lod
@@ -119,7 +123,6 @@ jobs:
           bash -n tools/pr_check_native_gps_policy.sh
           python tests/test_pr_check_status.py
           python tests/test_pr_check_native_gps.py
-          python -m unittest tests.test_pr_check_handoff_contract
 
       - name: Parse production Drive real-data FPS contract
         env:

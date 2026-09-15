@@ -40,6 +40,9 @@ if ! git -C "$ROOT" fetch --quiet origin main:refs/remotes/origin/main; then
   exit 69
 fi
 MAIN_HEAD="$(git -C "$ROOT" rev-parse refs/remotes/origin/main)"
+WORKING_BRANCH="$(git -C "$ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || printf 'DETACHED@%s' "$(git -C "$ROOT" rev-parse --short=12 HEAD)")"
+export BRUR_PR_CHECK_MAIN_SHA="$MAIN_HEAD"
+export BRUR_PR_CHECK_WORKING_BRANCH="$WORKING_BRANCH"
 
 rm -rf "$LAUNCHER_TMP"
 if ! git -C "$ROOT" worktree add --quiet --detach "$LAUNCHER_TMP" "$MAIN_HEAD"; then
@@ -116,6 +119,6 @@ if [[ -z "${BRUR_WORLD_PBF:-}" ]]; then
   fi
 fi
 
-printf 'PR_CHECK=BOOTSTRAP main=%s mapped=%s\n' "${MAIN_HEAD:0:12}" "$ROOT"
+printf 'PR_CHECK=BOOTSTRAP main=%s mapped=%s working_branch=%s\n' "${MAIN_HEAD:0:12}" "$ROOT" "$WORKING_BRANCH"
 cd "$LAUNCHER_TMP"
 bash tools/pr_check.sh "$PR"

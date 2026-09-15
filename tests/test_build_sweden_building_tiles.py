@@ -1,24 +1,92 @@
-"""Guards the full Sweden build pipeline's production building derived-data stages."""
-
+"""Guard BMC2 production output, normalized cache composition and coastline truth."""
 from __future__ import annotations
 
+import sys
 import unittest
 from pathlib import Path
 
+from shapely.geometry import LineString, Point, Polygon
+
 ROOT = Path(__file__).resolve().parents[1]
+TOOLS = ROOT / "tools"
+if str(TOOLS) not in sys.path:
+    sys.path.insert(0, str(TOOLS))
+
+from benchmark_issue_220 import MAX_WARM_SECONDS, MINIMUM_COLD_BASELINE_SECONDS, MIN_BUILDINGS
+from build_background import WATER, background_class, solve_coastline_land
+from world_build_plan import parse_targets, required_source_routes
 
 
-class BuildSwedenBuildingTileStageTests(unittest.TestCase):
-    def test_full_build_derives_runtime_building_data_after_authoritative_buildings(self) -> None:
-        text = (ROOT / "tools" / "build_sweden.py").read_text(encoding="utf-8")
-        main = text[text.index("def main()") :]
-        buildings = main.index('build_buildings(sources["areas"], args.output)')
-        tiles = main.index("build_building_tiles(args.output)")
-        mesh_lod = main.index("build_building_mesh_pyramid(args.output)")
-        lights = main.index("build_city_light_density(args.output)")
-        self.assertLess(buildings, tiles)
-        self.assertLess(tiles, mesh_lod)
-        self.assertLess(mesh_lod, lights)
+class Tests(unittest.TestCase):
+    def test_buildings_use_shared_assembled_area_cache_then_bmc2(self):
+        text = (TOOLS / "build_sweden.py").read_text(encoding="utf-8")
+        run = text[text.index("def _run_target") : text.index("def _is_geopackage")]
+        buildings = run.index('build_buildings(sources["areas"], output)')
+        mesh = run.index("build_building_mesh_pyramid(output)")
+        self.assertLess(buildings, mesh)
+        self.assertNotIn("build_building_tiles", text)
+
+    def test_pois_and_background_share_finished_area_facts_without_reassembly(self):
+        text = (TOOLS / "build_sweden.py").read_text(encoding="utf-8")
+        self.assertIn('build_pois(sources["pois"], output, sources["areas"])', text)
+        self.assertIn('build_background_sources(sources["areas"], output)', text)
+        self.assertIn('build_buildings(sources["areas"], output)', text)
+        self.assertNotIn('sources["background_areas"]', text)
+        self.assertNotIn('sources["buildings"]', text)
+
+    def test_target_dependency_closure_is_minimal(self):
+        self.assertEqual(required_source_routes(parse_targets("routing")), ("highways",))
+        self.assertEqual(required_source_routes(parse_targets("buildings")), ("areas",))
+        self.assertEqual(required_source_routes(parse_targets("pois")), ("pois", "areas"))
+        self.assertEqual(required_source_routes(parse_targets("traffic")), ("traffic_signals", "highways"))
+        self.assertEqual(required_source_routes(parse_targets("background")), ("areas",))
+
+    def test_admin_boundary_is_not_land_truth(self):
+        self.assertIsNone(background_class({"boundary": "administrative", "admin_level": "2"}))
+
+    def test_directed_coastline_selects_land_side_not_whole_admin_domain(self):
+        domain = Polygon([(-100, -100), (100, -100), (100, 100), (-100, 100), (-100, -100)])
+        coastline = LineString([(0, -100), (0, 100)])
+        land = solve_coastline_land([domain], [coastline])
+        self.assertTrue(land.covers(Point(-50, 0)))
+        self.assertFalse(land.covers(Point(50, 0)))
+
+    def test_inland_natural_water_remains_water(self):
+        self.assertEqual(background_class({"natural": "water"}), WATER)
+
+    def test_real_sweden_benchmark_contract_uses_new_source_boundary(self):
+        self.assertEqual(MIN_BUILDINGS, 3_800_000)
+        self.assertEqual(MINIMUM_COLD_BASELINE_SECONDS, 5329.7)
+        self.assertEqual(MAX_WARM_SECONDS, 30.0)
+        benchmark = (TOOLS / "benchmark_issue_220.py").read_text(encoding="utf-8")
+        self.assertIn('parser.add_argument("gpkg"', benchmark)
+        self.assertIn('parser.add_argument("--source-pbf"', benchmark)
+        self.assertIn('"gpkg_and_pbf_hashes_recorded"', benchmark)
+        self.assertIn('"no_provider_stage_cache"', benchmark)
+        self.assertIn('"building_records_match_source"', benchmark)
+        self.assertIn('"traffic_signals_match_source"', benchmark)
+        self.assertIn('"cold_source_cache_at_least_2x_faster_than_minimum_baseline"', benchmark)
+        self.assertIn('"production_runtime_bytes_by_dataset"', benchmark)
+        self.assertIn('"shipped_runtime_pack_bytes"', benchmark)
+        self.assertIn("prepare_cached_runtime_pack", benchmark)
+        self.assertNotIn("full_world_build_under_15_minutes", benchmark)
+        self.assertNotIn("production_runtime_reduction_30pct", benchmark)
+        self.assertNotIn("--baseline-runtime-bytes", benchmark)
+
+    def test_footprint_only_is_read_only_and_does_not_build_runtime_pack(self):
+        benchmark = (TOOLS / "benchmark_issue_220.py").read_text(encoding="utf-8")
+        start = benchmark.index("if args.footprint_only:")
+        end = benchmark.index("if args.gpkg is None:", start)
+        footprint_only = benchmark[start:end]
+        self.assertIn("_print_production_footprint", footprint_only)
+        self.assertNotIn("_full_footprint_payload", footprint_only)
+        self.assertNotIn("prepare_cached_runtime_pack", footprint_only)
+
+    def test_runtime_footprint_contract_has_no_historical_hardcoded_size_baseline(self):
+        benchmark = (TOOLS / "benchmark_issue_220.py").read_text(encoding="utf-8")
+        self.assertNotIn("2.35", benchmark)
+        self.assertNotIn("3.3", benchmark)
+        self.assertNotIn("3.4", benchmark)
 
 
 if __name__ == "__main__":

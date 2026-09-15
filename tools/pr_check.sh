@@ -12,21 +12,73 @@ WORLD_DATA="$ROOT/world_data"
 [[ -f "$ROOT/tools/pr_check_status.py" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_status.py\n' >&2; exit 66; }
 [[ -f "$ROOT/tools/run_pr_owned_check.sh" ]] || { printf 'PR_CHECK=FAIL missing tools/run_pr_owned_check.sh\n' >&2; exit 66; }
 [[ -f "$ROOT/tools/pr_check_native_gps_policy.sh" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_native_gps_policy.sh\n' >&2; exit 66; }
+# shellcheck source=tools/pr_check_native_gps_policy.sh
 source "$ROOT/tools/pr_check_native_gps_policy.sh"
 
-if [[ -x "$ROOT/.venv/bin/python" ]]; then PYTHON_BIN="$ROOT/.venv/bin/python"; elif command -v python3 >/dev/null 2>&1; then PYTHON_BIN="$(command -v python3)"; elif command -v python >/dev/null 2>&1; then PYTHON_BIN="$(command -v python)"; else printf 'PR_CHECK=FAIL Python 3 not found\n' >&2; exit 69; fi
-if ! command -v gh >/dev/null 2>&1; then printf 'PR_CHECK=FAIL GitHub CLI (gh) is required so local check results cannot be lost\n' >&2; exit 69; fi
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  PYTHON_BIN="$ROOT/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="$(command -v python3)"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="$(command -v python)"
+else
+  printf 'PR_CHECK=FAIL Python 3 not found\n' >&2
+  exit 69
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  printf 'PR_CHECK=FAIL GitHub CLI (gh) is required so local check results cannot be lost\n' >&2
+  exit 69
+fi
+
 CURRENT_STAGE="resolve-head"
-if ! PR_HEAD="$("$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" resolve-head --pr "$PR")"; then printf 'PR_CHECK=FAIL unable to resolve PR head through authenticated GitHub CLI\n' >&2; exit 69; fi
+if ! PR_HEAD="$("$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" resolve-head --pr "$PR")"; then
+  printf 'PR_CHECK=FAIL unable to resolve PR head through authenticated GitHub CLI\n' >&2
+  exit 69
+fi
+
 CURRENT_STAGE="starting"
-if ! "$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" record --pr "$PR" --sha "$PR_HEAD" --state pending --stage "$CURRENT_STAGE"; then printf 'PR_CHECK=FAIL unable to persist pending local-check status to GitHub\n' >&2; exit 69; fi
+if ! "$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" record \
+  --pr "$PR" --sha "$PR_HEAD" --state pending --stage "$CURRENT_STAGE"; then
+  printf 'PR_CHECK=FAIL unable to persist pending local-check status to GitHub\n' >&2
+  exit 69
+fi
 printf 'PR_CHECK=STATUS pending pr=%s revision=%s\n' "$PR" "${PR_HEAD:0:12}"
-TMP=""; ADDED=0; NATIVE_MAIN_TMP=""; NATIVE_MAIN_ADDED=0; STATUS_ACTIVE=1; AUTOMATED_SUCCESS=0
-cleanup(){ status=$?; trap - EXIT INT TERM; if [[ "$status" -ne 0 && "$STATUS_ACTIVE" -eq 1 && "$AUTOMATED_SUCCESS" -eq 0 ]]; then "$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" record --pr "$PR" --sha "$PR_HEAD" --state failure --stage "$CURRENT_STAGE" >/dev/null 2>&1 || printf 'PR_CHECK=WARNING failed to persist failure status; pending status remains and still blocks merge\n' >&2; fi; if [[ "$ADDED" -eq 1 && -n "$TMP" ]]; then git -C "$ROOT" worktree remove --force "$TMP" >/dev/null 2>&1 || true; fi; if [[ "$NATIVE_MAIN_ADDED" -eq 1 && -n "$NATIVE_MAIN_TMP" ]]; then git -C "$ROOT" worktree remove --force "$NATIVE_MAIN_TMP" >/dev/null 2>&1 || true; fi; [[ -n "$TMP" ]] && rm -rf "$TMP"; [[ -n "$NATIVE_MAIN_TMP" ]] && rm -rf "$NATIVE_MAIN_TMP"; exit "$status"; }
+
+TMP=""
+ADDED=0
+NATIVE_MAIN_TMP=""
+NATIVE_MAIN_ADDED=0
+STATUS_ACTIVE=1
+AUTOMATED_SUCCESS=0
+cleanup() {
+  status=$?
+  trap - EXIT INT TERM
+  if [[ "$status" -ne 0 && "$STATUS_ACTIVE" -eq 1 && "$AUTOMATED_SUCCESS" -eq 0 ]]; then
+    "$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" record \
+      --pr "$PR" --sha "$PR_HEAD" --state failure --stage "$CURRENT_STAGE" >/dev/null 2>&1 || \
+      printf 'PR_CHECK=WARNING failed to persist failure status; pending status remains and still blocks merge\n' >&2
+  fi
+  if [[ "$ADDED" -eq 1 && -n "$TMP" ]]; then
+    git -C "$ROOT" worktree remove --force "$TMP" >/dev/null 2>&1 || true
+  fi
+  if [[ "$NATIVE_MAIN_ADDED" -eq 1 && -n "$NATIVE_MAIN_TMP" ]]; then
+    git -C "$ROOT" worktree remove --force "$NATIVE_MAIN_TMP" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$TMP" ]]; then
+    rm -rf "$TMP"
+  fi
+  if [[ -n "$NATIVE_MAIN_TMP" ]]; then
+    rm -rf "$NATIVE_MAIN_TMP"
+  fi
+  exit "$status"
+}
 trap cleanup EXIT INT TERM
+
 CURRENT_STAGE="local-prerequisites"
 [[ -d "$WORLD_DATA" ]] || { printf 'PR_CHECK=FAIL missing %s\n' "$WORLD_DATA" >&2; exit 66; }
 [[ -f "$WORLD_DATA/manifest.json" ]] || { printf 'PR_CHECK=FAIL missing %s/manifest.json\n' "$WORLD_DATA" >&2; exit 66; }
+
 if [[ -n "${BRUR_GODOT_BIN:-}" ]]; then
   [[ -x "$BRUR_GODOT_BIN" ]] || { printf 'PR_CHECK=FAIL BRUR_GODOT_BIN is not executable: %s\n' "$BRUR_GODOT_BIN" >&2; exit 69; }
   GODOT="$BRUR_GODOT_BIN"
@@ -35,50 +87,181 @@ elif command -v godot >/dev/null 2>&1; then
 elif [[ -x /Applications/Godot.app/Contents/MacOS/Godot ]]; then
   GODOT=/Applications/Godot.app/Contents/MacOS/Godot
 else
-  GODOT="$(find /Applications -maxdepth 3 -type f -path '/Applications/Godot*.app/Contents/MacOS/Godot' -perm -111 -print 2>/dev/null | LC_ALL=C sort -V | tail -n1)"
+  GODOT="$(find /Applications -maxdepth 4 -type f -path '/Applications/Godot*.app/Contents/MacOS/Godot' -perm -111 -print 2>/dev/null | LC_ALL=C sort -V | tail -n1)"
   [[ -n "$GODOT" ]] || { printf 'PR_CHECK=FAIL Godot executable not found; set BRUR_GODOT_BIN if Godot is installed outside /Applications\n' >&2; exit 69; }
 fi
 printf 'PR_CHECK=GODOT path=%s version=%s\n' "$GODOT" "$("$GODOT" --version | head -n1)"
-ensure_runtime_ports_free(){ "$PYTHON_BIN" - <<'PY'
+
+ensure_runtime_ports_free() {
+  "$PYTHON_BIN" - <<'PY'
 import socket
-ports=(47741,47742); occupied=[]
+ports = (47741, 47742)
+occupied = []
 for port in ports:
- s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.settimeout(.2)
- try:
-  if s.connect_ex(("127.0.0.1",port))==0: occupied.append(port)
- finally: s.close()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(0.2)
+    try:
+        if sock.connect_ex(("127.0.0.1", port)) == 0:
+            occupied.append(port)
+    finally:
+        sock.close()
 if occupied:
- print("PR_CHECK=FAIL GPS runtime port(s) already in use: "+", ".join(map(str,occupied))+". Close any existing Brur World/Godot instance or native GPS server, then run Safe Check again."); raise SystemExit(1)
+    print(
+        "PR_CHECK=FAIL GPS runtime port(s) already in use: "
+        + ", ".join(str(port) for port in occupied)
+        + ". Close any existing Brur World/Godot instance or native GPS server, then run Safe Check again."
+    )
+    raise SystemExit(1)
 PY
 }
+
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/brur-world-pr${PR}.XXXXXX")"
-routing_dataset_ready(){ [[ -f "$WORLD_DATA/routing.brg" && -f "$WORLD_DATA/routing_snap.brs" && -f "$WORLD_DATA/routing_geometry.brh" && -f "$WORLD_DATA/routing_stats.json" ]] || return 1; "$PYTHON_BIN" - "$WORLD_DATA/routing_stats.json" <<'PY'
-import json,sys
-try: report=json.load(open(sys.argv[1],encoding="utf-8"))
-except (OSError,ValueError): raise SystemExit(1)
-raise SystemExit(0 if report.get("routing_dataset_format")=="BRG1+BRS2+BRH1" else 1)
+
+routing_dataset_ready() {
+  [[ -f "$WORLD_DATA/routing.brg" ]] || return 1
+  [[ -f "$WORLD_DATA/routing_snap.brs" ]] || return 1
+  [[ -f "$WORLD_DATA/routing_geometry.brh" ]] || return 1
+  [[ -f "$WORLD_DATA/routing_stats.json" ]] || return 1
+  "$PYTHON_BIN" - "$WORLD_DATA/routing_stats.json" <<'PY'
+import json
+import sys
+try:
+    report = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if report.get("routing_dataset_format") == "BRG1+BRS2+BRH1" else 1)
 PY
 }
-native_gps_ready(){ [[ -x "$ROOT/bin/brur-gps-native" && -x "$ROOT/bin/brur-gps-route" && -x "$ROOT/bin/brur-gps-server" && -x "$ROOT/bin/brur-gps-search-server" ]]; }
-resolve_sweden_pbf(){ if [[ -n "${BRUR_WORLD_PBF:-}" ]]; then [[ -f "$BRUR_WORLD_PBF" ]] || { printf 'PR_CHECK=FAIL BRUR_WORLD_PBF does not exist\n' >&2; return 1; }; printf '%s\n' "$BRUR_WORLD_PBF"; return; fi; local data_dir candidate; data_dir="$(cd "$ROOT/.." && pwd)/data"; candidate="$(find "$data_dir" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n1)"; [[ -n "$candidate" ]] || { printf 'PR_CHECK=FAIL routing dataset is stale/invalid and no Sweden PBF was found; set BRUR_WORLD_PBF\n' >&2; return 1; }; printf '%s\n' "$candidate"; }
-rebuild_routing_dataset(){ [[ -f "$TMP/tools/build_routing_dataset.py" ]] || { printf 'PR_CHECK=FAIL PR has no routing dataset builder\n' >&2; return 1; }; local pbf; pbf="$(resolve_sweden_pbf)"; printf 'PR_CHECK=BUILD_ROUTING_DATASET pr=%s source=%s\n' "$PR" "$(basename "$pbf")"; "$PYTHON_BIN" "$TMP/tools/build_routing_dataset.py" "$pbf" --output "$WORLD_DATA"; }
-scope_decision(){ local scope="$1" decision; decision="$(printf '%s\n' "$CHANGED_FILES" | "$PYTHON_BIN" "$ROOT/tools/pr_check_scope.py" "$scope")"; case "$decision" in required|skip) printf '%s\n' "$decision";; *) printf 'PR_CHECK=FAIL invalid %s scope decision: %s\n' "$scope" "$decision" >&2; return 70;; esac; }
-CURRENT_STAGE="runtime-ports"; printf 'PR_CHECK=PREPARE pr=%s\n' "$PR"; ensure_runtime_ports_free
-CURRENT_STAGE="fetch-pr"; git -C "$ROOT" fetch --quiet origin "pull/${PR}/head"; FETCHED_HEAD="$(git -C "$ROOT" rev-parse FETCH_HEAD)"; [[ "$FETCHED_HEAD" == "$PR_HEAD" ]] || { printf 'PR_CHECK=FAIL PR head moved while preparing check; rerun the Safe Check\n' >&2; exit 75; }
-CURRENT_STAGE="fetch-main"; git -C "$ROOT" fetch --quiet origin main:refs/remotes/origin/main; MAIN_HEAD="$(git -C "$ROOT" rev-parse refs/remotes/origin/main)"; PR_BASE="$(git -C "$ROOT" merge-base "$MAIN_HEAD" "$PR_HEAD")"; CHANGED_FILES="$(git -C "$ROOT" diff --name-only "$PR_BASE" "$PR_HEAD")"; ROUTE_GEOMETRY_SCOPE="$(scope_decision route-geometry)"; NATIVE_GPS_SCOPE="$(scope_decision native-gps)"; export BRUR_PR_CHECK_CHANGED_FILES="$CHANGED_FILES"
-CURRENT_STAGE="prepare-worktree"; git -C "$ROOT" worktree add --quiet --detach "$TMP" "$PR_HEAD"; ADDED=1
-CURRENT_STAGE="routing-data"; if [[ -f "$TMP/tools/build_routing_dataset.py" ]] && ! routing_dataset_ready; then rebuild_routing_dataset; fi
-rm -rf "$TMP/world_data"; ln -s "$WORLD_DATA" "$TMP/world_data"
+
+native_gps_ready() {
+  [[ -x "$ROOT/bin/brur-gps-native" ]] || return 1
+  [[ -x "$ROOT/bin/brur-gps-route" ]] || return 1
+  [[ -x "$ROOT/bin/brur-gps-server" ]] || return 1
+  [[ -x "$ROOT/bin/brur-gps-search-server" ]] || return 1
+}
+
+resolve_sweden_pbf() {
+  if [[ -n "${BRUR_WORLD_PBF:-}" ]]; then
+    [[ -f "$BRUR_WORLD_PBF" ]] || { printf 'PR_CHECK=FAIL BRUR_WORLD_PBF does not exist\n' >&2; return 1; }
+    printf '%s\n' "$BRUR_WORLD_PBF"
+    return 0
+  fi
+  local data_dir candidate
+  data_dir="$(cd "$ROOT/.." && pwd)/data"
+  candidate="$(find "$data_dir" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n 1)"
+  if [[ -z "$candidate" ]]; then
+    printf 'PR_CHECK=FAIL routing dataset is stale/invalid and no Sweden PBF was found; set BRUR_WORLD_PBF\n' >&2
+    return 1
+  fi
+  printf '%s\n' "$candidate"
+}
+
+rebuild_routing_dataset() {
+  [[ -f "$TMP/tools/build_routing_dataset.py" ]] || { printf 'PR_CHECK=FAIL PR has no routing dataset builder\n' >&2; return 1; }
+  local pbf
+  pbf="$(resolve_sweden_pbf)"
+  printf 'PR_CHECK=BUILD_ROUTING_DATASET pr=%s source=%s\n' "$PR" "$(basename "$pbf")"
+  "$PYTHON_BIN" "$TMP/tools/build_routing_dataset.py" "$pbf" --output "$WORLD_DATA"
+}
+
+scope_decision() {
+  local scope="$1" decision
+  decision="$(printf '%s\n' "$CHANGED_FILES" | "$PYTHON_BIN" "$ROOT/tools/pr_check_scope.py" "$scope")"
+  case "$decision" in
+    required|skip) printf '%s\n' "$decision" ;;
+    *) printf 'PR_CHECK=FAIL invalid %s scope decision: %s\n' "$scope" "$decision" >&2; return 70 ;;
+  esac
+}
+
+CURRENT_STAGE="runtime-ports"
+printf 'PR_CHECK=PREPARE pr=%s\n' "$PR"
+ensure_runtime_ports_free
+
+CURRENT_STAGE="fetch-pr"
+git -C "$ROOT" fetch --quiet origin "pull/${PR}/head"
+FETCHED_HEAD="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
+if [[ "$FETCHED_HEAD" != "$PR_HEAD" ]]; then
+  printf 'PR_CHECK=FAIL PR head moved while preparing check; rerun the Safe Check\n' >&2
+  exit 75
+fi
+
+CURRENT_STAGE="fetch-main"
+git -C "$ROOT" fetch --quiet origin main:refs/remotes/origin/main
+MAIN_HEAD="$(git -C "$ROOT" rev-parse refs/remotes/origin/main)"
+PR_BASE="$(git -C "$ROOT" merge-base "$MAIN_HEAD" "$PR_HEAD")"
+CHANGED_FILES="$(git -C "$ROOT" diff --name-only "$PR_BASE" "$PR_HEAD")"
+ROUTE_GEOMETRY_SCOPE="$(scope_decision route-geometry)"
+NATIVE_GPS_SCOPE="$(scope_decision native-gps)"
+export BRUR_PR_CHECK_CHANGED_FILES="$CHANGED_FILES"
+
+CURRENT_STAGE="prepare-worktree"
+git -C "$ROOT" worktree add --quiet --detach "$TMP" "$PR_HEAD"
+ADDED=1
+
+CURRENT_STAGE="routing-data"
+if [[ -f "$TMP/tools/build_routing_dataset.py" ]] && ! routing_dataset_ready; then
+  rebuild_routing_dataset
+fi
+
+rm -rf "$TMP/world_data"
+ln -s "$WORLD_DATA" "$TMP/world_data"
+
 CURRENT_STAGE="native-gps"
 if [[ -f "$TMP/tools/build_native_gps.sh" ]]; then
- if native_gps_ready; then NATIVE_GPS_REUSABLE=yes; else NATIVE_GPS_REUSABLE=no; fi; NATIVE_GPS_SOURCE="$(select_native_gps_source "$NATIVE_GPS_SCOPE" "$NATIVE_GPS_REUSABLE")"
- case "$NATIVE_GPS_SOURCE" in
- pr) printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s reason=relevant-changes source=pr revision=%s\n' "$PR" "${PR_HEAD:0:12}"; bash "$TMP/tools/build_native_gps.sh";;
- reuse) rm -rf "$TMP/bin"; ln -s "$ROOT/bin" "$TMP/bin"; printf 'PR_CHECK=SKIP_NATIVE_GPS_BUILD pr=%s reason=reuse-existing-binaries\n' "$PR";;
- main) NATIVE_MAIN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/brur-world-main-native.XXXXXX")"; git -C "$ROOT" worktree add --quiet --detach "$NATIVE_MAIN_TMP" "$MAIN_HEAD"; NATIVE_MAIN_ADDED=1; [[ -f "$NATIVE_MAIN_TMP/tools/build_native_gps.sh" ]] || { printf 'PR_CHECK=FAIL current main has no native GPS builder\n' >&2; exit 66; }; printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s reason=missing-existing-binaries source=current-main revision=%s\n' "$PR" "${MAIN_HEAD:0:12}"; bash "$NATIVE_MAIN_TMP/tools/build_native_gps.sh"; rm -rf "$TMP/bin"; ln -s "$NATIVE_MAIN_TMP/bin" "$TMP/bin";;
- *) printf 'PR_CHECK=FAIL invalid native GPS source: %s\n' "$NATIVE_GPS_SOURCE" >&2; exit 70;; esac
+  if native_gps_ready; then
+    NATIVE_GPS_REUSABLE=yes
+  else
+    NATIVE_GPS_REUSABLE=no
+  fi
+  NATIVE_GPS_SOURCE="$(select_native_gps_source "$NATIVE_GPS_SCOPE" "$NATIVE_GPS_REUSABLE")"
+  case "$NATIVE_GPS_SOURCE" in
+    pr)
+      printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s reason=relevant-changes source=pr revision=%s\n' "$PR" "${PR_HEAD:0:12}"
+      bash "$TMP/tools/build_native_gps.sh"
+      ;;
+    reuse)
+      rm -rf "$TMP/bin"
+      ln -s "$ROOT/bin" "$TMP/bin"
+      printf 'PR_CHECK=SKIP_NATIVE_GPS_BUILD pr=%s reason=reuse-existing-binaries\n' "$PR"
+      ;;
+    main)
+      NATIVE_MAIN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/brur-world-main-native.XXXXXX")"
+      git -C "$ROOT" worktree add --quiet --detach "$NATIVE_MAIN_TMP" "$MAIN_HEAD"
+      NATIVE_MAIN_ADDED=1
+      [[ -f "$NATIVE_MAIN_TMP/tools/build_native_gps.sh" ]] || { printf 'PR_CHECK=FAIL current main has no native GPS builder\n' >&2; exit 66; }
+      printf 'PR_CHECK=BUILD_NATIVE_GPS pr=%s reason=missing-existing-binaries source=current-main revision=%s\n' "$PR" "${MAIN_HEAD:0:12}"
+      bash "$NATIVE_MAIN_TMP/tools/build_native_gps.sh"
+      rm -rf "$TMP/bin"
+      ln -s "$NATIVE_MAIN_TMP/bin" "$TMP/bin"
+      ;;
+    *)
+      printf 'PR_CHECK=FAIL invalid native GPS source: %s\n' "$NATIVE_GPS_SOURCE" >&2
+      exit 70
+      ;;
+  esac
 fi
+
 CURRENT_STAGE="route-geometry"
-if [[ -f "$TMP/tools/check_route_geometry_dataset.py" ]]; then if [[ "$ROUTE_GEOMETRY_SCOPE" == "required" ]]; then printf 'PR_CHECK=CHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"; if ! "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"; then printf 'PR_CHECK=ROUTE_GEOMETRY_INVALID pr=%s rebuilding source-aligned routing dataset\n' "$PR"; rebuild_routing_dataset; printf 'PR_CHECK=RECHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"; "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"; fi; else printf 'PR_CHECK=SKIP_ROUTE_GEOMETRY_DATASET pr=%s reason=unrelated-changes\n' "$PR"; fi; fi
-CURRENT_STAGE="pr-owned-objective-checks"; bash "$ROOT/tools/run_pr_owned_check.sh" "$TMP" "$PR" "$WORLD_DATA" "$PYTHON_BIN" "$GODOT"
-CURRENT_STAGE="objective-checks-complete"; "$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" record --pr "$PR" --sha "$PR_HEAD" --state success --stage "$CURRENT_STAGE"; AUTOMATED_SUCCESS=1; printf 'PR_CHECK=STATUS success pr=%s revision=%s\n' "$PR" "${PR_HEAD:0:12}"; printf 'PR_CHECK=DONE pr=%s revision=%s objective_checks=success\n' "$PR" "${PR_HEAD:0:12}"
+if [[ -f "$TMP/tools/check_route_geometry_dataset.py" ]]; then
+  if [[ "$ROUTE_GEOMETRY_SCOPE" == "required" ]]; then
+    printf 'PR_CHECK=CHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
+    if ! "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"; then
+      printf 'PR_CHECK=ROUTE_GEOMETRY_INVALID pr=%s rebuilding source-aligned routing dataset\n' "$PR"
+      rebuild_routing_dataset
+      printf 'PR_CHECK=RECHECK_ROUTE_GEOMETRY_DATASET pr=%s\n' "$PR"
+      "$PYTHON_BIN" "$TMP/tools/check_route_geometry_dataset.py" "$WORLD_DATA"
+    fi
+  else
+    printf 'PR_CHECK=SKIP_ROUTE_GEOMETRY_DATASET pr=%s reason=unrelated-changes\n' "$PR"
+  fi
+fi
+
+CURRENT_STAGE="pr-owned-objective-checks"
+bash "$ROOT/tools/run_pr_owned_check.sh" "$TMP" "$PR" "$WORLD_DATA" "$PYTHON_BIN" "$GODOT"
+
+CURRENT_STAGE="objective-checks-complete"
+"$PYTHON_BIN" "$ROOT/tools/pr_check_status.py" record \
+  --pr "$PR" --sha "$PR_HEAD" --state success --stage "$CURRENT_STAGE"
+AUTOMATED_SUCCESS=1
+printf 'PR_CHECK=STATUS success pr=%s revision=%s\n' "$PR" "${PR_HEAD:0:12}"
+printf 'PR_CHECK=DONE pr=%s revision=%s objective_checks=success\n' "$PR" "${PR_HEAD:0:12}"
