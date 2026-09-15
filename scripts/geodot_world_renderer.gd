@@ -13,11 +13,12 @@ const StreamingPolicy = preload("res://scripts/geodot_streaming_policy.gd")
 @export var viewport_margin_cells := 1
 @export var max_resident_cells := 169
 @export var max_pending_cells := 96
-@export var max_query_cache_cells := 192
+@export var max_query_cache_cells := 24
 @export var max_buildings_per_cell := 3000
 @export var max_roads_per_cell := 2500
 @export var refresh_interval_s := 0.20
 @export var far_lod_altitude_m := 2500.0
+@export var query_workers := 4
 
 var _coordinates = null
 var _camera_rig: Node = null
@@ -31,8 +32,7 @@ var _queue: Array[Dictionary] = []
 var _queued: Dictionary = {}
 var _query_cache: Dictionary = {}
 var _query_cache_order: Array[String] = []
-var _query_thread: Thread = null
-var _query_key := ""
+var _workers: Array[Dictionary] = []
 var _generation := 0
 var _building_material: StandardMaterial3D = null
 var _road_material: StandardMaterial3D = null
@@ -58,11 +58,11 @@ func setup(world_coordinates, camera_rig: Node, gpkg_path: String) -> Dictionary
 	return opened
 
 func _exit_tree() -> void:
-	_shutdown_query_worker(); _clear_active(true); _clear_query_cache(); _release_render_resources(); _release_source()
+	_shutdown_query_workers(); _clear_active(true); _clear_query_cache(); _release_render_resources(); _release_source()
 
 func shutdown() -> void:
 	_enabled = false; _ready = false; set_process(false); _generation += 1
-	_queue.clear(); _queued.clear(); _desired.clear(); _shutdown_query_worker(); _clear_active(true); _clear_query_cache(); _release_render_resources(); _release_source()
+	_queue.clear(); _queued.clear(); _desired.clear(); _shutdown_query_workers(); _clear_active(true); _clear_query_cache(); _release_render_resources(); _release_source()
 	_coordinates = null; _camera_rig = null
 
 func _release_render_resources() -> void:
@@ -73,9 +73,11 @@ func _release_source() -> void:
 		if _source.has_method("close"): _source.close()
 		_source = null
 
-func _shutdown_query_worker() -> void:
-	if _query_thread != null and _query_thread.is_started(): _query_thread.wait_to_finish()
-	_query_thread = null; _query_key = ""
+func _shutdown_query_workers() -> void:
+	for worker in _workers:
+		var thread: Thread = worker.get("thread") as Thread
+		if thread != null and thread.is_started(): thread.wait_to_finish()
+	_workers.clear()
 
 func set_enabled(value: bool) -> void:
 	_enabled = value and _ready; set_process(_enabled)
@@ -89,10 +91,10 @@ func source_metadata() -> Dictionary: return _source.metadata() if _source != nu
 
 func _process(delta: float) -> void:
 	if not _enabled: return
-	_poll_query(); _refresh_accum += delta
+	_poll_queries(); _refresh_accum += delta
 	if _refresh_accum >= refresh_interval_s:
 		_refresh_accum = 0.0; _refresh_desired(false)
-	_start_query_if_needed()
+	_start_queries_if_needed()
 
 static func coverage_radius_for_altitude(altitude_m: float, cell_size: float, base_radius: int, max_radius: int, altitude_factor: float) -> int:
 	var safe_cell_size := maxf(1.0, cell_size)
@@ -111,22 +113,18 @@ static func coverage_cells_for_bounds(bounds: Rect2, cell_size: float, margin_ce
 	var candidates: Array[Dictionary] = []
 	for cell_y in range(min_cell.y, max_cell.y + 1):
 		for cell_x in range(min_cell.x, max_cell.x + 1):
-			var cell := Vector2i(cell_x, cell_y)
-			var delta := cell - focus_cell
+			var cell := Vector2i(cell_x, cell_y); var delta := cell - focus_cell
 			candidates.append({"cell": cell, "distance": maxi(absi(delta.x), absi(delta.y)), "distance_sq": delta.length_squared()})
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		var a_distance := int(a["distance"]); var b_distance := int(b["distance"])
-		if a_distance != b_distance: return a_distance < b_distance
-		var a_sq := int(a["distance_sq"]); var b_sq := int(b["distance_sq"])
-		if a_sq != b_sq: return a_sq < b_sq
-		var a_cell: Vector2i = a["cell"]; var b_cell: Vector2i = b["cell"]
-		return a_cell.y < b_cell.y or (a_cell.y == b_cell.y and a_cell.x < b_cell.x)
-	)
+		var ad := int(a["distance"]); var bd := int(b["distance"])
+		if ad != bd: return ad < bd
+		var asq := int(a["distance_sq"]); var bsq := int(b["distance_sq"])
+		if asq != bsq: return asq < bsq
+		var ac: Vector2i = a["cell"]; var bc: Vector2i = b["cell"]
+		return ac.y < bc.y or (ac.y == bc.y and ac.x < bc.x))
 	var result: Array[Vector2i] = []
 	var limit := mini(maxi(1, max_cells), candidates.size())
-	for index in range(limit):
-		var cell: Vector2i = candidates[index]["cell"]
-		result.append(cell)
+	for index in range(limit): result.append(candidates[index]["cell"])
 	return result
 
 func _view_world_points(focus_world: Vector3) -> Array[Vector3]:
@@ -139,14 +137,12 @@ func _view_world_points(focus_world: Vector3) -> Array[Vector3]:
 	if not points.is_empty() and _camera_rig.has_method("is_driving_view") and bool(_camera_rig.call("is_driving_view")):
 		var radius_m := 0.0
 		if _camera_rig.has_method("get_streaming_ground_radius_m"): radius_m = maxf(0.0, float(_camera_rig.call("get_streaming_ground_radius_m")))
-		if radius_m > 0.0:
-			points = [focus_world + Vector3(-radius_m, 0.0, -radius_m), focus_world + Vector3(radius_m, 0.0, -radius_m), focus_world + Vector3(radius_m, 0.0, radius_m), focus_world + Vector3(-radius_m, 0.0, radius_m)]
+		if radius_m > 0.0: points = [focus_world + Vector3(-radius_m, 0.0, -radius_m), focus_world + Vector3(radius_m, 0.0, -radius_m), focus_world + Vector3(radius_m, 0.0, radius_m), focus_world + Vector3(-radius_m, 0.0, radius_m)]
 	if points.is_empty(): points.append(focus_world)
 	return points
 
 func _view_absolute_bounds(focus_world: Vector3) -> Rect2:
-	var points := _view_world_points(focus_world)
-	var first: Vector2 = _coordinates.world_to_absolute(points[0])
+	var points := _view_world_points(focus_world); var first: Vector2 = _coordinates.world_to_absolute(points[0])
 	var min_x := first.x; var max_x := first.x; var min_y := first.y; var max_y := first.y
 	for index in range(1, points.size()):
 		var absolute: Vector2 = _coordinates.world_to_absolute(points[index])
@@ -155,11 +151,9 @@ func _view_absolute_bounds(focus_world: Vector3) -> Rect2:
 
 func _refresh_desired(force: bool) -> void:
 	if _camera_rig == null or not _camera_rig.has_method("get_focus_world"): return
-	var focus_world: Vector3 = _camera_rig.call("get_focus_world")
-	var focus_abs: Vector2 = _coordinates.world_to_absolute(focus_world)
+	var focus_world: Vector3 = _camera_rig.call("get_focus_world"); var focus_abs: Vector2 = _coordinates.world_to_absolute(focus_world)
 	var altitude := float(_camera_rig.call("get_altitude")) if _camera_rig.has_method("get_altitude") else 0.0
-	var query_cell_size := cell_size_m
-	var cells: Array[Vector2i]
+	var query_cell_size := cell_size_m; var cells: Array[Vector2i]
 	if _camera_rig.has_method("get_ground_view_corners"):
 		var view_bounds := _view_absolute_bounds(focus_world)
 		query_cell_size = coverage_cell_size_for_bounds(view_bounds, cell_size_m, viewport_margin_cells, max_resident_cells)
@@ -169,28 +163,26 @@ func _refresh_desired(force: bool) -> void:
 		var radius := coverage_radius_for_altitude(altitude, query_cell_size, far_radius_cells, max_view_radius_cells, coverage_altitude_factor)
 		var fallback_bounds := Rect2(Vector2(center.x - radius, center.y - radius) * query_cell_size, Vector2((radius * 2 + 1) * query_cell_size, (radius * 2 + 1) * query_cell_size))
 		cells = coverage_cells_for_bounds(fallback_bounds, query_cell_size, 0, max_resident_cells, focus_abs)
-	var next_desired: Dictionary = {}; var candidates: Array[Dictionary] = []
-	var focus_cell := Vector2i(floori(focus_abs.x / query_cell_size), floori(focus_abs.y / query_cell_size))
+	var next_desired: Dictionary = {}; var candidates: Array[Dictionary] = []; var focus_cell := Vector2i(floori(focus_abs.x / query_cell_size), floori(focus_abs.y / query_cell_size))
 	for cell in cells:
 		var delta := cell - focus_cell; var distance_cells := maxi(absi(delta.x), absi(delta.y)); var lod := MeshBuilder.LOD_NEAR
 		if distance_cells > near_radius_cells or altitude >= far_lod_altitude_m: lod = MeshBuilder.LOD_FAR
-		var key := _cell_key(cell, query_cell_size)
-		var request := {"key": key, "cell": cell, "cell_size_m": query_cell_size, "lod": lod, "distance": distance_cells}; candidates.append(request); next_desired[key] = lod
+		var key := _cell_key(cell, query_cell_size); var request := {"key": key, "cell": cell, "cell_size_m": query_cell_size, "lod": lod, "distance": distance_cells}
+		candidates.append(request); next_desired[key] = lod
 	var changed := force or next_desired.hash() != _desired.hash(); _desired = next_desired
 	if changed:
 		_generation += 1; _queue.clear(); _queued.clear()
 		if desired_coverage_ready(_active, _desired): _retire_stale_active_cells()
 	for request in candidates:
-		var key := String(request.get("key", "")); var wanted_lod := int(_desired[key])
+		var key := String(request["key"]); var wanted_lod := int(_desired[key])
 		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == wanted_lod: continue
 		_enqueue_request(request)
-	_trim_queue(); _start_query_if_needed()
+	_trim_queue(); _start_queries_if_needed()
 
 static func desired_coverage_ready(active: Dictionary, desired: Dictionary) -> bool:
 	for value in desired.keys():
 		var key := String(value)
-		if not active.has(key): return false
-		if int((active[key] as Dictionary).get("lod", -1)) != int(desired[key]): return false
+		if not active.has(key) or int((active[key] as Dictionary).get("lod", -1)) != int(desired[key]): return false
 	return true
 
 func _retire_stale_active_cells() -> void:
@@ -201,25 +193,27 @@ func _retire_stale_active_cells() -> void:
 	for key in stale_keys: _evict_active_key(key)
 
 func _enqueue_request(request: Dictionary) -> void:
-	var key := String(request.get("key", "")); var lod := int(request.get("lod", -1)); var queue_id := "%s:%d" % [key, lod]
-	if _queued.has(queue_id) or _query_key == queue_id: return
-	request["queue_id"] = queue_id; request["generation"] = _generation
-	_queue.append(request); _queued[queue_id] = true
+	var key := String(request["key"]); var lod := int(request["lod"]); var queue_id := "%s:%d" % [key, lod]
+	if _queued.has(queue_id) or _worker_has_queue_id(queue_id): return
+	request["queue_id"] = queue_id; request["generation"] = _generation; _queue.append(request); _queued[queue_id] = true
+
+func _worker_has_queue_id(queue_id: String) -> bool:
+	for worker in _workers:
+		if String(worker.get("queue_id", "")) == queue_id: return true
+	return false
 
 func _trim_queue() -> void:
 	while _queue.size() > maxi(1, max_pending_cells):
 		var dropped: Dictionary = _queue.pop_back(); _queued.erase(String(dropped.get("queue_id", "")))
 
-func _start_query_if_needed() -> void:
-	if _query_thread != null or _queue.is_empty() or not _enabled: return
-	var request: Dictionary = _queue.pop_front(); var queue_id := String(request.get("queue_id", "")); _queued.erase(queue_id); _query_key = queue_id
-	var key := String(request.get("key", ""))
-	if _query_cache.has(key):
-		var cached: Dictionary = (_query_cache[key] as Dictionary).duplicate(true); cached["request"] = request; _perf_cache_hits += 1; _query_key = ""
-		_publish_query_result(cached); _start_query_if_needed(); return
-	_query_thread = Thread.new(); var error := _query_thread.start(Callable(self, "_query_worker").bind(request))
-	if error != OK:
-		push_error("GeoDot cell query thread failed to start: %s" % error_string(error)); _query_thread = null; _query_key = ""
+func _start_queries_if_needed() -> void:
+	while _workers.size() < maxi(1, query_workers) and not _queue.is_empty() and _enabled:
+		var request: Dictionary = _queue.pop_front(); var queue_id := String(request["queue_id"]); _queued.erase(queue_id); var key := String(request["key"])
+		if _query_cache.has(key):
+			var cached: Dictionary = (_query_cache[key] as Dictionary).duplicate(true); cached["request"] = request; _perf_cache_hits += 1; _publish_query_result(cached); continue
+		var thread := Thread.new(); var error := thread.start(Callable(self, "_query_worker").bind(request))
+		if error != OK: push_error("GeoDot cell query thread failed to start: %s" % error_string(error)); continue
+		_workers.append({"thread": thread, "queue_id": queue_id})
 
 func _query_worker(request: Dictionary) -> Dictionary:
 	var started := Time.get_ticks_usec(); var cell: Vector2i = request["cell"]; var request_cell_size := float(request.get("cell_size_m", cell_size_m))
@@ -228,11 +222,18 @@ func _query_worker(request: Dictionary) -> Dictionary:
 	result["request"] = request; result["total_query_ms"] = float(Time.get_ticks_usec() - started) / 1000.0
 	return result
 
-func _poll_query() -> void:
-	if _query_thread == null or _query_thread.is_alive(): return
-	var value: Variant = _query_thread.wait_to_finish(); _query_thread = null; _query_key = ""
-	if typeof(value) != TYPE_DICTIONARY: push_error("GeoDot cell query returned invalid data"); return
-	_publish_query_result(value as Dictionary)
+func _poll_queries() -> void:
+	var finished: Array[int] = []
+	for index in range(_workers.size()):
+		var thread: Thread = _workers[index].get("thread") as Thread
+		if thread == null or not thread.is_alive(): finished.append(index)
+	for reverse_index in range(finished.size() - 1, -1, -1):
+		var index := finished[reverse_index]; var worker: Dictionary = _workers[index]; _workers.remove_at(index)
+		var thread: Thread = worker.get("thread") as Thread
+		if thread == null: continue
+		var value: Variant = thread.wait_to_finish()
+		if typeof(value) != TYPE_DICTIONARY: push_error("GeoDot cell query returned invalid data"); continue
+		_publish_query_result(value as Dictionary)
 
 func _publish_query_result(result: Dictionary) -> void:
 	if result.get("ok", false) != true: push_error("GeoDot cell query failed: %s" % String(result.get("error", "unknown"))); return
@@ -243,6 +244,8 @@ func _publish_query_result(result: Dictionary) -> void:
 	_perf_building_features += int(result.get("building_features", 0)); _perf_road_features += int(result.get("road_features", 0)); _publish_cell(request, result)
 
 func _cache_query_result(key: String, result: Dictionary) -> void:
+	# Query results contain full provider-independent polygon arrays and dominate memory.
+	# Keep only a small near-term reuse window; active meshes are the resident presentation.
 	var cached: Dictionary = result.duplicate(true); cached.erase("request"); _query_cache[key] = cached; _query_cache_order.erase(key); _query_cache_order.append(key)
 	while _query_cache_order.size() > maxi(1, max_query_cache_cells):
 		var evicted: String = _query_cache_order.pop_front(); _query_cache.erase(evicted)
@@ -307,10 +310,10 @@ func _stale_active_count() -> int:
 	return count
 
 func debug_snapshot() -> Dictionary:
-	return {"enabled": _enabled, "ready": _ready, "active_cells": _active.size(), "desired_cells": _desired.size(), "stale_cells": _stale_active_count(), "pending_cells": _queue.size() + (1 if _query_thread != null else 0), "query_cache_cells": _query_cache.size(), "max_resident_cells": max_resident_cells, "max_pending_cells": max_pending_cells, "max_query_cache_cells": max_query_cache_cells, "source": source_metadata()}
+	return {"enabled": _enabled, "ready": _ready, "active_cells": _active.size(), "desired_cells": _desired.size(), "stale_cells": _stale_active_count(), "pending_cells": _queue.size() + _workers.size(), "query_workers": _workers.size(), "query_cache_cells": _query_cache.size(), "max_resident_cells": max_resident_cells, "max_pending_cells": max_pending_cells, "max_query_cache_cells": max_query_cache_cells, "source": source_metadata()}
 
 func consume_perf_metrics() -> Dictionary:
-	var result := {"geodot_query_ms": _perf_query_ms, "geodot_query_max_ms": _perf_query_max_ms, "geodot_build_ms": _perf_build_ms, "geodot_build_max_ms": _perf_build_max_ms, "geodot_queries": _perf_queries, "geodot_cache_hits": _perf_cache_hits, "geodot_publishes": _perf_publishes, "geodot_building_features": _perf_building_features, "geodot_road_features": _perf_road_features, "geodot_active_cells": _active.size(), "geodot_stale_cells": _stale_active_count(), "geodot_pending_cells": _queue.size() + (1 if _query_thread != null else 0), "geodot_query_cache_cells": _query_cache.size()}
+	var result := {"geodot_query_ms": _perf_query_ms, "geodot_query_max_ms": _perf_query_max_ms, "geodot_build_ms": _perf_build_ms, "geodot_build_max_ms": _perf_build_max_ms, "geodot_queries": _perf_queries, "geodot_cache_hits": _perf_cache_hits, "geodot_publishes": _perf_publishes, "geodot_building_features": _perf_building_features, "geodot_road_features": _perf_road_features, "geodot_active_cells": _active.size(), "geodot_stale_cells": _stale_active_count(), "geodot_pending_cells": _queue.size() + _workers.size(), "geodot_query_cache_cells": _query_cache.size()}
 	_perf_query_ms = 0.0; _perf_query_max_ms = 0.0; _perf_build_ms = 0.0; _perf_build_max_ms = 0.0; _perf_queries = 0; _perf_cache_hits = 0; _perf_publishes = 0; _perf_building_features = 0; _perf_road_features = 0
 	return result
 
