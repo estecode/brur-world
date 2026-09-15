@@ -87,7 +87,7 @@ elif command -v godot >/dev/null 2>&1; then
 elif [[ -x /Applications/Godot.app/Contents/MacOS/Godot ]]; then
   GODOT=/Applications/Godot.app/Contents/MacOS/Godot
 else
-  GODOT="$(find /Applications -maxdepth 3 -type f -path '/Applications/Godot*.app/Contents/MacOS/Godot' -perm -111 -print 2>/dev/null | LC_ALL=C sort -V | tail -n1)"
+  GODOT="$(find /Applications -maxdepth 4 -type f -path '/Applications/Godot*.app/Contents/MacOS/Godot' -perm -111 -print 2>/dev/null | LC_ALL=C sort -V | tail -n1)"
   [[ -n "$GODOT" ]] || { printf 'PR_CHECK=FAIL Godot executable not found; set BRUR_GODOT_BIN if Godot is installed outside /Applications\n' >&2; exit 69; }
 fi
 printf 'PR_CHECK=GODOT path=%s version=%s\n' "$GODOT" "$("$GODOT" --version | head -n1)"
