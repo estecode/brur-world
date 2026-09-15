@@ -92,9 +92,15 @@ func _refresh_desired(force:bool)->void:
 		if _restore_warm(key,lod):continue
 		_enqueue_request(request)
 	_trim_queue();_trim_warm();_start_queries_if_needed()
+func _active_coverage_rects()->Array[Rect2]:
+	var out:Array[Rect2]=[]
+	for key in _desired.keys():
+		if not _active.has(key):continue
+		var e:Dictionary=_active[key];var o:Vector2=e.get("origin_abs",Vector2.ZERO);var s:=float(e.get("cell_size_m",0.0));if s>0.0:out.append(Rect2(o,Vector2(s,s)))
+	return out
 static func desired_coverage_ready(active:Dictionary,desired:Dictionary)->bool:
 	if desired.is_empty():return false
-	for v in desired.keys():var k:=String(v);if not active.has(k) or int((active[k] as Dictionary).get("lod",-1))!=int(desired[k]):return false
+	for v in desired.keys():var k:=String(v);if not active.has(k):return false
 	return true
 func _enqueue_request(request:Dictionary)->void:
 	var id:="%s:%d"%[String(request.key),int(request.lod)];if _queued.has(id) or _worker_has_queue_id(id):return
@@ -170,14 +176,8 @@ func _clear_active(immediate:bool=false)->void:
 func _clear_warm(immediate:bool=false)->void:
 	for v in _warm.values():var n:Node=(v as Dictionary).get("node");if n!=null:if immediate:n.free();else:n.queue_free()
 	_warm.clear()
-func ready_coverage_rects()->Array[Rect2]:
-	var out:Array[Rect2]=[]
-	for key in _desired.keys():
-		if not _active.has(key):continue
-		var e:Dictionary=_active[key];if int(e.get("lod",-1))!=int(_desired[key]):continue
-		var o:Vector2=e.get("origin_abs",Vector2.ZERO);var s:=float(e.get("cell_size_m",0.0));if s>0.0:out.append(Rect2(o,Vector2(s,s)))
-	return out
-func debug_snapshot()->Dictionary:return {"enabled":_enabled,"ready":_ready,"presentation_visible":_presentation_visible,"active_cells":_active.size(),"warm_cells":_warm.size(),"desired_cells":_desired.size(),"ready_desired_cells":ready_coverage_rects().size(),"pending_cells":_queue.size()+_workers.size(),"ready_cells":_ready_results.size(),"screen_lod":"far" if _far_screen_lod else "near","max_resident_cells":max_resident_cells,"stable_cell_size_m":cell_size_m,"source":source_metadata()}
+func ready_coverage_rects()->Array[Rect2]:return _active_coverage_rects()
+func debug_snapshot()->Dictionary:return {"enabled":_enabled,"ready":_ready,"presentation_visible":_presentation_visible,"active_cells":_active.size(),"warm_cells":_warm.size(),"desired_cells":_desired.size(),"ready_desired_cells":ready_coverage_rects().size(),"desired_lod_ready":desired_coverage_ready(_active,_desired),"pending_cells":_queue.size()+_workers.size(),"ready_cells":_ready_results.size(),"screen_lod":"far" if _far_screen_lod else "near","max_resident_cells":max_resident_cells,"stable_cell_size_m":cell_size_m,"source":source_metadata()}
 func consume_perf_metrics()->Dictionary:return {"renderer":"geodot","geodot_active_cells":_active.size(),"geodot_warm_cells":_warm.size(),"geodot_pending_cells":_queue.size()+_workers.size()}
 func apply_render_origin_shift(delta_world:Vector3)->void:
 	for v in _active.values():var n:Node3D=(v as Dictionary).get("node") as Node3D;if n!=null:n.position+=delta_world
