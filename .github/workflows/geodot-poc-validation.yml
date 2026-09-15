@@ -42,6 +42,7 @@ jobs:
       - name: Run GeoDot renderer contracts
         run: |
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_renderer_contracts.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_view_coverage.gd
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_cell_geometry.gd
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_lod_continuity.gd
           timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_composition_contract.gd
