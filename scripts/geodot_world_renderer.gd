@@ -153,7 +153,7 @@ func _park_warm(key:String)->void:
 	if node!=null:node.visible=false
 	entry["warm_tick"]=Time.get_ticks_msec();var wk:=_warm_key(key,int(entry.get("lod",-1)))
 	if _warm.has(wk):var old:Node=(_warm[wk] as Dictionary).get("node") as Node;if old!=null:old.free()
-	_warm[wk]=entry;_trim_warm()
+	_warm[wk]=entry
 func _restore_warm(key:String,lod:int)->bool:
 	var wk:=_warm_key(key,lod);if not _warm.has(wk):return false
 	if _active.has(key):_park_warm(key)
@@ -171,6 +171,7 @@ func _trim_active_to_budget()->void:
 		var stale:=choose_stale_eviction_key(_active,_desired,"")
 		if stale.is_empty():break
 		_park_warm(stale)
+	_trim_warm()
 func evict_warm_for_pressure(target_bytes:int=0)->void:
 	var _unused:=target_bytes
 	_clear_warm(true)
