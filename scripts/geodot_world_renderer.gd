@@ -1,8 +1,8 @@
 extends Node3D
 class_name GeoDotWorldRenderer
 
-const GeoDotWorldSourceScript = preload("res://scripts/geodot_world_source.gd")
-const GeoDotWorldMeshBuilderScript = preload("res://scripts/geodot_world_mesh_builder.gd")
+const Source = preload("res://scripts/geodot_world_source.gd")
+const MeshBuilder = preload("res://scripts/geodot_world_mesh_builder.gd")
 
 @export var cell_size_m := 2000.0
 @export var near_radius_cells := 1
@@ -49,11 +49,9 @@ func setup(world_coordinates, camera_rig: Node, gpkg_path: String) -> Dictionary
 	assert(camera_rig != null, "GeoDotWorldRenderer requires CameraRig")
 	_coordinates = world_coordinates
 	_camera_rig = camera_rig
-	_source = GeoDotWorldSourceScript.new()
+	_source = Source.new()
 	var opened: Dictionary = _source.open_dataset(gpkg_path)
 	if opened.get("ok", false) != true:
-		_ready = false
-		_enabled = false
 		return opened
 	_setup_materials()
 	_ready = true
@@ -72,9 +70,7 @@ func shutdown() -> void:
 	_ready = false
 	set_process(false)
 	_generation += 1
-	_queue.clear()
-	_queued.clear()
-	_desired.clear()
+	_queue.clear(); _queued.clear(); _desired.clear()
 	_shutdown_query_worker()
 	_clear_active(true)
 	_clear_query_cache()
@@ -88,15 +84,12 @@ func _release_render_resources() -> void:
 	_road_material = null
 
 func _release_source() -> void:
-	if _source == null:
-		return
-	if _source.has_method("close"):
-		_source.close()
-	_source = null
+	if _source != null:
+		if _source.has_method("close"): _source.close()
+		_source = null
 
 func _shutdown_query_worker() -> void:
-	if _query_thread != null and _query_thread.is_started():
-		_query_thread.wait_to_finish()
+	if _query_thread != null and _query_thread.is_started(): _query_thread.wait_to_finish()
 	_query_thread = null
 	_query_key = ""
 
@@ -105,23 +98,16 @@ func set_enabled(value: bool) -> void:
 	set_process(_enabled)
 	if not _enabled:
 		_generation += 1
-		_queue.clear()
-		_queued.clear()
-		_desired.clear()
-		_clear_active()
+		_queue.clear(); _queued.clear(); _desired.clear(); _clear_active()
 		return
 	_refresh_desired(true)
 
-func is_enabled() -> bool:
-	return _enabled
-func is_ready() -> bool:
-	return _ready
-func source_metadata() -> Dictionary:
-	return _source.metadata() if _source != null else {}
+func is_enabled() -> bool: return _enabled
+func is_ready() -> bool: return _ready
+func source_metadata() -> Dictionary: return _source.metadata() if _source != null else {}
 
 func _process(delta: float) -> void:
-	if not _enabled:
-		return
+	if not _enabled: return
 	_poll_query()
 	_refresh_accum += delta
 	if _refresh_accum >= refresh_interval_s:
@@ -135,54 +121,44 @@ static func coverage_radius_for_altitude(altitude_m: float, cell_size: float, ba
 	return clampi(maxi(base_radius, altitude_radius), maxi(1, base_radius), maxi(base_radius, max_radius))
 
 func _refresh_desired(force: bool) -> void:
-	if _camera_rig == null or not _camera_rig.has_method("get_focus_world"):
-		return
+	if _camera_rig == null or not _camera_rig.has_method("get_focus_world"): return
 	var focus_world: Vector3 = _camera_rig.call("get_focus_world")
 	var focus_abs: Vector2 = _coordinates.world_to_absolute(focus_world)
 	var center := Vector2i(floori(focus_abs.x / cell_size_m), floori(focus_abs.y / cell_size_m))
 	var altitude := float(_camera_rig.call("get_altitude")) if _camera_rig.has_method("get_altitude") else 0.0
-	var view_radius := coverage_radius_for_altitude(altitude, cell_size_m, far_radius_cells, max_view_radius_cells, coverage_altitude_factor)
+	var radius := coverage_radius_for_altitude(altitude, cell_size_m, far_radius_cells, max_view_radius_cells, coverage_altitude_factor)
 	var next_desired: Dictionary = {}
 	var candidates: Array[Dictionary] = []
-	for dy in range(-view_radius, view_radius + 1):
-		for dx in range(-view_radius, view_radius + 1):
+	for dy in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
 			var distance_cells := maxi(absi(dx), absi(dy))
 			var cell := center + Vector2i(dx, dy)
-			var lod := GeoDotWorldMeshBuilderScript.LOD_NEAR
-			if distance_cells > near_radius_cells or altitude >= far_lod_altitude_m:
-				lod = GeoDotWorldMeshBuilderScript.LOD_FAR
-			# Coverage cells are ordered nearest-first, but every cell in the bounded
-			# camera-scaled footprint is desired. Existing visible cells remain until
-			# replacements are ready, so the internal grid is never intentionally exposed.
+			var lod := MeshBuilder.LOD_NEAR
+			if distance_cells > near_radius_cells or altitude >= far_lod_altitude_m: lod = MeshBuilder.LOD_FAR
 			candidates.append({"cell": cell, "lod": lod, "distance": distance_cells})
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["distance"]) < int(b["distance"]))
 	var limit := mini(maxi(1, max_resident_cells), candidates.size())
-	for index in range(limit):
-		var request: Dictionary = candidates[index]
-		var cell: Vector2i = request["cell"]
-		next_desired[_cell_key(cell)] = int(request["lod"])
+	for i in range(limit):
+		var request: Dictionary = candidates[i]
+		next_desired[_cell_key(request["cell"])] = int(request["lod"])
 	var changed := force or next_desired.hash() != _desired.hash()
 	_desired = next_desired
 	if changed:
 		_generation += 1
-		_queue.clear()
-		_queued.clear()
+		_queue.clear(); _queued.clear()
 	for request in candidates:
 		var cell: Vector2i = request["cell"]
 		var key := _cell_key(cell)
-		if not _desired.has(key):
-			continue
+		if not _desired.has(key): continue
 		var wanted_lod := int(_desired[key])
-		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == wanted_lod:
-			continue
+		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == wanted_lod: continue
 		_enqueue_cell(key, wanted_lod)
 	_trim_queue()
 	_start_query_if_needed()
 
 func _enqueue_cell(key: String, lod: int) -> void:
 	var queue_id := "%s:%d" % [key, lod]
-	if _queued.has(queue_id) or _query_key == queue_id:
-		return
+	if _queued.has(queue_id) or _query_key == queue_id: return
 	_queue.append({"key": key, "queue_id": queue_id, "cell": _parse_cell_key(key), "lod": lod, "generation": _generation})
 	_queued[queue_id] = true
 
@@ -192,8 +168,7 @@ func _trim_queue() -> void:
 		_queued.erase(String(dropped.get("queue_id", "")))
 
 func _start_query_if_needed() -> void:
-	if _query_thread != null or _queue.is_empty() or not _enabled:
-		return
+	if _query_thread != null or _queue.is_empty() or not _enabled: return
 	var request: Dictionary = _queue.pop_front()
 	var queue_id := String(request.get("queue_id", ""))
 	_queued.erase(queue_id)
@@ -211,8 +186,7 @@ func _start_query_if_needed() -> void:
 	var error := _query_thread.start(Callable(self, "_query_worker").bind(request))
 	if error != OK:
 		push_error("GeoDot cell query thread failed to start: %s" % error_string(error))
-		_query_thread = null
-		_query_key = ""
+		_query_thread = null; _query_key = ""
 
 func _query_worker(request: Dictionary) -> Dictionary:
 	var started := Time.get_ticks_usec()
@@ -224,11 +198,9 @@ func _query_worker(request: Dictionary) -> Dictionary:
 	return result
 
 func _poll_query() -> void:
-	if _query_thread == null or _query_thread.is_alive():
-		return
+	if _query_thread == null or _query_thread.is_alive(): return
 	var value: Variant = _query_thread.wait_to_finish()
-	_query_thread = null
-	_query_key = ""
+	_query_thread = null; _query_key = ""
 	if typeof(value) != TYPE_DICTIONARY:
 		push_error("GeoDot cell query returned invalid data")
 		return
@@ -241,31 +213,26 @@ func _publish_query_result(result: Dictionary) -> void:
 	var request: Dictionary = result.get("request", {})
 	var key := String(request.get("key", ""))
 	var lod := int(request.get("lod", -1))
-	if key.is_empty() or not _desired.has(key) or int(_desired[key]) != lod:
-		return
-	var query_ms := float(result.get("total_query_ms", 0.0))
+	if key.is_empty() or not _desired.has(key) or int(_desired[key]) != lod: return
 	if not _query_cache.has(key):
-		_perf_query_ms += query_ms
-		_perf_query_max_ms = maxf(_perf_query_max_ms, query_ms)
-		_perf_queries += 1
+		var query_ms := float(result.get("total_query_ms", 0.0))
+		_perf_query_ms += query_ms; _perf_query_max_ms = maxf(_perf_query_max_ms, query_ms); _perf_queries += 1
 		_cache_query_result(key, result)
 	_perf_building_features += int(result.get("building_features", 0))
 	_perf_road_features += int(result.get("road_features", 0))
 	_publish_cell(request, result)
 
 func _cache_query_result(key: String, result: Dictionary) -> void:
-	var cached := result.duplicate(true)
+	var cached: Dictionary = result.duplicate(true)
 	cached.erase("request")
 	_query_cache[key] = cached
-	_query_cache_order.erase(key)
-	_query_cache_order.append(key)
+	_query_cache_order.erase(key); _query_cache_order.append(key)
 	while _query_cache_order.size() > maxi(1, max_query_cache_cells):
-		var evicted := _query_cache_order.pop_front()
+		var evicted: String = _query_cache_order.pop_front()
 		_query_cache.erase(evicted)
 
 func _clear_query_cache() -> void:
-	_query_cache.clear()
-	_query_cache_order.clear()
+	_query_cache.clear(); _query_cache_order.clear()
 
 func _publish_cell(request: Dictionary, result: Dictionary) -> void:
 	var started := Time.get_ticks_usec()
@@ -275,98 +242,61 @@ func _publish_cell(request: Dictionary, result: Dictionary) -> void:
 	var origin_abs := Vector2(float(cell.x) * cell_size_m, float(cell.y) * cell_size_m)
 	var group := Node3D.new()
 	group.name = "GeoDotCell_%d_%d_L%d" % [cell.x, cell.y, lod]
-	group.position = _coordinates.absolute_to_world(origin_abs)
-	group.visible = false
-	var building_mesh := GeoDotWorldMeshBuilderScript.build_buildings(result.get("buildings", []), origin_abs, lod)
+	group.position = _coordinates.absolute_to_world(origin_abs); group.visible = false
+	var building_mesh := MeshBuilder.build_buildings(result.get("buildings", []), origin_abs, lod)
 	if building_mesh != null:
-		var building_instance := MeshInstance3D.new()
-		building_instance.name = "Buildings"
-		building_instance.mesh = building_mesh
-		building_instance.material_override = _building_material
-		group.add_child(building_instance)
-	var road_mesh := GeoDotWorldMeshBuilderScript.build_roads(result.get("roads", []), origin_abs, lod)
+		var instance := MeshInstance3D.new(); instance.name = "Buildings"; instance.mesh = building_mesh; instance.material_override = _building_material; group.add_child(instance)
+	var road_mesh := MeshBuilder.build_roads(result.get("roads", []), origin_abs, lod)
 	if road_mesh != null:
-		var road_instance := MeshInstance3D.new()
-		road_instance.name = "Roads"
-		road_instance.mesh = road_mesh
-		road_instance.position.y = 0.02
-		road_instance.material_override = _road_material
-		group.add_child(road_instance)
+		var instance := MeshInstance3D.new(); instance.name = "Roads"; instance.mesh = road_mesh; instance.position.y = 0.02; instance.material_override = _road_material; group.add_child(instance)
 	if not _prepare_resident_slot(key):
-		group.free()
-		push_error("GeoDot resident bound prevented publishing desired cell %s" % key)
-		return
-	if _active.has(key):
-		_evict_active_key(key)
+		group.free(); push_error("GeoDot resident bound prevented publishing desired cell %s" % key); return
+	if _active.has(key): _evict_active_key(key)
 	add_child(group)
 	_active[key] = {"node": group, "lod": lod, "buildings": int(result.get("building_features", 0)), "roads": int(result.get("road_features", 0))}
 	group.visible = true
 	var build_ms := float(Time.get_ticks_usec() - started) / 1000.0
-	_perf_build_ms += build_ms
-	_perf_build_max_ms = maxf(_perf_build_max_ms, build_ms)
-	_perf_publishes += 1
+	_perf_build_ms += build_ms; _perf_build_max_ms = maxf(_perf_build_max_ms, build_ms); _perf_publishes += 1
 
 func _prepare_resident_slot(publishing_key: String) -> bool:
-	if _active.has(publishing_key):
-		return true
-	var bound := maxi(1, max_resident_cells)
-	while _active.size() >= bound:
+	if _active.has(publishing_key): return true
+	while _active.size() >= maxi(1, max_resident_cells):
 		var stale_key := choose_stale_eviction_key(_active, _desired, publishing_key)
-		if stale_key.is_empty():
-			return false
+		if stale_key.is_empty(): return false
 		_evict_active_key(stale_key)
 	return true
 
 static func choose_stale_eviction_key(active: Dictionary, desired: Dictionary, publishing_key: String) -> String:
-	var keys: Array = active.keys()
-	keys.sort()
+	var keys: Array = active.keys(); keys.sort()
 	for value in keys:
 		var key := String(value)
-		if key == publishing_key or desired.has(key):
-			continue
-		return key
+		if key != publishing_key and not desired.has(key): return key
 	return ""
 
 func _evict_active_key(key: String) -> void:
-	if not _active.has(key):
-		return
+	if not _active.has(key): return
 	var node: Node = (_active[key] as Dictionary).get("node")
-	if node is Node3D:
-		(node as Node3D).visible = false
-	if node != null:
-		node.queue_free()
+	if node is Node3D: (node as Node3D).visible = false
+	if node != null: node.queue_free()
 	_active.erase(key)
 
 func _setup_materials() -> void:
-	_building_material = StandardMaterial3D.new()
-	_building_material.albedo_color = Color.WHITE
-	_building_material.vertex_color_use_as_albedo = true
-	_building_material.roughness = 0.92
-	_building_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_road_material = StandardMaterial3D.new()
-	_road_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_road_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_road_material.vertex_color_use_as_albedo = true
-	_road_material.albedo_color = Color.WHITE
+	_building_material = StandardMaterial3D.new(); _building_material.albedo_color = Color.WHITE; _building_material.vertex_color_use_as_albedo = true; _building_material.roughness = 0.92; _building_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_road_material = StandardMaterial3D.new(); _road_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED; _road_material.cull_mode = BaseMaterial3D.CULL_DISABLED; _road_material.vertex_color_use_as_albedo = true; _road_material.albedo_color = Color.WHITE
 
 func _clear_active(immediate: bool = false) -> void:
 	for value in _active.values():
 		var node: Node = (value as Dictionary).get("node")
-		if node == null:
-			continue
-		if node is Node3D:
-			(node as Node3D).visible = false
-		if immediate:
-			node.free()
-		else:
-			node.queue_free()
+		if node == null: continue
+		if node is Node3D: (node as Node3D).visible = false
+		if immediate: node.free()
+		else: node.queue_free()
 	_active.clear()
 
 func _stale_active_count() -> int:
 	var count := 0
 	for key in _active.keys():
-		if not _desired.has(key):
-			count += 1
+		if not _desired.has(key): count += 1
 	return count
 
 func debug_snapshot() -> Dictionary:
@@ -374,19 +304,10 @@ func debug_snapshot() -> Dictionary:
 
 func consume_perf_metrics() -> Dictionary:
 	var result := {"geodot_query_ms": _perf_query_ms, "geodot_query_max_ms": _perf_query_max_ms, "geodot_build_ms": _perf_build_ms, "geodot_build_max_ms": _perf_build_max_ms, "geodot_queries": _perf_queries, "geodot_cache_hits": _perf_cache_hits, "geodot_publishes": _perf_publishes, "geodot_building_features": _perf_building_features, "geodot_road_features": _perf_road_features, "geodot_active_cells": _active.size(), "geodot_stale_cells": _stale_active_count(), "geodot_pending_cells": _queue.size() + (1 if _query_thread != null else 0), "geodot_query_cache_cells": _query_cache.size()}
-	_perf_query_ms = 0.0
-	_perf_query_max_ms = 0.0
-	_perf_build_ms = 0.0
-	_perf_build_max_ms = 0.0
-	_perf_queries = 0
-	_perf_cache_hits = 0
-	_perf_publishes = 0
-	_perf_building_features = 0
-	_perf_road_features = 0
+	_perf_query_ms = 0.0; _perf_query_max_ms = 0.0; _perf_build_ms = 0.0; _perf_build_max_ms = 0.0; _perf_queries = 0; _perf_cache_hits = 0; _perf_publishes = 0; _perf_building_features = 0; _perf_road_features = 0
 	return result
 
-func _cell_key(cell: Vector2i) -> String:
-	return "%d:%d" % [cell.x, cell.y]
+func _cell_key(cell: Vector2i) -> String: return "%d:%d" % [cell.x, cell.y]
 func _parse_cell_key(key: String) -> Vector2i:
 	var parts := key.split(":")
 	return Vector2i(int(parts[0]), int(parts[1])) if parts.size() == 2 else Vector2i.ZERO
