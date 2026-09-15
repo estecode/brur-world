@@ -8,16 +8,12 @@ var _over_budget_publishes := 0
 var _resident_tick := 0
 
 func set_enabled(value: bool) -> void:
-	_enabled = value and _ready
-	set_process(_enabled)
+	_enabled = value and _ready; set_process(_enabled)
 	if not _enabled:
-		_generation += 1
-		_queue.clear(); _queued.clear(); _ready_results.clear(); _desired.clear(); _shutdown_query_workers()
-		_apply_presentation_visibility(); return
+		_generation += 1; _queue.clear(); _queued.clear(); _ready_results.clear(); _desired.clear(); _shutdown_query_workers(); _apply_presentation_visibility(); return
 	_refresh_desired(true); _apply_presentation_visibility()
 
-func set_presentation_visible(value: bool) -> void:
-	_presentation_visible = value; _apply_presentation_visibility()
+func set_presentation_visible(value: bool) -> void: _presentation_visible = value; _apply_presentation_visibility()
 
 func _apply_presentation_visibility() -> void:
 	for key_value in _active.keys():
@@ -52,8 +48,6 @@ func _prepare_resident_slot(key: String) -> bool:
 	return true
 
 func _enforce_resident_budget() -> void:
-	# RAM pressure can lower max_resident_cells while old detail is warm. Shed only
-	# stale LRU cells; current visible/desired coverage is never sacrificed.
 	while _active.size() > maxi(1, max_resident_cells):
 		var stale := choose_lru_stale_eviction_key(_active, _desired, "")
 		if stale.is_empty(): break
@@ -63,12 +57,10 @@ func _publish_cell(request: Dictionary, result: Dictionary) -> void:
 	super._publish_cell(request, result)
 	var key := String(request.get("key", ""))
 	if _active.has(key):
-		_resident_tick += 1
-		var entry: Dictionary = _active[key]; entry["last_touch"] = _resident_tick; _active[key] = entry
+		_resident_tick += 1; var entry: Dictionary = _active[key]; entry["last_touch"] = _resident_tick; _active[key] = entry
 	_apply_presentation_visibility(); _enforce_resident_budget()
 
-func _refresh_desired(force: bool) -> void:
-	super._refresh_desired(force); _touch_desired_residents(); _apply_presentation_visibility(); _enforce_resident_budget()
+func _refresh_desired(force: bool) -> void: super._refresh_desired(force); _touch_desired_residents(); _apply_presentation_visibility(); _enforce_resident_budget()
 
 func ready_desired_cells() -> int:
 	var count := 0
@@ -88,7 +80,10 @@ func _process(delta: float) -> void:
 	_enforce_resident_budget(); _start_queries_if_needed()
 
 func debug_snapshot() -> Dictionary:
-	var snapshot := super.debug_snapshot()
-	snapshot["streaming_budget_ms"] = streaming_budget_ms; snapshot["last_publish_frame_ms"] = _last_publish_frame_ms; snapshot["over_budget_publishes"] = _over_budget_publishes
-	snapshot["presentation_visible"] = _presentation_visible; snapshot["ready_desired_cells"] = ready_desired_cells(); snapshot["warm_resident_cells"] = _active.size()
+	var snapshot := super.debug_snapshot(); var ready_count := ready_desired_cells()
+	# active_cells remains the currently requested/usable coverage contract. Warm
+	# hidden geometry is reported separately so readiness and FPS settling do not
+	# mistake cache residency for visible ownership.
+	snapshot["active_cells"] = ready_count; snapshot["ready_desired_cells"] = ready_count; snapshot["warm_resident_cells"] = _active.size()
+	snapshot["streaming_budget_ms"] = streaming_budget_ms; snapshot["last_publish_frame_ms"] = _last_publish_frame_ms; snapshot["over_budget_publishes"] = _over_budget_publishes; snapshot["presentation_visible"] = _presentation_visible
 	return snapshot
