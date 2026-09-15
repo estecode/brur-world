@@ -15,6 +15,7 @@ max_buildings_per_cell = 3000
 max_roads_per_cell = 2500
 max_pending_cells = 64
 max_ready_cells = 4
+max_query_cache_cells = 0
 query_workers = 2
 representative_building_m = 10.0
 far_enter_pixels = 1.5
