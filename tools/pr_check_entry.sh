@@ -23,12 +23,13 @@ export BRUR_PR_CHECK_MAIN_SHA="$MAIN_HEAD" BRUR_PR_CHECK_WORKING_BRANCH="$WORKIN
 rm -rf "$LAUNCHER_TMP"
 git -C "$ROOT" worktree add --quiet --detach "$LAUNCHER_TMP" "$MAIN_HEAD" || { printf 'PR_CHECK=FAIL unable to prepare current main launcher worktree\n' >&2; exit 70; }
 ADDED=1
-[[ -f "$LAUNCHER_TMP/tools/pr_check.sh" && -f "$LAUNCHER_TMP/tools/pr_merge_decision.py" ]] || { printf 'PR_CHECK=FAIL current origin/main missing PR-check infrastructure\n' >&2; exit 66; }
+[[ -f "$LAUNCHER_TMP/tools/pr_check.sh" ]] || { printf 'PR_CHECK=FAIL current origin/main has no tools/pr_check.sh\n' >&2; exit 66; }
+[[ -f "$LAUNCHER_TMP/tools/pr_merge_decision.py" ]] || { printf 'PR_CHECK=FAIL current origin/main has no tools/pr_merge_decision.py\n' >&2; exit 66; }
 if [[ -x "$ROOT/.venv/bin/python" ]]; then META_PYTHON="$ROOT/.venv/bin/python"; elif command -v python3 >/dev/null 2>&1; then META_PYTHON="$(command -v python3)"; else printf 'PR_CHECK=FAIL Python 3 not found\n' >&2; exit 69; fi
 PR_BODY="$(gh pr view "$PR" --repo estecode/brur-world --json body --jq .body)" || { printf 'PR_CHECK=FAIL unable to read PR merge decision\n' >&2; exit 69; }
 MERGE_DECISION="$(printf '%s' "$PR_BODY" | "$META_PYTHON" "$LAUNCHER_TMP/tools/pr_merge_decision.py")" || { printf 'PR_CHECK=FAIL unable to parse authoritative PR merge decision\n' >&2; exit 70; }
 case "$MERGE_DECISION" in
- check) MANUAL_CHECK="$(printf '%s' "$PR_BODY" | "$META_PYTHON" "$LAUNCHER_TMP/tools/pr_merge_decision.py" --field check)" || exit 70; export BRUR_PR_CHECK_MANUAL_REVIEW=required BRUR_PR_CHECK_MANUAL_CHECK="$MANUAL_CHECK"; printf 'PR_CHECK=MANUAL_REVIEW required pr=%s source=pr-merge-decision\nPR_CHECK=MANUAL_CHECK %s\n' "$PR" "$MANUAL_CHECK" ;;
+ check) MANUAL_CHECK="$(printf '%s' "$PR_BODY" | "$META_PYTHON" "$LAUNCHER_TMP/tools/pr_merge_decision.py" --field check)" || { printf 'PR_CHECK=FAIL unable to parse authoritative PR manual CHECK\n' >&2; exit 70; }; export BRUR_PR_CHECK_MANUAL_REVIEW=required BRUR_PR_CHECK_MANUAL_CHECK="$MANUAL_CHECK"; printf 'PR_CHECK=MANUAL_REVIEW required pr=%s source=pr-merge-decision\nPR_CHECK=MANUAL_CHECK %s\n' "$PR" "$MANUAL_CHECK" ;;
  merge) export BRUR_PR_CHECK_MANUAL_REVIEW=none BRUR_PR_CHECK_MANUAL_CHECK=""; printf 'PR_CHECK=MANUAL_REVIEW none pr=%s source=pr-merge-decision\n' "$PR" ;;
  block) printf 'PR_CHECK=FAIL PR merge decision is DO NOT MERGE; fix the blocker before running a human Safe Check\n' >&2; exit 78 ;;
  *) printf 'PR_CHECK=FAIL invalid parsed merge decision: %s\n' "$MERGE_DECISION" >&2; exit 70 ;;
