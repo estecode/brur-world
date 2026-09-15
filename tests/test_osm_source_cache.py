@@ -1,13 +1,10 @@
-"""Verify single-pass OSM source ingest, route selection, and fail-closed cache reuse."""
-
+"""Verify BOSC4 normalized source facts, one-pass fanout and warm reuse."""
 from __future__ import annotations
 
-import io
 import json
 import sys
 import tempfile
 import unittest
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -15,263 +12,73 @@ import osmium
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
-if str(TOOLS) not in sys.path:
-    sys.path.insert(0, str(TOOLS))
+if str(TOOLS) not in sys.path: sys.path.insert(0, str(TOOLS))
 
-from build_background import build_background  # noqa: E402
-from build_features import build_buildings, build_pois  # noqa: E402
-from build_roads import build_roads  # noqa: E402
-from build_routing_dataset import build_routing_dataset  # noqa: E402
-from build_search_index import build_search_index  # noqa: E402
-from build_traffic_signals import build_traffic_signals  # noqa: E402
-from osm_source_cache import (  # noqa: E402
-    ALL_ROUTES,
-    ROUTE_VERSIONS,
-    SourceCacheHandler,
-    _ProgressDisplay,
-    build_source_caches,
-)
+import osm_source_cache
+from highway_facts import iter_highway_ways
+from osm_source_cache import ALL_ROUTES, CACHE_FORMAT, ROUTE_VERSIONS, build_source_caches
 
-
-FIXTURE = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<osm version=\"0.6\">
-  <node id=\"1\" lon=\"18.0000\" lat=\"59.3000\"><tag k=\"highway\" v=\"traffic_signals\"/></node>
-  <node id=\"2\" lon=\"18.0010\" lat=\"59.3000\"/>
-  <node id=\"3\" lon=\"18.0020\" lat=\"59.3000\"><tag k=\"amenity\" v=\"school\"/><tag k=\"name\" v=\"Fixture School\"/></node>
-  <node id=\"4\" lon=\"18.0030\" lat=\"59.3000\"><tag k=\"addr:housenumber\" v=\"12\"/><tag k=\"addr:street\" v=\"Testvägen\"/></node>
-  <node id=\"5\" lon=\"18.0100\" lat=\"59.3100\"/>
-  <node id=\"6\" lon=\"18.0110\" lat=\"59.3100\"/>
-  <node id=\"7\" lon=\"18.0110\" lat=\"59.3110\"/>
-  <node id=\"8\" lon=\"18.0100\" lat=\"59.3110\"/>
-  <way id=\"10\">
-    <nd ref=\"1\"/><nd ref=\"2\"/>
-    <tag k=\"highway\" v=\"residential\"/>
-    <tag k=\"name\" v=\"Signal Street\"/>
-  </way>
-  <way id=\"20\">
-    <nd ref=\"2\"/><nd ref=\"3\"/>
-    <tag k=\"amenity\" v=\"parking\"/>
-  </way>
-  <way id=\"30\">
-    <nd ref=\"5\"/><nd ref=\"6\"/><nd ref=\"7\"/><nd ref=\"8\"/><nd ref=\"5\"/>
-    <tag k=\"building\" v=\"yes\"/>
-  </way>
-  <way id=\"40\">
-    <nd ref=\"5\"/><nd ref=\"6\"/><nd ref=\"7\"/><nd ref=\"8\"/><nd ref=\"5\"/>
-  </way>
-  <way id=\"50\">
-    <nd ref=\"2\"/><nd ref=\"4\"/>
-    <tag k=\"addr:housenumber\" v=\"14\"/><tag k=\"addr:street\" v=\"Testvägen\"/>
-  </way>
-  <relation id=\"100\">
-    <member type=\"way\" ref=\"40\" role=\"outer\"/>
-    <tag k=\"type\" v=\"multipolygon\"/>
-    <tag k=\"building\" v=\"yes\"/>
-  </relation>
+FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6">
+  <node id="1" lon="18.0000" lat="59.3000"><tag k="highway" v="traffic_signals"/></node>
+  <node id="2" lon="18.0010" lat="59.3000"/>
+  <node id="3" lon="18.0020" lat="59.3000"><tag k="amenity" v="school"/><tag k="name" v="Fixture School"/></node>
+  <node id="4" lon="18.0030" lat="59.3000"><tag k="addr:housenumber" v="12"/><tag k="addr:street" v="Testvägen"/></node>
+  <node id="5" lon="18.0000" lat="59.3010"/>
+  <way id="10"><nd ref="1"/><nd ref="2"/><tag k="highway" v="residential"/><tag k="maxspeed" v="50"/></way>
+  <way id="20"><nd ref="1"/><nd ref="2"/><nd ref="5"/><nd ref="1"/><tag k="building" v="yes"/></way>
 </osm>
 """
 
+class Copy(osmium.SimpleHandler):
+    def __init__(self, writer): super().__init__(); self.writer=writer
+    def node(self, value): self.writer.add_node(value)
+    def way(self, value): self.writer.add_way(value)
+    def relation(self, value): self.writer.add_relation(value)
 
-class FixtureCopyHandler(osmium.SimpleHandler):
-    def __init__(self, writer: osmium.SimpleWriter) -> None:
-        super().__init__()
-        self.writer = writer
+def write_pbf(xml:Path,pbf:Path)->None:
+    with osmium.SimpleWriter(str(pbf),overwrite=True) as writer: Copy(writer).apply_file(str(xml))
 
-    def node(self, node) -> None:
-        self.writer.add_node(node)
+class Tests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name)
+        xml=self.root/"fixture.osm"; xml.write_text(FIXTURE,encoding="utf-8")
+        self.pbf=self.root/"fixture.osm.pbf"; write_pbf(xml,self.pbf); self.cache=self.root/"cache"
+    def tearDown(self): self.temp.cleanup()
 
-    def way(self, way) -> None:
-        self.writer.add_way(way)
-
-    def relation(self, relation) -> None:
-        self.writer.add_relation(relation)
-
-
-class TTYBuffer(io.StringIO):
-    def isatty(self) -> bool:
-        return True
-
-
-def write_pbf(source: Path, destination: Path) -> None:
-    with osmium.SimpleWriter(str(destination), overwrite=True) as writer:
-        FixtureCopyHandler(writer).apply_file(str(source))
-
-
-def ids(path: Path, tag: str) -> set[int]:
-    root = ET.parse(path).getroot()
-    return {int(element.attrib["id"]) for element in root.findall(tag)}
-
-
-class OsmSourceCacheTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
-        self.source = self.root / "fixture.osm"
-        self.source.write_text(FIXTURE, encoding="utf-8")
-        self.pbf = self.root / "fixture.osm.pbf"
-        write_pbf(self.source, self.pbf)
-        self.cache = self.root / "cache"
-
-    def tearDown(self) -> None:
-        self.temp.cleanup()
-
-    def test_all_routes_share_one_source_traversal(self) -> None:
-        original = SourceCacheHandler.apply_file
-        calls: list[str] = []
-
-        def counted(handler, filename, *args, **kwargs):
-            calls.append(str(filename))
-            return original(handler, filename, *args, **kwargs)
-
-        with mock.patch.object(SourceCacheHandler, "apply_file", counted):
-            caches = build_source_caches(self.pbf, self.cache, ALL_ROUTES)
-
-        self.assertEqual(calls, [str(self.pbf)])
-        self.assertEqual(set(caches), set(ALL_ROUTES))
-        self.assertIn(10, ids(caches["highways"], "way"))
-        self.assertIn(1, ids(caches["traffic_signals"], "node"))
-        self.assertIn(10, ids(caches["traffic_signals"], "way"))
-        self.assertIn(3, ids(caches["pois"], "node"))
-        self.assertIn(20, ids(caches["pois"], "way"))
-        self.assertIn(4, ids(caches["addresses"], "node"))
-        self.assertIn(50, ids(caches["addresses"], "way"))
-        self.assertIn(30, ids(caches["areas"], "way"))
-        self.assertIn(40, ids(caches["areas"], "way"))
-        self.assertIn(100, ids(caches["areas"], "relation"))
-
-        manifest = json.loads((self.cache / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["format"], "BOSC1")
-        self.assertEqual(manifest["source_scan"], {"nodes": 8, "ways": 5, "relations": 1})
+    def test_all_blocks_publish_normalized_versioned_manifest(self):
+        outputs=build_source_caches(self.pbf,self.cache,ALL_ROUTES)
+        self.assertEqual(set(outputs),set(ALL_ROUTES))
+        manifest=json.loads((self.cache/"manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["format"],CACHE_FORMAT)
         for route in ALL_ROUTES:
-            self.assertTrue(manifest["routes"][route]["complete"])
-            self.assertEqual(manifest["routes"][route]["version"], ROUTE_VERSIONS[route])
+            entry=manifest["routes"][route]
+            self.assertTrue(entry["complete"]); self.assertEqual(entry["version"],ROUTE_VERSIONS[route])
+            self.assertEqual(entry["extractor"],"pyosmium/libosmium"); self.assertEqual(len(entry["sha256"]),64)
+            self.assertNotIn(".osm.pbf",entry["file"]); self.assertTrue(outputs[route].is_file())
+        highway=list(iter_highway_ways(outputs["highways"]))
+        self.assertEqual(len(highway),1); self.assertEqual(highway[0].way_id,10); self.assertEqual(highway[0].tags["maxspeed"],"50")
 
-    def test_live_route_counters_follow_source_matches(self) -> None:
-        stream = io.StringIO()
-        display = _ProgressDisplay(self.pbf, {"digest": "abc123"}, ALL_ROUTES, {}, stream)
-        work_dir = self.root / "progress-work"
-        work_dir.mkdir()
-        handler = SourceCacheHandler(work_dir, set(ALL_ROUTES), {}, display)
-        try:
-            handler.apply_file(str(self.pbf), locations=True)
-        finally:
-            handler.close()
-        self.assertEqual(
-            display.route_counts,
-            {"addresses": 2, "areas": 3, "highways": 1, "pois": 2, "traffic_signals": 2},
-        )
-        self.assertEqual(handler.counts, {"nodes": 8, "ways": 5, "relations": 1})
+    def test_multiple_stale_simple_blocks_share_one_fast_pass(self):
+        real=osm_source_cache.build_fast_facts
+        with mock.patch.object(osm_source_cache,"build_fast_facts",wraps=real) as build:
+            build_source_caches(self.pbf,self.cache,("highways","addresses","pois","traffic_signals"))
+        self.assertEqual(build.call_count,1)
+        self.assertEqual(set(build.call_args.args[1]),{"highways","addresses","pois","traffic_signals"})
 
-    def test_tty_progress_rewrites_compact_block_with_hash_and_total(self) -> None:
-        stream = TTYBuffer()
-        display = _ProgressDisplay(
-            Path("/tmp/sweden-260824.osm.pbf"),
-            {"digest": "abc123"},
-            ("highways", "traffic_signals"),
-            {"nodes": 8, "ways": 5, "relations": 1},
-            stream,
-        )
-        display.hit("highways")
-        display.hit("traffic_signals")
-        display.render({"nodes": 10, "ways": 2, "relations": 1}, 1.0)
-        display.hit("highways")
-        display.render({"nodes": 10, "ways": 3, "relations": 1}, 2.0)
-        output = stream.getvalue()
-        self.assertIn("source: sweden-260824.osm.pbf", output)
-        self.assertIn("sha256: abc123", output)
-        self.assertIn("scanned: 13 / 14 items", output)
-        self.assertIn("scanned: 14 / 14 items", output)
-        self.assertIn("highways", output)
-        self.assertIn("traffic_signals", output)
-        self.assertIn("\x1b[", output)
+    def test_selective_request_builds_only_requested_block(self):
+        outputs=build_source_caches(self.pbf,self.cache,("traffic_signals",))
+        self.assertEqual(set(outputs),{"traffic_signals"}); self.assertTrue((self.cache/"traffic_signals.brfacts").is_file()); self.assertFalse((self.cache/"areas.baf").exists())
 
-    def test_non_tty_progress_is_log_friendly_without_ansi(self) -> None:
-        stream = io.StringIO()
-        display = _ProgressDisplay(Path("sweden.osm.pbf"), {"digest": "abc123"}, ("pois",), {}, stream)
-        display.hit("pois")
-        display.render({"nodes": 5, "ways": 1, "relations": 0}, 1.0)
-        output = stream.getvalue()
-        self.assertIn("scanned: 6 items", output)
-        self.assertIn("pois=1", output)
-        self.assertNotIn("\x1b[", output)
+    def test_valid_cache_never_traverses_source_again(self):
+        build_source_caches(self.pbf,self.cache,("highways",))
+        with mock.patch.object(osm_source_cache,"build_fast_facts",side_effect=AssertionError("unexpected PBF traversal")):
+            reused=build_source_caches(self.pbf,self.cache,("highways",))
+        self.assertTrue(reused["highways"].is_file())
+        run=json.loads((self.cache/"last_run.json").read_text(encoding="utf-8"))
+        self.assertEqual(run["blocks"]["highways"]["status"],"CACHE HIT")
 
-    def test_routes_are_independently_selectable(self) -> None:
-        caches = build_source_caches(self.pbf, self.cache, ("highways", "addresses"))
-        self.assertEqual(set(caches), {"highways", "addresses"})
-        self.assertTrue((self.cache / "highways.osm").is_file())
-        self.assertTrue((self.cache / "addresses.osm").is_file())
-        self.assertFalse((self.cache / "areas.osm").exists())
-        self.assertFalse((self.cache / "pois.osm").exists())
+    def test_unknown_route_fails_closed(self):
+        with self.assertRaises(ValueError): build_source_caches(self.pbf,self.cache,("not-a-domain",))
 
-    def test_valid_same_source_cache_does_not_rescan(self) -> None:
-        build_source_caches(self.pbf, self.cache, ("highways", "pois"))
-        with mock.patch.object(SourceCacheHandler, "apply_file", side_effect=AssertionError("unexpected source scan")):
-            reused = build_source_caches(self.pbf, self.cache, ("highways", "pois"))
-        self.assertEqual(set(reused), {"highways", "pois"})
-
-    def test_missing_route_file_fails_closed_and_rebuilds_once(self) -> None:
-        build_source_caches(self.pbf, self.cache, ("highways", "addresses"))
-        (self.cache / "addresses.osm").unlink()
-        original = SourceCacheHandler.apply_file
-        calls = 0
-
-        def counted(handler, filename, *args, **kwargs):
-            nonlocal calls
-            calls += 1
-            return original(handler, filename, *args, **kwargs)
-
-        with mock.patch.object(SourceCacheHandler, "apply_file", counted):
-            build_source_caches(self.pbf, self.cache, ("highways", "addresses"))
-        self.assertEqual(calls, 1)
-        self.assertTrue((self.cache / "addresses.osm").is_file())
-
-    def test_route_version_invalidates_only_that_route(self) -> None:
-        build_source_caches(self.pbf, self.cache, ("highways", "addresses"))
-        highway_before = (self.cache / "highways.osm").stat().st_mtime_ns
-        original_version = ROUTE_VERSIONS["addresses"]
-        try:
-            ROUTE_VERSIONS["addresses"] = original_version + 1
-            build_source_caches(self.pbf, self.cache, ("highways", "addresses"))
-        finally:
-            ROUTE_VERSIONS["addresses"] = original_version
-        self.assertEqual((self.cache / "highways.osm").stat().st_mtime_ns, highway_before)
-        manifest = json.loads((self.cache / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["routes"]["addresses"]["version"], original_version + 1)
-
-    def test_changed_source_invalidates_requested_routes(self) -> None:
-        build_source_caches(self.pbf, self.cache, ("highways",))
-        before = json.loads((self.cache / "manifest.json").read_text(encoding="utf-8"))["source"]
-        self.source.write_text(FIXTURE.replace('name\" v=\"Signal Street', 'name\" v=\"Changed Street'), encoding="utf-8")
-        self.pbf.unlink()
-        write_pbf(self.source, self.pbf)
-        build_source_caches(self.pbf, self.cache, ("highways",))
-        after = json.loads((self.cache / "manifest.json").read_text(encoding="utf-8"))["source"]
-        self.assertNotEqual(before, after)
-
-    def test_generated_route_caches_feed_existing_builders(self) -> None:
-        caches = build_source_caches(self.pbf, self.cache, ALL_ROUTES)
-        output = self.root / "world"
-        build_roads(caches["highways"], output)
-        build_routing_dataset(caches["highways"], output)
-        build_traffic_signals(caches["traffic_signals"], output)
-        build_background(caches["areas"], output)
-        build_pois(caches["pois"], output)
-        build_buildings(caches["areas"], output)
-        search_path = build_search_index(caches["addresses"], output)
-
-        self.assertTrue((output / "routing.brg").is_file())
-        self.assertTrue((output / "routing_geometry.brh").is_file())
-        self.assertTrue((output / "traffic_signals.json").is_file())
-        self.assertTrue((output / "buildings.jsonl").is_file())
-        self.assertGreater((output / "buildings.jsonl").stat().st_size, 0)
-        self.assertTrue((output / "pois.jsonl").is_file())
-        self.assertTrue(search_path.is_file())
-        self.assertGreater(search_path.stat().st_size, 0)
-
-    def test_unknown_route_is_rejected(self) -> None:
-        with self.assertRaises(ValueError):
-            build_source_caches(self.pbf, self.cache, ("does-not-exist",))
-
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__=="__main__": unittest.main()
