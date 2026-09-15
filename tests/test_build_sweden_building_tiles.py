@@ -12,7 +12,7 @@ TOOLS = ROOT / "tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-from benchmark_issue_220 import MAX_WARM_SECONDS, MINIMUM_COLD_BASELINE_SECONDS, MIN_BUILDINGS, MIN_RUNTIME_REDUCTION
+from benchmark_issue_220 import MAX_WARM_SECONDS, MINIMUM_COLD_BASELINE_SECONDS, MIN_BUILDINGS
 from build_background import WATER, background_class, solve_coastline_land
 from world_build_plan import parse_targets, required_source_routes
 
@@ -58,11 +58,9 @@ class Tests(unittest.TestCase):
         self.assertEqual(MIN_BUILDINGS, 3_800_000)
         self.assertEqual(MINIMUM_COLD_BASELINE_SECONDS, 5329.7)
         self.assertEqual(MAX_WARM_SECONDS, 30.0)
-        self.assertEqual(MIN_RUNTIME_REDUCTION, 0.30)
         benchmark = (TOOLS / "benchmark_issue_220.py").read_text(encoding="utf-8")
         self.assertIn('parser.add_argument("gpkg"', benchmark)
         self.assertIn('parser.add_argument("--source-pbf"', benchmark)
-        self.assertIn('parser.add_argument("--baseline-runtime-bytes"', benchmark)
         self.assertIn('"gpkg_and_pbf_hashes_recorded"', benchmark)
         self.assertIn('"no_provider_stage_cache"', benchmark)
         self.assertIn('"building_records_match_source"', benchmark)
@@ -70,11 +68,21 @@ class Tests(unittest.TestCase):
         self.assertIn('"cold_source_cache_at_least_2x_faster_than_minimum_baseline"', benchmark)
         self.assertIn('"production_runtime_bytes_by_dataset"', benchmark)
         self.assertIn('"shipped_runtime_pack_bytes"', benchmark)
-        self.assertIn('"production_runtime_reduction_30pct"', benchmark)
         self.assertIn("prepare_cached_runtime_pack", benchmark)
         self.assertNotIn("full_world_build_under_15_minutes", benchmark)
+        self.assertNotIn("production_runtime_reduction_30pct", benchmark)
+        self.assertNotIn("--baseline-runtime-bytes", benchmark)
 
-    def test_runtime_footprint_gate_uses_post_191_bmc2_baseline(self):
+    def test_footprint_only_is_read_only_and_does_not_build_runtime_pack(self):
+        benchmark = (TOOLS / "benchmark_issue_220.py").read_text(encoding="utf-8")
+        start = benchmark.index("if args.footprint_only:")
+        end = benchmark.index("if args.gpkg is None:", start)
+        footprint_only = benchmark[start:end]
+        self.assertIn("_print_production_footprint", footprint_only)
+        self.assertNotIn("_full_footprint_payload", footprint_only)
+        self.assertNotIn("prepare_cached_runtime_pack", footprint_only)
+
+    def test_runtime_footprint_contract_has_no_historical_hardcoded_size_baseline(self):
         benchmark = (TOOLS / "benchmark_issue_220.py").read_text(encoding="utf-8")
         self.assertNotIn("2.35", benchmark)
         self.assertNotIn("3.3", benchmark)
