@@ -1,0 +1,29 @@
+[gd_scene load_steps=6 format=3]
+[ext_resource type="PackedScene" path="res://scenes/main.tscn" id="1_main"]
+[ext_resource type="Script" path="res://scripts/geodot_poc_tuned_main.gd" id="2_poc"]
+[ext_resource type="Script" path="res://scripts/geodot_budgeted_world_renderer.gd" id="3_geodot"]
+[ext_resource type="Script" path="res://scripts/geodot_debug_overlay.gd" id="4_debug"]
+[ext_resource type="Script" path="res://scripts/geodot_far_renderer.gd" id="5_far"]
+[node name="Main" instance=ExtResource("1_main")]
+script = ExtResource("2_poc")
+[node name="DebugOverlay" parent="."]
+script = ExtResource("4_debug")
+[node name="GeoDotWorldLayer" type="Node3D" parent="World" index="0"]
+script = ExtResource("3_geodot")
+cell_size_m = 3000.0
+viewport_margin_cells = 2
+max_buildings_per_cell = 3000
+max_roads_per_cell = 2500
+max_pending_cells = 64
+max_ready_cells = 4
+query_workers = 2
+representative_building_m = 10.0
+far_enter_pixels = 1.5
+far_exit_pixels = 2.25
+refresh_interval_s = 0.1
+streaming_budget_ms = 3.0
+max_publishes_per_frame = 4
+[node name="GeoDotFarLayer" type="Node3D" parent="World" index="1"]
+script = ExtResource("5_far")
+enter_distance_m = 55000.0
+exit_distance_m = 40000.0

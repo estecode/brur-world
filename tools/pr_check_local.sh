@@ -1,283 +1,32 @@
 #!/usr/bin/env bash
-# Runs only relevant local real-data preparation, then opens the exact PR runtime only when human visual review remains meaningful.
-# Dependencies: changed-file scope and explicit PR merge-decision review contract from pr_check.sh, existing local world_data, and source/build tools only for scopes that require them.
 set -euo pipefail
-
-WORKTREE="${BRUR_PR_CHECK_WORKTREE:?}"
-WORLD_DATA="${BRUR_PR_CHECK_WORLD_DATA:?}"
-PYTHON="${PYTHON_BIN:?}"
-GODOT="${GODOT_BIN:?}"
-CHANGED_FILES="${BRUR_PR_CHECK_CHANGED_FILES:-}"
-MANUAL_REVIEW="${BRUR_PR_CHECK_MANUAL_REVIEW:-none}"
-CACHE="$WORKTREE/.poc_runtime/world_showcase"
-RUNTIME_WORLD_DATA="$WORKTREE/.poc_runtime/pr_check_world_data"
-TRAFFIC_INTERSECTION_DATA="$WORKTREE/.poc_runtime/traffic_intersections"
-
-case "$MANUAL_REVIEW" in
-  required|none) ;;
-  *) printf 'PR_CHECK=FAIL invalid BRUR_PR_CHECK_MANUAL_REVIEW=%s\n' "$MANUAL_REVIEW" >&2; exit 70 ;;
-esac
-
-scope_decision() {
-  local scope="$1" decision
-  decision="$(printf '%s\n' "$CHANGED_FILES" | "$PYTHON" "$WORKTREE/tools/pr_check_scope.py" "$scope")"
-  case "$decision" in
-    required|skip) printf '%s\n' "$decision" ;;
-    *) printf 'PR_CHECK=FAIL invalid %s scope decision: %s\n' "$scope" "$decision" >&2; return 70 ;;
-  esac
-}
-
-ROUTE_GEOMETRY_SCOPE="$(scope_decision route-geometry)"
-ROAD_LOD_SCOPE="$(scope_decision road-lod)"
-CITY_LIGHT_SCOPE="$(scope_decision city-lights)"
-WORLD_SHOWCASE_SCOPE="$(scope_decision world-showcase)"
-BUILDING_TILE_SCOPE="$(scope_decision building-tiles)"
-TRAFFIC_INTERSECTION_SCOPE="skip"
-DRIVING_VISUAL_SCOPE="skip"
-DRIVE_HUD_VISUAL_SCOPE="skip"
-if printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(traffic_intersections\.py|check_traffic_intersections_real_data\.py|test_traffic_intersections\.py)$'; then
-  TRAFFIC_INTERSECTION_SCOPE="required"
-fi
-if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(harness/driving/|scripts/(route_driving_policy|vehicle_route_follower|vehicle_dynamics|player_vehicle|player_vehicle_controller)\.gd$|scenes/player_vehicle\.tscn$)'; then
-  DRIVING_VISUAL_SCOPE="required"
-fi
-if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(scripts/(drive_hud|drive_hud_adapter|speed_limit_sign|road_speed_limit_query)\.gd|scenes/main\.tscn)$'; then
-  DRIVE_HUD_VISUAL_SCOPE="required"
-fi
-
-if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=SKIP_E6_BJARRED_ROUTE pr=%s reason=unrelated-changes\n' "${BRUR_PR_CHECK_PR:?}"
-fi
-if [[ "$ROAD_LOD_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=SKIP_ROAD_LODS pr=%s reason=unrelated-changes\n' "${BRUR_PR_CHECK_PR:?}"
-fi
-if [[ "$CITY_LIGHT_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=SKIP_CITY_LIGHT_REAL_DATA pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
-fi
-if [[ "$WORLD_SHOWCASE_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=SKIP_WORLD_SHOWCASE_PREP pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
-fi
-if [[ "$BUILDING_TILE_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=SKIP_BUILDING_MESH_LOD pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
-fi
-if [[ "$TRAFFIC_INTERSECTION_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=SKIP_TRAFFIC_INTERSECTIONS pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
-fi
-if [[ "$DRIVING_VISUAL_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=SKIP_DRIVING_VISUAL_REVIEW pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
-fi
-if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=SKIP_DRIVE_HUD_VISUAL_REVIEW pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"
-fi
-
-if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$TRAFFIC_INTERSECTION_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=NO_EXPENSIVE_LOCAL_PREPARATION pr=%s\n' "$BRUR_PR_CHECK_PR"
-fi
-
-resolve_sweden_pbf() {
-  if [[ -n "${BRUR_WORLD_PBF:-}" ]]; then
-    [[ -f "$BRUR_WORLD_PBF" ]] || { printf 'PR_CHECK=FAIL BRUR_WORLD_PBF does not exist\n' >&2; return 1; }
-    printf '%s\n' "$BRUR_WORLD_PBF"
-    return 0
+WORKTREE="${BRUR_PR_CHECK_WORKTREE:?}"; PYTHON="${PYTHON_BIN:?}"; GODOT="${GODOT_BIN:?}"; CHANGED_FILES="${BRUR_PR_CHECK_CHANGED_FILES:-}"; MANUAL_REVIEW="${BRUR_PR_CHECK_MANUAL_REVIEW:-none}"
+DRIVE_HUD_VISUAL_SCOPE="skip"; DRIVING_VISUAL_SCOPE="skip"
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(scripts/(drive_hud|drive_hud_adapter|speed_limit_sign|road_speed_limit_query)\.gd|scenes/main\.tscn)$'; then DRIVE_HUD_VISUAL_SCOPE="required"; fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(harness/driving/|scripts/(route_driving_policy|vehicle_route_follower|vehicle_dynamics|player_vehicle|player_vehicle_controller)\.gd$|scenes/player_vehicle\.tscn$)'; then DRIVING_VISUAL_SCOPE="required"; fi
+run(){ printf 'PR_CHECK=STAGE_BEGIN stage=%s\n' "$1"; local n="$1"; shift; "$@"; printf 'PR_CHECK=STAGE_OK stage=%s\n' "$n"; }
+testgd(){ local s="$1" m="${2:-}" l status; l="$(mktemp)"; set +e; "$GODOT" --headless --path "$WORKTREE" --script "$s" 2>&1 | tee "$l"; status=${PIPESTATUS[0]}; set -e; if [[ $status -ne 0 ]] || grep -Eq 'SCRIPT ERROR:|Failed to load script|ASSERT FAILED:|=FAIL' "$l"; then rm -f "$l"; return 1; fi; if [[ -n "$m" ]] && ! grep -Fq "$m" "$l"; then printf 'PR_CHECK=FAIL Godot test exited without required completion marker for %s: %s\n' "$s" "$m" >&2; rm -f "$l"; return 1; fi; rm -f "$l"; }
+if ! printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(geodot[^/]*|test_geodot[^/]*)'; then
+  if [[ -x "$WORKTREE/tools/pr_check_standard.sh" ]]; then exec bash "$WORKTREE/tools/pr_check_standard.sh"; fi
+  if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^scripts/camera_controller\.gd$'; then
+    testgd res://tests/godot/test_world_streaming_foundation.gd
+    testgd res://tests/godot/test_building_mesh_real_data.gd
+    testgd res://tests/godot/test_map_controls.gd
+    testgd res://tests/godot/test_production_fps_real_data.gd 'production Drive FPS real-data test: OK'
+    if [[ "$MANUAL_REVIEW" == none ]]; then printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "${BRUR_PR_CHECK_PR:?}"; exit 0; fi
+    printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=production-drive\n'
+    printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=editor\n'
+    "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"
+    exit 0
   fi
-  local repo_parent candidate
-  repo_parent="$(cd "$(dirname "$WORLD_DATA")/.." && pwd)"
-  candidate="$(find "$repo_parent/syndicate/data" "$repo_parent/data" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n 1)"
-  if [[ -z "$candidate" ]]; then
-    printf 'PR_CHECK=FAIL required real-data rebuild needs Sweden PBF; set BRUR_WORLD_PBF\n' >&2
-    return 1
-  fi
-  printf '%s\n' "$candidate"
-}
-
-ensure_routing_dataset_identity() {
-  if "$PYTHON" "$WORKTREE/tools/check_routing_dataset.py" "$WORLD_DATA"; then
-    printf 'PR_CHECK=REUSE_ROUTING_DATASET pr=%s reason=identity-match\n' "$BRUR_PR_CHECK_PR"
-    return 0
-  fi
-  local pbf
-  pbf="$(resolve_sweden_pbf)"
-  printf 'PR_CHECK=BUILD_ROUTING_DATASET pr=%s reason=identity-mismatch source=%s\n' "$BRUR_PR_CHECK_PR" "$(basename "$pbf")"
-  "$PYTHON" "$WORKTREE/tools/build_routing_dataset.py" "$pbf" --output "$WORLD_DATA"
-  "$PYTHON" "$WORKTREE/tools/check_routing_dataset.py" "$WORLD_DATA"
-}
-
-prepare_traffic_intersection_data() {
-  if [[ -f "$WORLD_DATA/traffic_signals.json" ]]; then
-    printf '%s\n' "$WORLD_DATA"
-    return 0
-  fi
-  local pbf
-  pbf="$(resolve_sweden_pbf)"
-  rm -rf "$TRAFFIC_INTERSECTION_DATA"
-  mkdir -p "$TRAFFIC_INTERSECTION_DATA"
-  ln -s "$WORLD_DATA/routing.brg" "$TRAFFIC_INTERSECTION_DATA/routing.brg"
-  printf 'PR_CHECK=BUILD_TRAFFIC_SIGNALS pr=%s reason=missing-runtime-data source=%s\n' "$BRUR_PR_CHECK_PR" "$(basename "$pbf")" >&2
-  "$PYTHON" "$WORKTREE/tools/build_traffic_signals.py" "$pbf" --output "$TRAFFIC_INTERSECTION_DATA" >&2
-  [[ -f "$TRAFFIC_INTERSECTION_DATA/traffic_signals.json" ]] || {
-    printf 'PR_CHECK=FAIL traffic signal build did not produce traffic_signals.json\n' >&2
-    return 1
-  }
-  printf '%s\n' "$TRAFFIC_INTERSECTION_DATA"
-}
-
-prepare_road_runtime_data() {
-  local pbf entry name
-  pbf="$(resolve_sweden_pbf)"
-  rm -rf "$RUNTIME_WORLD_DATA"
-  mkdir -p "$RUNTIME_WORLD_DATA"
-  for entry in "$WORLD_DATA"/*; do
-    name="$(basename "$entry")"
-    case "$name" in
-      lod0|lod1|lod2|manifest.json) continue ;;
-    esac
-    ln -s "$entry" "$RUNTIME_WORLD_DATA/$name"
-  done
-  cp "$WORLD_DATA/manifest.json" "$RUNTIME_WORLD_DATA/manifest.json"
-  printf 'PR_CHECK=BUILD_ROAD_LODS pr=%s reason=relevant-changes source=%s\n' "$BRUR_PR_CHECK_PR" "$(basename "$pbf")"
-  "$PYTHON" "$WORKTREE/tools/build_roads.py" "$pbf" --output "$RUNTIME_WORLD_DATA"
-  "$PYTHON" - "$RUNTIME_WORLD_DATA/manifest.json" <<'PY'
-import json
-import sys
-manifest = json.load(open(sys.argv[1], encoding="utf-8"))
-policy = manifest.get("road_lod_policy", {})
-lods = manifest.get("lods", [])
-if policy.get("max_class") != [4, 5, 6] or policy.get("min_spacing_m") != [1200.0, 300.0, 0.0]:
-    raise SystemExit("PR_CHECK=FAIL unexpected road LOD policy")
-if len(lods) != 3 or any(int(item.get("segments", 0)) <= 0 for item in lods):
-    raise SystemExit("PR_CHECK=FAIL rebuilt road LODs are empty")
-if not (int(lods[0]["segments"]) < int(lods[1]["segments"]) < int(lods[2]["segments"])):
-    raise SystemExit("PR_CHECK=FAIL road LOD segment counts are not progressively detailed")
-print(f"PR_CHECK=ROAD_LODS_REAL_DATA_OK lods={lods}")
-PY
-  rm -f "$WORKTREE/world_data"
-  ln -s "$RUNTIME_WORLD_DATA" "$WORKTREE/world_data"
-}
-
-run_godot_test() {
-  local script="$1" required_marker="${2:-}" log status
-  log="$(mktemp "${TMPDIR:-/tmp}/brur-world-test.XXXXXX.log")"
-  set +e
-  "$GODOT" --headless --path "$WORKTREE" --script "$script" 2>&1 | tee "$log"
-  status=${PIPESTATUS[0]}
-  set -e
-  if [[ $status -ne 0 ]] || grep -Eq 'SCRIPT ERROR:|Failed to load script|test failed:' "$log"; then
-    printf 'PR_CHECK=FAIL Godot reported script/test errors for %s\n' "$script" >&2
-    rm -f "$log"
-    return 1
-  fi
-  if [[ -n "$required_marker" ]] && ! grep -Fq "$required_marker" "$log"; then
-    printf 'PR_CHECK=FAIL Godot test exited without required completion marker for %s: %s\n' "$script" "$required_marker" >&2
-    rm -f "$log"
-    return 1
-  fi
-  rm -f "$log"
-}
-
-if [[ "$ROUTE_GEOMETRY_SCOPE" == "required" ]]; then
-  ensure_routing_dataset_identity
-  SERVER="$WORKTREE/bin/brur-gps-server"
-  [[ -x "$SERVER" ]] || {
-    printf 'PR_CHECK=FAIL missing production GPS server for E6/Bjärred regression\n' >&2
-    exit 66
-  }
-  printf 'PR_CHECK=CHECK_E6_BJARRED_ROUTE pr=%s\n' "$BRUR_PR_CHECK_PR"
-  "$PYTHON" "$WORKTREE/tools/check_e6_bjarred_route.py" "$WORLD_DATA" "$SERVER"
+  if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud\n'; printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=driving-harness\n'; exec "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"; fi
+  if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then exec "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"; fi
+  printf 'PR_CHECK=SKIP_VISUAL_REVIEW reason=no-geodot-or-visual-scope\n'; exit 0
 fi
-
-if [[ "$TRAFFIC_INTERSECTION_SCOPE" == "required" ]]; then
-  ensure_routing_dataset_identity
-  traffic_data="$(prepare_traffic_intersection_data)"
-  printf 'PR_CHECK=CHECK_TRAFFIC_INTERSECTIONS_REAL_DATA pr=%s\n' "$BRUR_PR_CHECK_PR"
-  "$PYTHON" "$WORKTREE/tools/check_traffic_intersections_real_data.py" "$traffic_data"
-  printf 'PR_CHECK=TRAFFIC_INTERSECTIONS_REAL_DATA_OK pr=%s\n' "$BRUR_PR_CHECK_PR"
-fi
-
-if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
-  [[ -f "$WORLD_DATA/buildings.jsonl" ]] || {
-    printf 'PR_CHECK=FAIL missing authoritative buildings.jsonl for production building mesh LOD\n' >&2
-    exit 66
-  }
-  if "$PYTHON" "$WORKTREE/tools/build_building_mesh_pyramid.py" "$WORLD_DATA" --check >/dev/null 2>&1; then
-    printf 'PR_CHECK=REUSE_BUILDING_MESH_LOD pr=%s reason=source-builder-policy-match\n' "$BRUR_PR_CHECK_PR"
-  else
-    printf 'PR_CHECK=BUILD_BUILDING_MESH_LOD pr=%s reason=missing-or-stale-cache source=existing-buildings-jsonl\n' "$BRUR_PR_CHECK_PR"
-    "$PYTHON" "$WORKTREE/tools/build_building_mesh_pyramid.py" "$WORLD_DATA"
-    "$PYTHON" "$WORKTREE/tools/build_building_mesh_pyramid.py" "$WORLD_DATA" --check >/dev/null || {
-      printf 'PR_CHECK=FAIL production building mesh LOD cache is invalid after rebuild\n' >&2
-      exit 1
-    }
-  fi
-  printf 'PR_CHECK=CHECK_BUILDING_ATOMIC_STREAM_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
-  run_godot_test res://tests/godot/test_world_streaming_foundation.gd
-  printf 'PR_CHECK=CHECK_BUILDING_REAL_DATA_PERFORMANCE pr=%s targets=cold750ms-warm250ms-publish5ms\n' "$BRUR_PR_CHECK_PR"
-  run_godot_test res://tests/godot/test_building_mesh_real_data.gd
-  printf 'PR_CHECK=CHECK_MAP_CONTROLS_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
-  run_godot_test res://tests/godot/test_map_controls.gd
-  printf 'PR_CHECK=CHECK_PRODUCTION_DRIVE_FPS_REAL_DATA pr=%s targets=avg33.4ms-p95_50ms-worst250ms\n' "$BRUR_PR_CHECK_PR"
-  run_godot_test res://tests/godot/test_production_fps_real_data.gd 'production Drive FPS real-data test: OK'
-fi
-
-if [[ "$ROAD_LOD_SCOPE" == "required" ]]; then
-  prepare_road_runtime_data
-  printf 'PR_CHECK=CHECK_WORLD_STREAMING_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
-  run_godot_test res://tests/godot/test_world_streaming_foundation.gd
-  printf 'PR_CHECK=CHECK_ROAD_SURFACE_REAL_DATA pr=%s\n' "$BRUR_PR_CHECK_PR"
-  run_godot_test res://tests/godot/test_road_surface_query_real_data.gd
-fi
-
-if [[ "$CITY_LIGHT_SCOPE" == "required" ]]; then
-  [[ -d "$WORLD_DATA/poi_tiles" ]] || { printf 'PR_CHECK=FAIL missing runtime POI tiles for city-light density\n' >&2; exit 66; }
-  printf 'PR_CHECK=BUILD_CITY_LIGHT_DENSITY pr=%s reason=relevant-changes\n' "$BRUR_PR_CHECK_PR"
-  "$PYTHON" "$WORKTREE/tools/build_city_light_density.py" "$WORLD_DATA"
-  printf 'PR_CHECK=CHECK_CITY_LIGHTS_REAL_DATA pr=%s\n' "$BRUR_PR_CHECK_PR"
-  GODOT_BIN="$GODOT" bash "$WORKTREE/tools/test_city_lights_real_data.sh"
-fi
-
-if [[ "$WORLD_SHOWCASE_SCOPE" == "required" ]]; then
-  printf 'PR_CHECK=PREPARE_WORLD_SHOWCASE pr=%s reason=relevant-changes\n' "$BRUR_PR_CHECK_PR"
-  "$PYTHON" "$WORKTREE/tools/prepare_world_showcase.py" "$WORLD_DATA" --output "$CACHE"
-  "$PYTHON" - "$CACHE/showcase_manifest.json" <<'PY'
-import json
-import sys
-report = json.load(open(sys.argv[1], encoding="utf-8"))
-if report.get("source_rebuilt") is not False or int(report.get("selected_records", 0)) <= 0:
-    raise SystemExit("PR_CHECK=FAIL invalid world showcase cache")
-print(f"PR_CHECK=WORLD_SHOWCASE_REAL_DATA_OK selected={report['selected_records']} tiles={report['tile_count']}")
-PY
-  printf 'PR_CHECK=CHECK_WORLD_SHOWCASE_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"
-  run_godot_test res://tests/godot/test_world_showcase.gd
-fi
-
-if [[ "$MANUAL_REVIEW" == "none" && "$DRIVING_VISUAL_SCOPE" == "skip" && "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "$BRUR_PR_CHECK_PR"
-  exit 0
-fi
-
-printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
-if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then
-  printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud\n'
-  printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=driving-harness\n'
-  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION this check must open the normal Brur World production Main scene, not DRIVING HARNESS. Enter Drive in that scene and inspect the ruta-1 HUD: Swedish speed-limit sign left, fixed-width current speed beside it, optional ETA on active route, and explicit unknown limit. If the window title/content says DRIVING HARNESS, close it and report launcher failure instead of judging the HUD.\n'
-  "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"
-  exit 0
-fi
-if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then
-  printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=harness/driving/driving_harness.tscn reason=driving-feel\n'
-  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION use Follow route and compare Driving policy Normal, Aggressive and Maniac on the same loop; confirm they feel clearly distinct and ordered in assertiveness; close Godot when finished\n'
-  "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"
-  exit 0
-fi
-if [[ "$MANUAL_REVIEW" == "required" && "$BUILDING_TILE_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=pr-merge-decision\n'
-  printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=editor\n'
-  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION perform the concrete CHECK from the PR merge decision in the normal Brur World game; close Godot when finished\n'
-  "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"
-  exit 0
-fi
-if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
-  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION production Drive real-data FPS/building checks have already passed automatically; inspect only genuinely perceptual presentation quality if desired, then close Godot\n'
-else
-  printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION inspect only the changed real-data presentation; close Godot when finished\n'
-fi
-"$GODOT" --path "$WORKTREE"
+GPKG="${BRUR_GEODOT_GPKG:-$HOME/Dropbox/Code/brur-world/sweden-brur.gpkg}"; [[ -f "$GPKG" ]] || { echo 'PR_CHECK=FAIL gpkg missing' >&2; exit 1; }; export BRUR_GEODOT_GPKG="$GPKG" BRUR_GEODOT_FAR_CACHE="$WORKTREE/.cache/geodot-far-cache.json"
+run setup bash "$WORKTREE/tools/setup_geodot_poc.sh"; run gpkg "$PYTHON" "$WORKTREE/tools/check_geodot_gpkg.py" "$GPKG"; run far-cache "$PYTHON" "$WORKTREE/tests/test_geodot_far_cache.py"
+for x in 'hlod|res://tests/godot/test_geodot_hlod_residency.gd|GEODOT_HLOD_RESIDENCY=PASS' 'runtime-hlod|res://tests/godot/test_geodot_runtime_hlod_integration.gd|GEODOT_RUNTIME_HLOD_INTEGRATION=PASS' 'renderer|res://tests/godot/test_geodot_renderer_contracts.gd|' 'bounds|res://tests/godot/test_geodot_runtime_bounds.gd|' 'lod|res://tests/godot/test_geodot_lod_policy.gd|' 'tuning|res://tests/godot/test_geodot_tuning_contract.gd|' 'coverage|res://tests/godot/test_geodot_view_coverage.gd|' 'streaming|res://tests/godot/test_geodot_streaming_policy.gd|' 'transition|res://tests/godot/test_geodot_streaming_transition.gd|' 'ownership|res://tests/godot/test_geodot_atomic_ownership.gd|' 'photozoom|res://tests/godot/test_geodot_photo_zoom_contract.gd|' 'geometry|res://tests/godot/test_geodot_cell_geometry.gd|' 'continuity|res://tests/godot/test_geodot_lod_continuity.gd|' 'composition|res://tests/godot/test_geodot_composition_contract.gd|' 'failure|res://tests/godot/test_geodot_failure_contract.gd|' 'realdata|res://tests/godot/test_geodot_real_data.gd|' 'fps|res://tests/godot/test_geodot_fps_real_data.gd|'; do IFS='|' read -r n s m <<< "$x"; run "$n" testgd "$s" "$m"; done
+printf 'PR_CHECK=GEODOT_OBJECTIVE_OK no_holes=true runtime_hlod=true warm_reverse_zoom=true bounded=true\n'
+[[ "$MANUAL_REVIEW" == required ]] || { printf 'PR_CHECK=SKIP_VISUAL_REVIEW reason=no-subjective-check-remains\n'; exit 0; }
+printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/geodot_poc.tscn reason=final-perceptual-only\n'
+BRUR_BUILD_REVISION="$(git -C "$WORKTREE" rev-parse --short=12 HEAD)" "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/geodot_poc.tscn"

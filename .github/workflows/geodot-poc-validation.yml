@@ -1,0 +1,28 @@
+name: GeoDot focused candidate
+on:
+  push:
+    branches:
+      - validation/342-seamless-final
+permissions:
+  contents: read
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot 4.6.3
+        run: |
+          set -euo pipefail
+          V=4.6.3-stable
+          curl -fsSL "https://github.com/godotengine/godot/releases/download/$V/Godot_v${V}_linux.x86_64.zip" -o /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v${V}_linux.x86_64
+      - name: Run focused seamless map contracts
+        run: |
+          set -euo pipefail
+          G=/tmp/godot/Godot_v4.6.3-stable_linux.x86_64
+          python3 tests/test_geodot_far_cache.py
+          for t in test_geodot_hlod_residency.gd test_geodot_runtime_hlod_integration.gd test_geodot_seamless_traversal.gd test_geodot_view_coverage.gd test_geodot_runtime_bounds.gd test_geodot_lod_policy.gd test_geodot_streaming_policy.gd test_geodot_atomic_ownership.gd test_geodot_photo_zoom_contract.gd; do
+            "$G" --headless --path . --script "tests/godot/$t"
+          done
