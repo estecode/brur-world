@@ -34,6 +34,7 @@ var _last_build_ms := 0.0
 var _last_pressure := 0.0
 var _last_signature := ""
 var _masked_samples := 0
+var _coverage_complete := false
 
 func setup(world_coordinates, camera_rig: Node, cache_path: String) -> Dictionary:
 	_coordinates = world_coordinates
@@ -63,13 +64,14 @@ func is_cache_ready() -> bool:
 	return _cache_ready
 
 func is_coverage_ready() -> bool:
-	return _cache_ready and _coverage_ready
+	return _cache_ready and _coverage_ready and _coverage_complete
 
 func shutdown() -> void:
 	set_process(false)
 	_enabled = false
 	_cache_ready = false
 	_coverage_ready = false
+	_coverage_complete = false
 	_cache.close()
 	_clear_batches()
 	_quad = null
@@ -81,7 +83,6 @@ func shutdown() -> void:
 func _exit_tree() -> void:
 	shutdown()
 
-# Compatibility only. Ownership is spatial; there is no global far/detail switch.
 func set_detail_owner(_value: bool) -> void:
 	pass
 
@@ -126,25 +127,40 @@ func _refresh() -> void:
 		return
 	_last_pressure = _renderer_memory_pressure()
 	var budget := LodPolicy.sample_budget(base_sample_budget, density_scale * LodPolicy.quality_scale_for_pressure(_last_pressure), hard_sample_cap)
+	var coverage := _ready_detail_coverage()
+	var started := Time.get_ticks_usec()
+	var samples: Array[Dictionary] = []
+	var complete := false
+	# Coverage wins over detail: if a level would truncate building-bearing cells,
+	# move to a coarser cached level until the whole requested view fits the cap.
+	while level < _cache.level_count():
+		samples = _cache.query_bounds(bounds, level, budget + 1, density_scale)
+		if samples.size() <= budget:
+			complete = true
+			break
+		level += 1
+	if not complete:
+		# The coarsest cache level should normally fit. Refuse to call an incomplete
+		# truncated result ready; startup keeps the opaque loading gate instead.
+		_coverage_complete = false
+		_coverage_ready = true
+		return
 	var cell_m := _cache.level_cell_size(level)
 	var qmin := Vector2(floor(bounds.position.x / cell_m), floor(bounds.position.y / cell_m))
 	var qmax := Vector2(ceil(bounds.end.x / cell_m), ceil(bounds.end.y / cell_m))
-	var coverage := _ready_detail_coverage()
 	var signature := "%d:%d:%d:%d:%d:%d:%d" % [level, int(qmin.x), int(qmin.y), int(qmax.x), int(qmax.y), budget, coverage.hash()]
 	if signature == _last_signature:
+		_coverage_ready = true
+		_coverage_complete = true
 		return
-	var started := Time.get_ticks_usec()
-	var samples := _cache.query_bounds(bounds, level, budget, density_scale)
 	_publish(samples, coverage)
 	_last_signature = signature
 	_last_level = level
 	_last_samples = samples.size()
 	_last_build_ms = float(Time.get_ticks_usec() - started) / 1000.0
-	if not samples.is_empty():
-		_last_cell_m = float(samples[0].cell_m)
-	# Empty rural views are valid coverage too: the cache query completed and
-	# authoritatively found no aggregate building samples for the requested view.
+	_last_cell_m = cell_m
 	_coverage_ready = true
+	_coverage_complete = true
 
 func _ready_detail_coverage() -> Array[Rect2]:
 	if _detail_provider != null and _detail_provider.has_method("ready_coverage_rects"):
@@ -182,27 +198,36 @@ func _view_bounds(focus: Vector3, distance_m: float) -> Rect2:
 		maximum.y = maxf(maximum.y, absolute.y)
 	return Rect2(minimum, maximum - minimum)
 
+static func group_samples(samples: Array[Dictionary], initial_grid_cells: int, batch_cap: int) -> Dictionary:
+	var grid := maxi(1, initial_grid_cells)
+	var cap := maxi(1, batch_cap)
+	while true:
+		var grouped: Dictionary = {}
+		for sample in samples:
+			var batch_x := floori(float(sample.x) / float(grid))
+			var batch_y := floori(float(sample.y) / float(grid))
+			var key := "%d:%d" % [batch_x, batch_y]
+			if not grouped.has(key):
+				grouped[key] = []
+			(grouped[key] as Array).append(sample)
+		if grouped.size() <= cap or grid >= 1048576:
+			return grouped
+		grid *= 2
+	return {}
+
 func _publish(samples: Array[Dictionary], coverage: Array[Rect2]) -> void:
-	var grouped: Dictionary = {}
+	var visible_samples: Array[Dictionary] = []
 	_masked_samples = 0
 	for sample in samples:
 		var cell_m := float(sample.cell_m)
 		var sample_rect := Rect2(Vector2(float(sample.x) * cell_m, float(sample.y) * cell_m), Vector2(cell_m, cell_m))
 		if sample_fully_owned_by_detail(sample_rect, coverage):
 			_masked_samples += 1
-			continue
-		var batch_x := floori(float(sample.x) / float(maxi(1, batch_grid_cells)))
-		var batch_y := floori(float(sample.y) / float(maxi(1, batch_grid_cells)))
-		var key := "%d:%d" % [batch_x, batch_y]
-		if not grouped.has(key):
-			grouped[key] = []
-		(grouped[key] as Array).append(sample)
-	var keys := grouped.keys()
-	keys.sort()
-	if keys.size() > maxi(1, max_batches):
-		keys.resize(maxi(1, max_batches))
+		else:
+			visible_samples.append(sample)
+	var grouped := group_samples(visible_samples, batch_grid_cells, max_batches)
 	var keep: Dictionary = {}
-	for key_value in keys:
+	for key_value in grouped.keys():
 		var key := String(key_value)
 		keep[key] = true
 		_publish_batch(key, grouped[key])
@@ -225,10 +250,10 @@ func _publish_batch(key: String, samples: Array) -> void:
 	for i in range(samples.size()):
 		var sample: Dictionary = samples[i]
 		var cell_m := float(sample.cell_m)
-		var coverage := clampf(float(sample.coverage) * density_scale, 0.0, 1.0)
+		var sample_coverage := clampf(float(sample.coverage) * density_scale, 0.0, 1.0)
 		var center_abs := Vector2((float(sample.x) + 0.5) * cell_m, (float(sample.y) + 0.5) * cell_m)
 		var center_world: Vector3 = _coordinates.absolute_to_world(center_abs)
-		var side := cell_m * clampf(sqrt(coverage), 0.08, 0.95)
+		var side := cell_m * clampf(sqrt(sample_coverage), 0.08, 0.95)
 		mm.set_instance_transform(i, Transform3D(Basis().scaled(Vector3(side, 1.0, side)), center_world + Vector3(0, 0.08, 0)))
 	instance.multimesh = mm
 	instance.visible = true
@@ -256,6 +281,7 @@ func debug_snapshot() -> Dictionary:
 		"active": _enabled,
 		"cache_ready": _cache_ready,
 		"coverage_ready": _coverage_ready,
+		"coverage_complete": _coverage_complete,
 		"samples": _last_samples,
 		"masked_by_detail": _masked_samples,
 		"batches": _batches.size(),
