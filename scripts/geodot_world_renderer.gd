@@ -95,7 +95,7 @@ func _refresh_desired(force:bool)->void:
 	var focus:Vector3=_camera_rig.call("get_focus_world");var abs:Vector2=_coordinates.world_to_absolute(focus);var bounds:=_view_absolute_bounds(focus);_current_bounds=bounds;var size:=coverage_cell_size_for_bounds(bounds,cell_size_m,viewport_margin_cells,max_resident_cells);var cells:=coverage_cells_for_bounds(bounds,size,viewport_margin_cells,max_resident_cells,abs);var vp:=get_viewport().get_visible_rect().size if get_viewport()!=null else Vector2(1920,1080);var px:=projected_pixels_for_size(representative_building_m,bounds,vp);var lod:=choose_screen_lod(_far_screen_lod,px,far_enter_pixels,far_exit_pixels);_far_screen_lod=lod==MeshBuilder.LOD_FAR;var next:Dictionary={};var candidates:Array[Dictionary]=[]
 	for cell in cells:var key:=_cell_key(cell,size);next[key]=lod;candidates.append({"key":key,"cell":cell,"cell_size_m":size,"lod":lod})
 	var changed:=force or next.hash()!=_desired.hash();_desired=next
-	if changed:_generation+=1;_queue.clear();_queued.clear();_drop_obsolete_ready_results();_park_nonoverlapping_active();_trim_transition_overlap()
+	if changed:_generation+=1;_queue.clear();_queued.clear();_drop_obsolete_ready_results();_park_nonoverlapping_active()
 	for request in candidates:
 		var key:=String(request.key);if _active.has(key) and int((_active[key] as Dictionary).get("lod",-1))==lod:continue
 		if _restore_warm(key,lod):continue
@@ -109,6 +109,7 @@ func _park_nonoverlapping_active()->void:
 		var key:=String(value)
 		if not _desired.has(key) and not _entry_rect(_active[key]).intersects(_current_bounds):_park_warm(key)
 func _trim_transition_overlap()->void:
+	if not desired_coverage_ready(_active,_desired):return
 	var transition:Array[String]=[]
 	for value in _active.keys():
 		var key:=String(value)
@@ -155,9 +156,10 @@ func _publish_cell(request:Dictionary,result:Dictionary)->void:
 	var buildings:=MeshBuilder.build_buildings(result.get("buildings",[]),origin,lod);if buildings!=null:var bi:=MeshInstance3D.new();bi.mesh=buildings;bi.material_override=_building_material;group.add_child(bi)
 	var roads:=MeshBuilder.build_roads(result.get("roads",[]),origin,lod);if roads!=null:var ri:=MeshInstance3D.new();ri.mesh=roads;ri.material_override=_road_material;group.add_child(ri)
 	if _active.has(key):_park_warm(key)
-	add_child(group);_active[key]={"node":group,"lod":lod,"origin_abs":origin,"cell_size_m":size,"buildings":int(result.get("building_features",0)),"warm_tick":Time.get_ticks_msec()};group.visible=_presentation_visible;_retire_obsolete_after_publish();coverage_changed.emit()
+	add_child(group);_active[key]={"node":group,"lod":lod,"origin_abs":origin,"cell_size_m":size,"buildings":int(result.get("building_features",0)),"warm_tick":Time.get_ticks_msec()};group.visible=_presentation_visible;_trim_transition_overlap();_retire_obsolete_after_publish();coverage_changed.emit()
 func _retire_obsolete_after_publish()->void:
-	while _active.size()>maxi(1,max_resident_cells+max_transition_cells):
+	var cap:=maxi(1,max_resident_cells+max_transition_cells)
+	while _active.size()>cap:
 		var stale:=choose_stale_eviction_key(_active,_desired,"")
 		if stale.is_empty():break
 		_park_warm(stale)
@@ -173,7 +175,7 @@ func _restore_warm(key:String,lod:int)->bool:
 	var wk:=_warm_key(key,lod);if not _warm.has(wk):return false
 	if _active.has(key):_park_warm(key)
 	var entry:Dictionary=_warm[wk];_warm.erase(wk);_active[key]=entry;var node:Node3D=entry.get("node") as Node3D;if node!=null:node.visible=_presentation_visible
-	_retire_obsolete_after_publish();coverage_changed.emit();return true
+	_trim_transition_overlap();_retire_obsolete_after_publish();coverage_changed.emit();return true
 func _trim_warm()->void:
 	var cap:=maxi(4,max_resident_cells/4)
 	while _warm.size()>cap:
