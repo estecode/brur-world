@@ -227,12 +227,7 @@ func _finish_measurement() -> void:
 		_fail("pending-cell bound exceeded")
 		return
 	print("GeoDot Drive FPS real-data test: OK")
-	# Godot 4.7.2/macOS can crash in renderer/extension teardown after this test has
-	# already completed successfully. Exit immediately after flushing the completion
-	# marker so the parent harness can distinguish a passed runtime test from that
-	# engine teardown defect. Runtime shutdown itself is covered separately.
-	OS.execute("/usr/bin/true", PackedStringArray(), [], true)
-	OS.kill(OS.get_process_id())
+	quit(0)
 
 func _percentile(fraction: float) -> float:
 	var index := clampi(int(ceil(float(_frame_times.size()) * fraction)) - 1, 0, _frame_times.size() - 1)
