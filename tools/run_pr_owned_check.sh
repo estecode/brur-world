@@ -9,13 +9,11 @@ PR="${2:-}"
 WORLD_DATA="${3:-}"
 PYTHON_BIN="${4:-}"
 GODOT_BIN="${5:-}"
-
 [[ -d "$WORKTREE" ]] || { printf 'PR_CHECK=FAIL invalid PR worktree\n' >&2; exit 66; }
 [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { printf 'PR_CHECK=FAIL invalid PR number for PR-owned check\n' >&2; exit 64; }
 [[ -d "$WORLD_DATA" ]] || { printf 'PR_CHECK=FAIL invalid world_data path for PR-owned check\n' >&2; exit 66; }
 [[ -n "$PYTHON_BIN" ]] || { printf 'PR_CHECK=FAIL missing Python path for PR-owned check\n' >&2; exit 69; }
 [[ -n "$GODOT_BIN" ]] || { printf 'PR_CHECK=FAIL missing Godot path for PR-owned check\n' >&2; exit 69; }
-
 HOOK="$WORKTREE/tools/pr_check_local.sh"
 STATUS_HELPER="$ROOT/tools/pr_check_status.py"
 [[ -f "$STATUS_HELPER" ]] || { printf 'PR_CHECK=FAIL missing tools/pr_check_status.py\n' >&2; exit 66; }
@@ -29,14 +27,11 @@ trap cleanup EXIT INT TERM
 
 resolve_manual_review_contract() {
   case "${BRUR_PR_CHECK_MANUAL_REVIEW:-}" in
-    required)
-      [[ -n "${BRUR_PR_CHECK_MANUAL_CHECK:-}" ]] || { printf 'PR_CHECK=FAIL manual review is required but BRUR_PR_CHECK_MANUAL_CHECK is empty\n' >&2; return 70; }
-      return 0 ;;
+    required) [[ -n "${BRUR_PR_CHECK_MANUAL_CHECK:-}" ]] || { printf 'PR_CHECK=FAIL manual review is required but BRUR_PR_CHECK_MANUAL_CHECK is empty\n' >&2; return 70; }; return 0 ;;
     none) export BRUR_PR_CHECK_MANUAL_CHECK=""; return 0 ;;
     "") ;;
     *) printf 'PR_CHECK=FAIL invalid BRUR_PR_CHECK_MANUAL_REVIEW=%s\n' "$BRUR_PR_CHECK_MANUAL_REVIEW" >&2; return 70 ;;
   esac
-
   command -v gh >/dev/null 2>&1 || { printf 'PR_CHECK=FAIL GitHub CLI (gh) is required to recover the PR merge decision\n' >&2; return 69; }
   local parser pr_body merge_decision manual_check
   parser="$ROOT/tools/pr_merge_decision.py"
@@ -49,9 +44,7 @@ resolve_manual_review_contract() {
       export BRUR_PR_CHECK_MANUAL_REVIEW=required BRUR_PR_CHECK_MANUAL_CHECK="$manual_check"
       printf 'PR_CHECK=MANUAL_REVIEW required pr=%s source=pr-merge-decision-fallback\n' "$PR"
       printf 'PR_CHECK=MANUAL_CHECK %s\n' "$manual_check" ;;
-    merge)
-      export BRUR_PR_CHECK_MANUAL_REVIEW=none BRUR_PR_CHECK_MANUAL_CHECK=""
-      printf 'PR_CHECK=MANUAL_REVIEW none pr=%s source=pr-merge-decision-fallback\n' "$PR" ;;
+    merge) export BRUR_PR_CHECK_MANUAL_REVIEW=none BRUR_PR_CHECK_MANUAL_CHECK=""; printf 'PR_CHECK=MANUAL_REVIEW none pr=%s source=pr-merge-decision-fallback\n' "$PR" ;;
     block) printf 'PR_CHECK=FAIL PR merge decision is DO NOT MERGE; fix the blocker before running a human Safe Check\n' >&2; return 78 ;;
     *) printf 'PR_CHECK=FAIL invalid parsed merge decision: %s\n' "$merge_decision" >&2; return 70 ;;
   esac
@@ -61,24 +54,13 @@ cat > "$GODOT_WRAPPER" <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
 for arg in "$@"; do
-  if [[ "$arg" == "--headless" ]]; then
-    exec "$BRUR_PR_CHECK_REAL_GODOT" "$@"
-  fi
+  [[ "$arg" != "--headless" ]] || exec "$BRUR_PR_CHECK_REAL_GODOT" "$@"
 done
-# A PR-owned hook may request an interactive launch, but it cannot hand control to
-# the human while objective hook work is still executing. Persist the request and
-# return success; the outer runner launches it only after the hook itself is green.
 printf '%s\0' "$@" > "$BRUR_PR_CHECK_VISUAL_REQUEST"
 printf 'PR_CHECK=VISUAL_REVIEW_DEFERRED pr=%s reason=objective-chain-not-complete\n' "$BRUR_PR_CHECK_PR"
 exit 0
 WRAPPER
 chmod +x "$GODOT_WRAPPER"
-
-run_wrapped_godot() {
-  BRUR_PR_CHECK_PR="$PR" BRUR_PR_CHECK_HEAD="$WORKTREE_HEAD" \
-  BRUR_PR_CHECK_REAL_GODOT="$GODOT_BIN" BRUR_PR_CHECK_VISUAL_REQUEST="$VISUAL_REQUEST" \
-  "$GODOT_WRAPPER" "$@"
-}
 
 record_objective_success() {
   [[ ! -f "$SUCCESS_MARKER" ]] || return 0
@@ -87,39 +69,56 @@ record_objective_success() {
   printf 'PR_CHECK=STATUS success pr=%s revision=%s stage=objective-checks-complete\n' "$PR" "${WORKTREE_HEAD:0:12}"
 }
 
-launch_human_review_after_gate() {
-  record_objective_success
-  if [[ "$BRUR_PR_CHECK_MANUAL_REVIEW" != "required" ]]; then
-    printf 'PR_CHECK=HANDOFF_READY pr=%s revision=%s manual=none\n' "$PR" "${WORKTREE_HEAD:0:12}"
-    return 0
-  fi
-  [[ -n "${BRUR_PR_CHECK_MANUAL_CHECK:-}" ]] || { printf 'PR_CHECK=FAIL handoff gate reached without concrete manual CHECK\n' >&2; return 70; }
+read_visual_request() {
+  VISUAL_ARGS=()
+  [[ -f "$VISUAL_REQUEST" ]] || return 1
+  while IFS= read -r -d '' arg; do VISUAL_ARGS+=("$arg"); done < "$VISUAL_REQUEST"
+  return 0
+}
 
-  local -a visual_args=()
-  if [[ -f "$VISUAL_REQUEST" ]]; then
-    while IFS= read -r -d '' arg; do visual_args+=("$arg"); done < "$VISUAL_REQUEST"
-  else
-    [[ -f "$WORKTREE/scenes/main.tscn" ]] || { printf 'PR_CHECK=FAIL manual review is required but PR revision has no scenes/main.tscn\n' >&2; return 66; }
-    visual_args=(--path "$WORKTREE" "$WORKTREE/scenes/main.tscn")
-    printf 'PR_CHECK=FORCE_VISUAL_REVIEW pr=%s reason=authoritative-manual-review-not-launched-by-pr-hook\n' "$PR"
-    printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=manual-review-contract-fallback\n'
-  fi
-
-  # This marker is the mechanical boundary: it is impossible to reach this point
-  # until the complete PR-owned objective hook has returned status 0.
-  printf 'PR_CHECK=HANDOFF_READY pr=%s revision=%s objective_checks=success\n' "$PR" "${WORKTREE_HEAD:0:12}"
-  printf '\nSAFE CHECK — MANUAL CHECK REQUIRED\n'
-  printf 'Inspect exactly this: %s\n' "$BRUR_PR_CHECK_MANUAL_CHECK"
-  printf 'PASS: close Godot, then report: test ok #%s\n' "$PR"
-  printf 'FAIL: close Godot, then report: test fail #%s — <what failed>\n\n' "$PR"
+launch_deferred_visual() {
+  local -a args=("$@")
   set +e
-  "$GODOT_BIN" "${visual_args[@]}"
+  "$GODOT_BIN" "${args[@]}"
   local visual_status=$?
   set -e
   if [[ "$visual_status" -ne 0 ]]; then
     printf 'PR_CHECK=VISUAL_REVIEW_WARNING Godot exited status=%s after objective success\n' "$visual_status" >&2
   fi
-  return 0
+}
+
+complete_objectives_and_gate_handoff() {
+  local -a VISUAL_ARGS=()
+  if [[ "$BRUR_PR_CHECK_MANUAL_REVIEW" == "required" ]]; then
+    [[ -n "${BRUR_PR_CHECK_MANUAL_CHECK:-}" ]] || { printf 'PR_CHECK=FAIL handoff gate reached without concrete manual CHECK\n' >&2; return 70; }
+    record_objective_success
+    if ! read_visual_request; then
+      [[ -f "$WORKTREE/scenes/main.tscn" ]] || { printf 'PR_CHECK=FAIL manual review is required but PR revision has no scenes/main.tscn\n' >&2; return 66; }
+      VISUAL_ARGS=(--path "$WORKTREE" "$WORKTREE/scenes/main.tscn")
+      printf 'PR_CHECK=FORCE_VISUAL_REVIEW pr=%s reason=authoritative-manual-review-not-launched-by-pr-hook\n' "$PR"
+      printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=manual-review-contract-fallback\n'
+      printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=editor\n'
+    fi
+    printf 'PR_CHECK=HANDOFF_READY pr=%s revision=%s objective_checks=success\n' "$PR" "${WORKTREE_HEAD:0:12}"
+    printf '\nSAFE CHECK — MANUAL CHECK REQUIRED\n'
+    printf 'Inspect exactly this: %s\n' "$BRUR_PR_CHECK_MANUAL_CHECK"
+    printf 'PASS: close Godot, then report: test ok #%s\n' "$PR"
+    printf 'FAIL: close Godot, then report: test fail #%s — <what failed>\n\n' "$PR"
+    launch_deferred_visual "${VISUAL_ARGS[@]}"
+    return 0
+  fi
+
+  if read_visual_request; then
+    # Preserve legacy close-only visual launches, but only after the complete hook
+    # has returned green. This is not a human verification handoff.
+    record_objective_success
+    printf 'PR_CHECK=HANDOFF_READY pr=%s revision=%s manual=none objective_checks=success\n' "$PR" "${WORKTREE_HEAD:0:12}"
+    printf '\nSAFE CHECK — NO MANUAL CHECK REQUIRED\n'
+    printf 'No manual check is required. You do not need to test or inspect anything in Godot — just close Godot so Safe Check can finish.\n\n'
+    launch_deferred_visual "${VISUAL_ARGS[@]}"
+  else
+    printf 'PR_CHECK=HANDOFF_READY pr=%s revision=%s manual=none\n' "$PR" "${WORKTREE_HEAD:0:12}"
+  fi
 }
 
 run_owned_hook() {
@@ -146,14 +145,10 @@ run_owned_hook() {
   else
     printf 'PR_CHECK=SKIP_PR_OWNED_OBJECTIVE_CHECKS pr=%s reason=no-hook\n' "$PR"
   fi
-  launch_human_review_after_gate
+  complete_objectives_and_gate_handoff
 }
 
-if [[ -n "${BRUR_PR_CHECK_LOG_PATH:-}" ]]; then
-  run_owned_hook
-  exit $?
-fi
-
+if [[ -n "${BRUR_PR_CHECK_LOG_PATH:-}" ]]; then run_owned_hook; exit $?; fi
 MAPPED_ROOT="${BRUR_PR_CHECK_MAPPED_ROOT:-}"
 if [[ -z "$MAPPED_ROOT" ]]; then
   MAPPED_ROOT="$("$PYTHON_BIN" - "$WORLD_DATA" <<'PY'
@@ -164,8 +159,7 @@ PY
 fi
 LOG_DIR="$MAPPED_ROOT/safecommand-logs"
 LOG_PATH="$LOG_DIR/pr-check-${PR}.log"
-mkdir -p "$LOG_DIR"
-: > "$LOG_PATH"
+mkdir -p "$LOG_DIR"; : > "$LOG_PATH"
 printf 'PR_CHECK=LOG_FALLBACK path=%s reason=stale-mapped-entrypoint\n' "$LOG_PATH" | tee -a "$LOG_PATH"
 set +e
 run_owned_hook 2>&1 | tee -a "$LOG_PATH"
