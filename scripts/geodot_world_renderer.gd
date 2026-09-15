@@ -101,6 +101,7 @@ func _refresh_desired(force:bool)->void:
 	_trim_queue();_trim_warm();_start_queries_if_needed()
 func _active_coverage_rects()->Array[Rect2]:
 	var out:Array[Rect2]=[]
+	if not _streaming_enabled:return out
 	for e_value in _active.values():
 		var e:Dictionary=e_value;var o:Vector2=e.get("origin_abs",Vector2.ZERO);var s:=float(e.get("cell_size_m",0.0));if s>0.0:out.append(Rect2(o,Vector2(s,s)))
 	return out
