@@ -71,19 +71,19 @@ func ready_desired_cells() -> int:
 
 func _process(delta: float) -> void:
 	if not _enabled: return
-	_poll_queries(); var started := Time.get_ticks_usec()
-	if not _ready_results.is_empty():
-		_publish_one_ready_result(); _last_publish_frame_ms = float(Time.get_ticks_usec()-started)/1000.0
-		if _last_publish_frame_ms > maxf(0.25,streaming_budget_ms): _over_budget_publishes += 1
+	_poll_queries()
+	var started := Time.get_ticks_usec(); var published := 0; var budget := maxf(0.25,streaming_budget_ms)
+	while not _ready_results.is_empty() and published < maxi(1,max_publishes_per_frame):
+		if published > 0 and float(Time.get_ticks_usec()-started)/1000.0 >= budget: break
+		_publish_one_ready_result(); published += 1
+	_last_publish_frame_ms = float(Time.get_ticks_usec()-started)/1000.0 if published > 0 else 0.0
+	if published > 0 and _last_publish_frame_ms > budget: _over_budget_publishes += 1
 	_refresh_accum += delta
 	if _refresh_accum >= refresh_interval_s: _refresh_accum=0.0; _refresh_desired(false)
 	_enforce_resident_budget(); _start_queries_if_needed()
 
 func debug_snapshot() -> Dictionary:
 	var snapshot := super.debug_snapshot(); var ready_count := ready_desired_cells()
-	# active_cells remains the currently requested/usable coverage contract. Warm
-	# hidden geometry is reported separately so readiness and FPS settling do not
-	# mistake cache residency for visible ownership.
 	snapshot["active_cells"] = ready_count; snapshot["ready_desired_cells"] = ready_count; snapshot["warm_resident_cells"] = _active.size()
 	snapshot["streaming_budget_ms"] = streaming_budget_ms; snapshot["last_publish_frame_ms"] = _last_publish_frame_ms; snapshot["over_budget_publishes"] = _over_budget_publishes; snapshot["presentation_visible"] = _presentation_visible
 	return snapshot
