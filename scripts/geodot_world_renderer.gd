@@ -9,8 +9,8 @@ const GeoDotWorldMeshBuilderScript = preload("res://scripts/geodot_world_mesh_bu
 @export var far_radius_cells := 3
 @export var max_resident_cells := 49
 @export var max_pending_cells := 32
-@export var max_buildings_per_cell := 12000
-@export var max_roads_per_cell := 8000
+@export var max_buildings_per_cell := 3000
+@export var max_roads_per_cell := 2500
 @export var refresh_interval_s := 0.20
 @export var far_lod_altitude_m := 2500.0
 
@@ -70,9 +70,6 @@ func shutdown() -> void:
 	_queued.clear()
 	_desired.clear()
 	_shutdown_query_worker()
-	# shutdown() is an explicit lifecycle barrier used before SceneTree/renderer
-	# teardown. Free resident render nodes synchronously here rather than leaving
-	# Mesh/Material RIDs in the deferred-delete queue until engine shutdown.
 	_clear_active(true)
 	_release_render_resources()
 	_release_source()
@@ -154,6 +151,11 @@ func _refresh_desired(force: bool) -> void:
 	_desired = next_desired
 	if changed:
 		_generation += 1
+		# Requests queued for the old camera position are now counterproductive.
+		# Drop them immediately so the single native query worker spends its time
+		# preparing cells that can actually become visible next.
+		_queue.clear()
+		_queued.clear()
 	for key in _desired.keys():
 		var wanted_lod := int(_desired[key])
 		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == wanted_lod:
