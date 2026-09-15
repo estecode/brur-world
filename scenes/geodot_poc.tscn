@@ -1,11 +1,15 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/main.tscn" id="1_main"]
 [ext_resource type="Script" path="res://scripts/geodot_poc_main.gd" id="2_poc"]
 [ext_resource type="Script" path="res://scripts/geodot_world_renderer.gd" id="3_geodot"]
+[ext_resource type="Script" path="res://scripts/geodot_debug_overlay.gd" id="4_debug"]
 
 [node name="Main" instance=ExtResource("1_main")]
 script = ExtResource("2_poc")
+
+[node name="DebugOverlay" parent="." index="12"]
+script = ExtResource("4_debug")
 
 [node name="GeoDotWorldLayer" type="Node3D" parent="World" index="0"]
 script = ExtResource("3_geodot")
