@@ -1,4 +1,5 @@
 extends SceneTree
+# Hosted validation trigger for #342; behavior is intentionally unchanged.
 
 const FarRenderer = preload("res://scripts/geodot_far_renderer.gd")
 
