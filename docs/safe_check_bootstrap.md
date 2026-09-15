@@ -19,14 +19,11 @@ The mapped checkout supplies local machine state (`world_data`, `.venv`, reposit
 From the mapped `brur-world` checkout, run:
 
 ```bash
-bash <(git show origin/main:tools/register_safe_check.sh)
+git fetch origin main:refs/remotes/origin/main
+bash <(git show refs/remotes/origin/main:tools/register_safe_check.sh)
 ```
 
-If `safe-command-links` is not a sibling directory of `brur-world`, pass its absolute path:
-
-```bash
-bash <(git show origin/main:tools/register_safe_check.sh) /absolute/path/to/safe-command-links
-```
+If `safe-command-links` is not a sibling directory of `brur-world`, pass its absolute path to the second command.
 
 The registration stored by Safe Command Links then remains valid while switching among `main`, old issue branches, current POC branches and future issue branches. Safe Check fetches current `origin/main` before executing project-owned Safe Check code, so those branches do not need to contain the latest launcher.
 
