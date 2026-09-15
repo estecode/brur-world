@@ -71,6 +71,16 @@ class Tests(unittest.TestCase):
         self.assertIn("prepare_cached_runtime_pack", benchmark)
         self.assertNotIn("full_world_build_under_15_minutes", benchmark)
 
+    def test_runtime_footprint_gate_uses_post_191_bmc2_baseline(self):
+        # The normative #220 clarification after #191 supersedes the old
+        # JSONL-building 3.3-3.4 GiB baseline. BMC2 is production truth now,
+        # so a 30% comparison must be against a measured current-main BMC2
+        # production selection, never the historical <=2.35 GiB approximation.
+        benchmark = (TOOLS / "benchmark_issue_220.py").read_text(encoding="utf-8")
+        self.assertNotIn("2.35", benchmark)
+        self.assertNotIn("3.3", benchmark)
+        self.assertNotIn("3.4", benchmark)
+
 
 if __name__ == "__main__":
     unittest.main()
