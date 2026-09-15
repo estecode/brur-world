@@ -1,14 +1,6 @@
 extends Node3D
 class_name GeoDotWorldRenderer
 
-## Bounded GeoDot presentation streamer for buildings and roads.
-##
-## Dependencies:
-## - GeoDotWorldSource adapts the GeoPackage into BRUR render records.
-## - GeoDotWorldMeshBuilder batches those records into one building + one road mesh per cell.
-## - WorldCoordinates remains the only projected/world coordinate conversion owner.
-## - CameraRig supplies focus/altitude. This node owns presentation only, never gameplay/collision truth.
-
 const GeoDotWorldSourceScript = preload("res://scripts/geodot_world_source.gd")
 const GeoDotWorldMeshBuilderScript = preload("res://scripts/geodot_world_mesh_builder.gd")
 
@@ -38,7 +30,6 @@ var _query_generation := 0
 var _generation := 0
 var _building_material: StandardMaterial3D = null
 var _road_material: StandardMaterial3D = null
-
 var _perf_query_ms := 0.0
 var _perf_query_max_ms := 0.0
 var _perf_build_ms := 0.0
@@ -67,12 +58,11 @@ func setup(world_coordinates, camera_rig: Node, gpkg_path: String) -> Dictionary
 func _exit_tree() -> void:
 	_shutdown_query_worker()
 	_clear_active()
-	if _source != null and _source.has_method("close"):
-		_source.close()
-	_source = null
+	_release_source()
 
 func shutdown() -> void:
 	_enabled = false
+	_ready = false
 	set_process(false)
 	_generation += 1
 	_queue.clear()
@@ -80,8 +70,14 @@ func shutdown() -> void:
 	_desired.clear()
 	_shutdown_query_worker()
 	_clear_active()
-	if _source != null and _source.has_method("close"):
+	_release_source()
+
+func _release_source() -> void:
+	if _source == null:
+		return
+	if _source.has_method("close"):
 		_source.close()
+	_source = null
 
 func _shutdown_query_worker() -> void:
 	if _query_thread != null and _query_thread.is_started():
@@ -103,10 +99,8 @@ func set_enabled(value: bool) -> void:
 
 func is_enabled() -> bool:
 	return _enabled
-
 func is_ready() -> bool:
 	return _ready
-
 func source_metadata() -> Dictionary:
 	return _source.metadata() if _source != null else {}
 
@@ -144,16 +138,11 @@ func _refresh_desired(force: bool) -> void:
 	for index in range(limit):
 		var request: Dictionary = candidates[index]
 		var cell: Vector2i = request["cell"]
-		var key := _cell_key(cell)
-		next_desired[key] = int(request["lod"])
+		next_desired[_cell_key(cell)] = int(request["lod"])
 	var changed := force or next_desired.hash() != _desired.hash()
 	_desired = next_desired
 	if changed:
 		_generation += 1
-	# Reconcile every refresh, not only when the desired set changes. A request can
-	# legitimately be dropped by the bounded queue or become stale while the camera
-	# moves. Without reconciliation that desired cell would never be retried and the
-	# renderer could settle permanently with only a partial visible world.
 	for key in _desired.keys():
 		var wanted_lod := int(_desired[key])
 		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == wanted_lod:
@@ -164,10 +153,9 @@ func _refresh_desired(force: bool) -> void:
 
 func _enqueue_cell(key: String, lod: int) -> void:
 	var queue_id := "%s:%d" % [key, lod]
-	if _queued.has(queue_id) or (_query_key == queue_id):
+	if _queued.has(queue_id) or _query_key == queue_id:
 		return
-	var cell := _parse_cell_key(key)
-	_queue.append({"key": key, "queue_id": queue_id, "cell": cell, "lod": lod, "generation": _generation})
+	_queue.append({"key": key, "queue_id": queue_id, "cell": _parse_cell_key(key), "lod": lod, "generation": _generation})
 	_queued[queue_id] = true
 
 func _trim_queue() -> void:
@@ -322,32 +310,10 @@ func _stale_active_count() -> int:
 	return count
 
 func debug_snapshot() -> Dictionary:
-	return {
-		"enabled": _enabled,
-		"ready": _ready,
-		"active_cells": _active.size(),
-		"desired_cells": _desired.size(),
-		"stale_cells": _stale_active_count(),
-		"pending_cells": _queue.size() + (1 if _query_thread != null else 0),
-		"max_resident_cells": max_resident_cells,
-		"max_pending_cells": max_pending_cells,
-		"source": source_metadata(),
-	}
+	return {"enabled": _enabled, "ready": _ready, "active_cells": _active.size(), "desired_cells": _desired.size(), "stale_cells": _stale_active_count(), "pending_cells": _queue.size() + (1 if _query_thread != null else 0), "max_resident_cells": max_resident_cells, "max_pending_cells": max_pending_cells, "source": source_metadata()}
 
 func consume_perf_metrics() -> Dictionary:
-	var result := {
-		"geodot_query_ms": _perf_query_ms,
-		"geodot_query_max_ms": _perf_query_max_ms,
-		"geodot_build_ms": _perf_build_ms,
-		"geodot_build_max_ms": _perf_build_max_ms,
-		"geodot_queries": _perf_queries,
-		"geodot_publishes": _perf_publishes,
-		"geodot_building_features": _perf_building_features,
-		"geodot_road_features": _perf_road_features,
-		"geodot_active_cells": _active.size(),
-		"geodot_stale_cells": _stale_active_count(),
-		"geodot_pending_cells": _queue.size() + (1 if _query_thread != null else 0),
-	}
+	var result := {"geodot_query_ms": _perf_query_ms, "geodot_query_max_ms": _perf_query_max_ms, "geodot_build_ms": _perf_build_ms, "geodot_build_max_ms": _perf_build_max_ms, "geodot_queries": _perf_queries, "geodot_publishes": _perf_publishes, "geodot_building_features": _perf_building_features, "geodot_road_features": _perf_road_features, "geodot_active_cells": _active.size(), "geodot_stale_cells": _stale_active_count(), "geodot_pending_cells": _queue.size() + (1 if _query_thread != null else 0)}
 	_perf_query_ms = 0.0
 	_perf_query_max_ms = 0.0
 	_perf_build_ms = 0.0
@@ -360,7 +326,6 @@ func consume_perf_metrics() -> Dictionary:
 
 func _cell_key(cell: Vector2i) -> String:
 	return "%d:%d" % [cell.x, cell.y]
-
 func _parse_cell_key(key: String) -> Vector2i:
 	var parts := key.split(":")
 	return Vector2i(int(parts[0]), int(parts[1])) if parts.size() == 2 else Vector2i.ZERO
