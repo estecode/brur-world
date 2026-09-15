@@ -1,0 +1,49 @@
+name: GeoDot POC validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'scripts/geodot_**'
+      - 'scenes/geodot_poc.tscn'
+      - 'tests/godot/test_geodot_**'
+      - 'tools/check_geodot_gpkg.py'
+      - 'tools/setup_geodot_poc.sh'
+      - '.github/workflows/geodot-poc-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  geodot-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4 headless runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT_VERSION="4.5.1-stable"
+          GODOT_ZIP="$RUNNER_TEMP/godot.zip"
+          GODOT_DIR="$RUNNER_TEMP/godot"
+          mkdir -p "$GODOT_DIR"
+          curl -fsSL \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.x86_64.zip" \
+            -o "$GODOT_ZIP"
+          unzip -q "$GODOT_ZIP" -d "$GODOT_DIR"
+          GODOT_BIN="$GODOT_DIR/Godot_v${GODOT_VERSION}_linux.x86_64"
+          chmod +x "$GODOT_BIN"
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+
+      - name: Run GeoDot renderer contracts
+        run: |
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_renderer_contracts.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_cell_geometry.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_lod_continuity.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_composition_contract.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_failure_contract.gd
+          timeout 20s "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_plugin_fixture.gd
