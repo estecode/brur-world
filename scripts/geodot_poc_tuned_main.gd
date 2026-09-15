@@ -4,18 +4,44 @@ const LodPolicy = preload("res://scripts/geodot_lod_policy.gd")
 const FAR_PRESENTATION_M := 55000.0
 const ORDINARY_BUILDING_M := 10.0
 const TALL_BUILDING_M := 30.0
+
 var _effective_resident_cells := 128
 var _base_ready := false
+var _loading_layer: CanvasLayer = null
+var _loading_label: Label = null
 
 func _ready() -> void:
+	_create_loading_gate()
 	super._ready()
-	# Far cache is the always-ready base coverage. Detail owns only cells whose
-	# replacement mesh is already READY; the far renderer masks those cells.
+	# Far HLOD is the mandatory base representation. Detail may refine it only
+	# after a same-region mesh has been published and reported READY.
 	if geodot_far_layer != null and geodot_far_layer.has_method("set_detail_provider"):
 		geodot_far_layer.call("set_detail_provider", geodot_world_layer)
-	_base_ready = geodot_far_layer != null
 	if geodot_world_layer != null and geodot_world_layer.has_method("set_presentation_visible"):
 		geodot_world_layer.call("set_presentation_visible", true)
+	_refresh_base_readiness()
+
+func _create_loading_gate() -> void:
+	_loading_layer = CanvasLayer.new()
+	_loading_layer.name = "GeoDotPreparingWorld"
+	_loading_layer.layer = 1000
+	add_child(_loading_layer)
+	var background := ColorRect.new()
+	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	background.color = Color(0.025, 0.028, 0.032, 1.0)
+	background.mouse_filter = Control.MOUSE_FILTER_STOP
+	_loading_layer.add_child(background)
+	_loading_label = Label.new()
+	_loading_label.text = "Preparing world…"
+	_loading_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_loading_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_loading_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	background.add_child(_loading_label)
+
+func _refresh_base_readiness() -> void:
+	_base_ready = geodot_far_layer != null and geodot_far_layer.has_method("is_coverage_ready") and bool(geodot_far_layer.call("is_coverage_ready"))
+	if _loading_label != null:
+		_loading_label.text = "Preparing world…" if not _base_ready else "World ready"
 
 func _apply_tuning() -> void:
 	super._apply_tuning()
@@ -24,9 +50,15 @@ func _apply_tuning() -> void:
 		geodot_world_layer.set("far_enter_pixels", clampf(float(_tuning.get("individual_threshold_px", 1.0)), 0.1, 16.0))
 		geodot_world_layer.set("far_exit_pixels", clampf(float(_tuning.get("full_3d_threshold_px", 4.0)), 0.2, 32.0))
 
+func _process(delta: float) -> void:
+	_refresh_base_readiness()
+	super._process(delta)
+	if _geodot_active and _base_ready and _loading_layer != null:
+		_loading_layer.visible = false
+
 func _geodot_activation_coverage_ready() -> bool:
-	# Gameplay can be presented as soon as the base HLOD exists. Detail is never
-	# a startup dependency and can only replace base coverage after publication.
+	# Gameplay is never exposed before a completed base-HLOD query has established
+	# coverage for the initial view. Detailed GeoPackage geometry is refinement.
 	return _base_ready
 
 func _update_distance_policy() -> void:
@@ -49,8 +81,8 @@ func _update_distance_policy() -> void:
 	if want_detail != _detail_streaming_enabled:
 		_detail_streaming_enabled = want_detail
 		geodot_world_layer.call("set_enabled", want_detail)
-	# No global presentation switch. Far remains resident and visible everywhere
-	# except READY detail rectangles; detail remains visible for READY cells.
+	# No global presentation switch: base remains resident and detail owns only
+	# completed spatial rectangles exposed by ready_coverage_rects().
 	if geodot_world_layer.has_method("set_presentation_visible"):
 		geodot_world_layer.call("set_presentation_visible", true)
 
@@ -58,6 +90,8 @@ func geodot_debug_snapshot() -> Dictionary:
 	var snapshot := super.geodot_debug_snapshot()
 	snapshot["spatial_hlod"] = {
 		"base_ready": _base_ready,
+		"initial_view_covered": _base_ready,
+		"loading_gate_visible": _loading_layer != null and _loading_layer.visible,
 		"ready_detail_regions": geodot_world_layer.call("ready_coverage_rects").size() if geodot_world_layer != null and geodot_world_layer.has_method("ready_coverage_rects") else 0,
 		"global_owner_switch": false,
 		"effective_resident_cells": _effective_resident_cells,
