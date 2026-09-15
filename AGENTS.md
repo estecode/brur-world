@@ -26,6 +26,8 @@ BLOCKED           execution is technically impossible with the available tools/e
 
 Everything else remains `RUNNING`. In particular, answering a question, giving status, explaining a failure, completing a substep, creating a branch/commit/PR, finishing a build, receiving CI/test results, finding a recoverable conflict, or identifying an agent-fixable blocker is **not** a stopping state.
 
+**`RUNNING` means final-response termination is forbidden.** A progress report, partial-completion summary, commit/PR update, CI-start notification, test result, or description of remaining work may be useful information, but it is not permission to end the turn. Record durable progress in the issue/PR when appropriate, retain chat-facing status for the eventual terminal report, and keep executing until the state is `DONE`, `WAITING_FOR_HUMAN`, or `BLOCKED`.
+
 Before every final user-facing response for active tracked work, the agent must re-evaluate the task. If it is still `RUNNING`, execute the next concrete agent-owned action now, re-evaluate, and repeat. **Do not end the turn merely because there is something useful to report.** Reporting is not a state transition.
 
 The project leader must never need to type `fortsätt`, ask for status, or send another message merely to advance an already agent-owned task. This invariant does not authorize unsafe/destructive actions, bypass required human approval, or imply background execution.
@@ -192,6 +194,7 @@ Before producing any final user-facing response while tracked work remains activ
 4. **Large-output work must continue through tools/files, not placeholders:** Verbose Godot C++, Git output, generated files, or other large work must not be truncated with fake placeholders or treated as a reason to hand back control. Use available repository/file tools and bounded inspection so the implementation continues without requiring the project leader to type `fortsätt`. Do not invent a continuation token or claim that the environment will automatically resume a response unless such a mechanism actually exists.
 5. **Human environment is not human verification:** The fact that a later check needs the project leader's Mac, local Godot installation, production GPKG, credentials, hardware, or another unavailable local resource does not make the task `WAITING_FOR_HUMAN` while agent-owned analysis, implementation, targeted tests, integration tests, CI, Git/GitHub work, or other executable verification remains. Exhaust all relevant agent-owned work first.
 6. **Never use the project leader as an iterative test runner:** A human-executed Safe Check is a final/environment-specific handoff, not a debugging loop. If it returns an objective failure, crash, assertion, compiler/test error, or other machine-verifiable defect, ownership immediately returns to the agent and the task becomes `RUNNING`. Diagnose, repair, and exhaust relevant agent-owned targeted/integration/CI validation before asking the project leader to run another Safe Check.
+7. **No progress-report termination:** A progress report, partial completion summary, list of validations, commit/PR update, CI-start/CI-pending notice, or statement of "what remains" MUST NOT be the final response while the task is `RUNNING`. If the information is useful, persist it in the issue/PR or include it later in the terminal report; then continue executing now.
 
 Example:
 
@@ -201,7 +204,7 @@ Active task: fix #300
 Project leader: "varför drog du in #288?"
 Agent: answer the question, correct the scope, then resume #300 immediately.
 
-Project leader: "följ agent md"
+Project leader: "följ AGENTS.md"
 Agent: acknowledge/correct the behavior, then resume #300 immediately.
 
 Project leader: "men nu gjorde du precis det. fortsätt"
@@ -258,24 +261,37 @@ This guard takes precedence over agent-owned continuation when the tracked objec
 
 #### Response termination gate
 
-Before producing a final response for unresolved tracked work, explicitly determine the current execution state and whether the next action is agent-owned. If the state is `RUNNING` and the next action is agent-owned, the response must not end while the required tools are available and no genuine human-only blocker exists. **Execute the next action, re-evaluate the state, and repeat.**
+**FINAL RESPONSE GUARD: `RUNNING` -> FINAL RESPONSE FORBIDDEN.** This is a hard eligibility rule, not guidance. A final response for an active tracked task may be emitted only after the state has been proven to be `DONE`, `WAITING_FOR_HUMAN`, or `BLOCKED` under the rules below.
 
-Writing "I will continue", "I'll fix that next", "I will investigate", "I will wait for CI", "I'll check that", or equivalent never satisfies this gate. If the next action is agent-owned, perform it before responding. **A user-facing answer is not a termination condition, and a response boundary is not a workflow boundary.**
+Before producing a final response for unresolved tracked work, explicitly determine the current execution state and whether the next action is agent-owned. If the state is `RUNNING`, the response must not end while agent-owned executable work or agent-observable pending work exists. **Execute/poll the next action, re-evaluate the state, and repeat.**
 
-Use this mandatory decision loop before every final response for unresolved tracked work:
+Writing "I will continue", "I'll fix that next", "I will investigate", "I will wait for CI", "I'll check that", "CI is still running", "the next step is", or equivalent never satisfies this gate. If the next action is agent-owned, perform it before responding. **A user-facing answer is not a termination condition, a response boundary is not a workflow boundary, and pending CI is not a result to report as a handoff.**
+
+Use this mandatory decision loop before every final response for tracked work:
 
 ```text
-STATE?
-├─ DONE -> final response allowed
-├─ WAITING_FOR_HUMAN
-│  └─ is the next required action genuinely impossible without project-leader input or execution in an unavailable local environment?
-│     ├─ YES -> final response allowed only with that exact human-only action
-│     └─ NO  -> RUNNING -> execute the next agent-owned action now
-├─ BLOCKED -> final response allowed only with the exact technical blocker and smallest required user action
-└─ RUNNING
-   └─ agent-owned executable action exists?
-      ├─ YES -> EXECUTE IT NOW -> re-evaluate STATE
-      └─ NO  -> determine and justify WAITING_FOR_HUMAN or BLOCKED; never silently stop
+FINAL RESPONSE ELIGIBILITY
+
+1. Is there an active tracked task?
+   NO  -> final response allowed.
+   YES -> continue.
+
+2. Is the task DONE?
+   YES -> final response allowed.
+   NO  -> continue.
+
+3. Does the NEXT REQUIRED ACTION require project-leader input or execution NOW,
+   after all preceding agent-owned work has been exhausted?
+   YES -> WAITING_FOR_HUMAN -> final response allowed only with that exact action.
+   NO  -> continue.
+
+4. Is further execution technically impossible with the available tools/environment,
+   with no safe agent-owned workaround?
+   YES -> BLOCKED -> final response allowed only with the exact blocker and smallest required user action.
+   NO  -> continue.
+
+5. State is RUNNING -> FINAL RESPONSE FORBIDDEN.
+   Execute the next agent-owned action, or poll agent-observable pending work, then return to step 1.
 ```
 
 A response for unresolved tracked work may end only when at least one of these conditions is true:
@@ -284,18 +300,18 @@ A response for unresolved tracked work may end only when at least one of these c
 2. A concrete human action is genuinely required **now**, and all relevant executable agent-owned work leading up to that boundary is exhausted. Valid examples are a product/architecture decision, meaningful subjective or hardware-specific verification, unsafe/destructive approval, credential/permission action, or execution in the project leader's unavailable local environment that the agent cannot reasonably perform; that action has been persisted in `BRUR — Needs You` where applicable (`WAITING_FOR_HUMAN`). A future need for the project leader's Mac/data/environment does not justify stopping early while agent-owned work remains.
 3. Execution is technically impossible with the currently available tools or environment, no safe agent-owned workaround exists, and the exact blocker plus the smallest required user action is stated explicitly (`BLOCKED`).
 
-The following are **not** valid stopping conditions when the agent can continue safely: failed CI, failed `brur-world/local-pr-check`, a red test, an objective failure returned by a human-executed Safe Check, a suspected implementation/model/check bug, stale branch state, ordinary merge/rebase work, recoverable conflicts, missing investigation, a `DO NOT MERGE` result whose blocker is agent-fixable, or merely waiting for a pollable CI/build/test result. These states mean continue: investigate, fix, poll when appropriate, revalidate, and repeat until green or a genuine human-only/technical blocker is reached.
+The following are **not** valid stopping conditions when the agent can continue safely: failed CI, failed `brur-world/local-pr-check`, a red test, an objective failure returned by a human-executed Safe Check, a suspected implementation/model/check bug, stale branch state, ordinary merge/rebase work, recoverable conflicts, missing investigation, a `DO NOT MERGE` result whose blocker is agent-fixable, merely waiting for a pollable CI/build/test result, or having enough completed work to produce a useful progress summary. These states mean continue: investigate, fix, poll when appropriate, revalidate, and repeat until green or a genuine human-only/technical blocker is reached.
 
 ##### AUTOMATIC CONTINUOUS EXECUTION RULES (GIT, PR & CI)
 
-1. **Pending CI is `RUNNING`, never a handoff:** If a GitHub Actions workflow, hosted CI check, remote PR status, local process whose status is agent-observable, build, or test is pending and the agent has a tool/API/CLI capable of checking it, the task remains `RUNNING`. The agent must poll that status until it reaches a terminal result. Do not end the response merely because CI is still running, do not ask the project leader to watch it, and do not classify pollable CI as `WAITING_FOR_HUMAN`.
+1. **Pending CI is `RUNNING`, never a handoff:** If a GitHub Actions workflow, hosted CI check, remote PR status, local process whose status is agent-observable, build, or test is pending and the agent has a tool/API/CLI capable of checking it, the task remains `RUNNING`. **Pending is not a terminal observation to report; it is an execution state to remain inside.** The agent must poll that status until it reaches a terminal result. Do not end the response merely because CI is still running, do not ask the project leader to watch it, and do not classify pollable CI as `WAITING_FOR_HUMAN`.
 2. **Continue immediately after terminal CI:** The transition from pending CI to terminal CI is not a response boundary. On green, immediately execute the next agent-owned PR/task/merge-safety step. On red, immediately diagnose the failure, repair it when agent-fixable, rerun the smallest relevant validation under the tiered-validation strategy, and continue. Do not insert a status-only handoff between CI completion and the next executable action.
-3. **Polling must be active but sane:** Poll at bounded, reasonable intervals and avoid wasteful high-frequency requests, but keep polling while the current execution environment/tool budget permits it. If safe independent work exists inside the same active task or requested wave, execute that work between polls. A temporary response/tool execution limit does not transform pending CI into `WAITING_FOR_HUMAN`; never claim that the project leader must resume the task merely because CI outlived one execution window.
+3. **Polling must be active but sane:** Poll at bounded, reasonable intervals and avoid wasteful high-frequency requests. If safe independent work exists inside the same active task or requested wave, execute that work between polls. While the current execution can still make tool calls, pending CI does not permit a final response: poll again or perform same-task work. A platform-imposed end to an execution window does not semantically transition the task to `WAITING_FOR_HUMAN` and must never be presented as if the project leader now owns continuation.
 4. **Red means repair, not handoff:** Failed CI, failed local checks, compiler errors, Godot/native test failures, objective Safe Check failures, recoverable Git conflicts, or agent-fixable merge blockers keep the task `RUNNING`. Diagnose, fix, rerun the smallest relevant validation, and continue until the evidence is green or a genuine stopping condition exists.
 5. **PR finalization is part of the task:** A successful merge is not by itself permission to stop if distinct required cleanup remains. In the same active turn, verify the merge result, confirm the linked issue is closed by `Closes #XX` (close it only if it remains open and the workflow requires closure), synchronize/remove the corresponding `BRUR — Needs You` entry, and perform branch cleanup when repository policy, permissions, and the terminal-state guard allow it. Never repeat a mutation whose terminal state is already confirmed.
 6. **No analysis paralysis:** Investigation must converge on executable actions. Once enough evidence exists to perform the smallest safe next step, perform it. Do not keep producing plans, alternative analyses, status prose, or speculative branches of reasoning while an executable agent-owned action is available.
 
-In short: **`RUNNING` + agent-owned executable work = keep executing. Pollable CI = `RUNNING` until terminal, then continue without a handoff. Human environment required later does not mean human action required now. Red + agent-fixable = keep working.** A question, status update, CI wait, completed substep, useful explanation, or successful merge is not automatically the end of the tracked workflow.
+In short: **`RUNNING` = FINAL RESPONSE FORBIDDEN. `RUNNING` + agent-owned executable work = keep executing. Pollable CI = stay inside `RUNNING` until terminal, then continue without a handoff. Human environment required later does not mean human action required now. Red + agent-fixable = keep working.** A question, status update, CI wait, completed substep, useful explanation, or successful merge is not automatically the end of the tracked workflow.
 
 ### Parallel sessions and isolated work
 
