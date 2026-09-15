@@ -101,15 +101,39 @@ def _shipped_runtime_footprint(world_dir: Path) -> tuple[int, dict]:
         return pack_path.stat().st_size, report
 
 
+def _print_footprint(world_dir: Path) -> None:
+    runtime_bytes, runtime_by_dataset = _runtime_footprint(world_dir)
+    shipped_bytes, shipped_report = _shipped_runtime_footprint(world_dir)
+    payload = {
+        "world_dir": str(world_dir),
+        "production_runtime_bytes": runtime_bytes,
+        "production_runtime_gib": round(runtime_bytes / 1024**3, 3),
+        "production_runtime_bytes_by_dataset": runtime_by_dataset,
+        "shipped_runtime_pack_bytes": shipped_bytes,
+        "shipped_runtime_pack_gib": round(shipped_bytes / 1024**3, 3),
+        "shipped_runtime_pack": shipped_report,
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True), flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("gpkg", type=Path)
-    parser.add_argument("--source-pbf", type=Path, required=True)
+    parser.add_argument("gpkg", type=Path, nargs="?")
+    parser.add_argument("--source-pbf", type=Path)
     parser.add_argument("--world-dir", type=Path, default=Path("/tmp/brur-220-world-data"))
     parser.add_argument("--report", type=Path, default=Path("/tmp/brur-220-benchmark.json"))
+    parser.add_argument("--footprint-only", action="store_true", help="Measure an existing completed world build without rebuilding it")
     args = parser.parse_args()
 
-    gpkg = args.gpkg.resolve(); pbf = args.source_pbf.resolve(); world_dir = args.world_dir.resolve(); report_path = args.report.resolve()
+    world_dir = args.world_dir.resolve()
+    if args.footprint_only:
+        if not world_dir.is_dir(): raise SystemExit(f"world data missing: {world_dir}")
+        _print_footprint(world_dir)
+        return
+    if args.gpkg is None: raise SystemExit("gpkg is required unless --footprint-only is used")
+    if args.source_pbf is None: raise SystemExit("--source-pbf is required unless --footprint-only is used")
+
+    gpkg = args.gpkg.resolve(); pbf = args.source_pbf.resolve(); report_path = args.report.resolve()
     if not gpkg.is_file(): raise SystemExit(f"GeoPackage missing: {gpkg}")
     if not pbf.is_file(): raise SystemExit(f"source PBF missing: {pbf}")
 
