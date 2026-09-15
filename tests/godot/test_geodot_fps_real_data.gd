@@ -41,101 +41,62 @@ var _switch_player_before: Node = null
 
 func _initialize() -> void:
 	if OS.has_environment("BRUR_PARSE_ONLY"):
-		print("GeoDot Drive FPS real-data test parse: OK")
-		quit(0)
-		return
+		print("GeoDot Drive FPS real-data test parse: OK"); quit(0); return
 	var gpkg := OS.get_environment("BRUR_GEODOT_GPKG")
-	if gpkg.is_empty() or not FileAccess.file_exists(gpkg):
-		_fail("BRUR_GEODOT_GPKG is missing")
-		return
-	if not FileAccess.file_exists("res://world_data/manifest.json"):
-		_fail("missing world_data manifest")
-		return
-	_main = GeoDotScene.instantiate() as Node3D
-	get_root().add_child(_main)
-	_camera_rig = _main.get_node_or_null("CameraRig")
-	_geodot_layer = _main.get_node_or_null("World/GeoDotWorldLayer")
-	_gps_layer = _main.get_node_or_null("GpsRouteLayer")
-	if _camera_rig == null or _geodot_layer == null or _gps_layer == null:
-		_fail("GeoDot production composition dependencies missing")
-		return
+	if gpkg.is_empty() or not FileAccess.file_exists(gpkg): _fail("BRUR_GEODOT_GPKG is missing"); return
+	if not FileAccess.file_exists("res://world_data/manifest.json"): _fail("missing world_data manifest"); return
+	_main = GeoDotScene.instantiate() as Node3D; get_root().add_child(_main)
+	_camera_rig = _main.get_node_or_null("CameraRig"); _geodot_layer = _main.get_node_or_null("World/GeoDotWorldLayer"); _gps_layer = _main.get_node_or_null("GpsRouteLayer")
+	if _camera_rig == null or _geodot_layer == null or _gps_layer == null: _fail("GeoDot production composition dependencies missing"); return
 	print("GEODOT_DRIVE_FPS_REAL_DATA waiting for production player")
 
 func _process(delta: float) -> bool:
-	if _main == null:
-		return false
+	if _main == null: return false
 	match _state:
 		0:
-			_setup_elapsed += delta
-			_player = _gps_layer.call("get_player_vehicle") as Node3D
+			_setup_elapsed += delta; _player = _gps_layer.call("get_player_vehicle") as Node3D
 			if _player != null and bool(_geodot_layer.call("is_ready")):
 				if not _verify_renderer_switch_preserves_gameplay_state():
-					if _setup_elapsed >= SETUP_TIMEOUT_S:
-						_fail("renderer switch did not reactivate GeoDot within %.1fs snapshot=%s" % [SETUP_TIMEOUT_S, str(_debug_snapshot())])
+					if _setup_elapsed >= SETUP_TIMEOUT_S: _fail("renderer switch did not reactivate GeoDot within %.1fs snapshot=%s" % [SETUP_TIMEOUT_S, str(_debug_snapshot())])
 					return false
-				if not _verify_shared_surface_height("map"):
-					return false
-				_camera_rig.call("set_follow_target", _player)
-				_camera_rig.call("set_drive_mode", true)
-				_state = 1
-				print("GEODOT_DRIVE_FPS_REAL_DATA Drive enabled player=", _player.global_position)
-			elif _setup_elapsed >= SETUP_TIMEOUT_S:
-				_fail("GeoDot/player did not become ready within %.1fs snapshot=%s" % [SETUP_TIMEOUT_S, str(_debug_snapshot())])
+				if not _verify_shared_surface_height("map"): return false
+				_camera_rig.call("set_follow_target", _player); _camera_rig.call("set_drive_mode", true); _state = 1; print("GEODOT_DRIVE_FPS_REAL_DATA Drive enabled player=", _player.global_position)
+			elif _setup_elapsed >= SETUP_TIMEOUT_S: _fail("GeoDot/player did not become ready within %.1fs snapshot=%s" % [SETUP_TIMEOUT_S, str(_debug_snapshot())])
 		1:
 			_settle_elapsed += delta
-			if not _verify_shared_surface_height("drive"):
-				return false
-			var snapshot := _debug_snapshot()
-			var active := int(snapshot.get("active_cells", 0))
-			var desired := int(snapshot.get("desired_cells", 0))
-			var pending := int(snapshot.get("pending_cells", -1))
-			if active > 0 and active == desired and pending == 0:
-				_stable_elapsed += delta
-			else:
-				_stable_elapsed = 0.0
+			if not _verify_shared_surface_height("drive"): return false
+			var snapshot := _debug_snapshot(); var active := int(snapshot.get("active_cells", 0)); var desired := int(snapshot.get("desired_cells", 0)); var pending := int(snapshot.get("pending_cells", -1))
+			if active > 0 and active == desired and pending == 0: _stable_elapsed += delta
+			else: _stable_elapsed = 0.0
 			if _stable_elapsed >= STABLE_S:
-				if not _crossing_start_prepared:
-					_prepare_render_cell_crossing()
-				else:
-					_begin_measurement()
-			elif _settle_elapsed >= SETTLE_TIMEOUT_S:
-				_fail("GeoDot world did not settle: snapshot=%s metrics=%s" % [str(snapshot), str(_consume_metrics())])
+				if not _crossing_start_prepared: _prepare_render_cell_crossing()
+				else: _begin_measurement()
+			elif _settle_elapsed >= SETTLE_TIMEOUT_S: _fail("GeoDot world did not settle: snapshot=%s metrics=%s" % [str(snapshot), str(_consume_metrics())])
 		2:
 			var now_usec := Time.get_ticks_usec()
-			if _frame_started_usec > 0:
-				_frame_times.append(float(now_usec - _frame_started_usec) / 1000.0)
-			if _frame_times.size() >= MEASURE_FRAMES:
-				_finish_measurement()
-				return false
-			if _frame_times.size() > 0 and _frame_times.size() % CELL_CROSS_INTERVAL == 0:
-				_cross_render_cell()
+			if _frame_started_usec > 0: _frame_times.append(float(now_usec - _frame_started_usec) / 1000.0)
+			if _frame_times.size() >= MEASURE_FRAMES: _finish_measurement(); return false
+			if _frame_times.size() > 0 and _frame_times.size() % CELL_CROSS_INTERVAL == 0: _cross_render_cell()
 			_frame_started_usec = Time.get_ticks_usec()
 	return false
 
 func _verify_renderer_switch_preserves_gameplay_state() -> bool:
 	if _switch_contract_checked: return true
-	if not _main.has_method("set_geodot_renderer_enabled") or not _main.has_method("is_geodot_active"):
-		_fail("GeoDot POC does not expose in-place renderer switching"); return false
+	if not _main.has_method("set_geodot_renderer_enabled") or not _main.has_method("is_geodot_active"): _fail("GeoDot POC does not expose in-place renderer switching"); return false
 	if not _switch_reactivation_requested:
 		_switch_gps_before = _main.get_node_or_null("GpsRouteLayer"); _switch_camera_before = _main.get_node_or_null("CameraRig"); _switch_player_before = _gps_layer.call("get_player_vehicle") as Node
-		if not bool(_main.call("set_geodot_renderer_enabled", false)) or bool(_main.call("is_geodot_active")):
-			_fail("could not switch from GeoDot to legacy presentation in place"); return false
-		if _main.get_node_or_null("GpsRouteLayer") != _switch_gps_before or _main.get_node_or_null("CameraRig") != _switch_camera_before or _gps_layer.call("get_player_vehicle") != _switch_player_before:
-			_fail("renderer switch replaced GPS/camera/player gameplay state"); return false
-		if not bool(_main.call("set_geodot_renderer_enabled", true)):
-			_fail("could not request switch from legacy back to GeoDot presentation in place"); return false
+		if not bool(_main.call("set_geodot_renderer_enabled", false)) or bool(_main.call("is_geodot_active")): _fail("could not switch from GeoDot to legacy presentation in place"); return false
+		if _main.get_node_or_null("GpsRouteLayer") != _switch_gps_before or _main.get_node_or_null("CameraRig") != _switch_camera_before or _gps_layer.call("get_player_vehicle") != _switch_player_before: _fail("renderer switch replaced GPS/camera/player gameplay state"); return false
+		if not bool(_main.call("set_geodot_renderer_enabled", true)): _fail("could not request switch from legacy back to GeoDot presentation in place"); return false
 		_switch_reactivation_requested = true; return false
 	if not bool(_main.call("is_geodot_active")): return false
-	if _main.get_node_or_null("GpsRouteLayer") != _switch_gps_before or _main.get_node_or_null("CameraRig") != _switch_camera_before or _gps_layer.call("get_player_vehicle") != _switch_player_before:
-		_fail("renderer switch back to GeoDot replaced GPS/camera/player gameplay state"); return false
+	if _main.get_node_or_null("GpsRouteLayer") != _switch_gps_before or _main.get_node_or_null("CameraRig") != _switch_camera_before or _gps_layer.call("get_player_vehicle") != _switch_player_before: _fail("renderer switch back to GeoDot replaced GPS/camera/player gameplay state"); return false
 	_switch_contract_checked = true; print("GEODOT_RENDERER_SWITCH gameplay_state_preserved=true"); return true
 
 func _verify_shared_surface_height(context: String) -> bool:
-	if not _main.has_method("get_road_surface_height"):
-		_fail("Main does not expose shared road/building surface height"); return false
+	if not _main.has_method("get_road_surface_height"): _fail("Main does not expose shared road/building surface height"); return false
 	var expected := float(_main.call("get_road_surface_height")); var actual := float((_geodot_layer as Node3D).position.y)
-	if absf(actual - expected) > SURFACE_HEIGHT_TOLERANCE_M:
-		_fail("GeoDot %s surface y %.6f differs from shared production y %.6f" % [context, actual, expected]); return false
+	if absf(actual - expected) > SURFACE_HEIGHT_TOLERANCE_M: _fail("GeoDot %s surface y %.6f differs from shared production y %.6f" % [context, actual, expected]); return false
 	return true
 
 func _prepare_render_cell_crossing() -> void:
@@ -143,8 +104,7 @@ func _prepare_render_cell_crossing() -> void:
 	_crossing_low_x = boundary_x - CELL_CROSS_DELTA_M; _crossing_high_x = boundary_x + CELL_CROSS_DELTA_M
 	var prepared := _player.global_position; prepared.x = _crossing_low_x; _player.call("set_world_position", prepared)
 	if _camera_rig.has_method("_apply_drive_camera"): _camera_rig.call("_apply_drive_camera")
-	_crossing_start_prepared = true; _settle_elapsed = 0.0; _stable_elapsed = 0.0
-	print("GEODOT_DRIVE_FPS_REAL_DATA prepared cell boundary low_x=%.1f high_x=%.1f" % [_crossing_low_x, _crossing_high_x])
+	_crossing_start_prepared = true; _settle_elapsed = 0.0; _stable_elapsed = 0.0; print("GEODOT_DRIVE_FPS_REAL_DATA prepared cell boundary low_x=%.1f high_x=%.1f" % [_crossing_low_x, _crossing_high_x])
 
 func _begin_measurement() -> void:
 	_state = 2; _frame_times.clear(); _frame_started_usec = Time.get_ticks_usec(); _consume_metrics(); print("GEODOT_DRIVE_FPS_REAL_DATA measuring snapshot=", _debug_snapshot())
@@ -162,8 +122,7 @@ func _cross_render_cell() -> void:
 func _finish_measurement() -> void:
 	_frame_times.sort(); var sum_ms := 0.0
 	for value in _frame_times: sum_ms += value
-	var count := _frame_times.size(); var avg_ms := sum_ms / float(maxi(1, count)); var p95_ms := _percentile(0.95); var p99_ms := _percentile(0.99); var worst_ms := _frame_times[count - 1]; var fps := 1000.0 / maxf(0.001, avg_ms)
-	var metrics := _consume_metrics(); var snapshot := _debug_snapshot()
+	var count := _frame_times.size(); var avg_ms := sum_ms / float(maxi(1, count)); var p95_ms := _percentile(0.95); var p99_ms := _percentile(0.99); var worst_ms := _frame_times[count - 1]; var fps := 1000.0 / maxf(0.001, avg_ms); var metrics := _consume_metrics(); var snapshot := _debug_snapshot()
 	print("GEODOT_DRIVE_FPS_REAL_DATA fps=%.2f avg_ms=%.3f p95_ms=%.3f p99_ms=%.3f worst_ms=%.3f frames=%d cell_crossings=%d snapshot=%s metrics=%s" % [fps, avg_ms, p95_ms, p99_ms, worst_ms, count, _cell_crossings, str(snapshot), str(metrics)])
 	if avg_ms > MAX_AVG_FRAME_MS: _fail("average %.3f ms exceeds %.1f ms" % [avg_ms, MAX_AVG_FRAME_MS]); return
 	if p95_ms > MAX_P95_FRAME_MS: _fail("p95 %.3f ms exceeds %.1f ms" % [p95_ms, MAX_P95_FRAME_MS]); return
@@ -172,17 +131,15 @@ func _finish_measurement() -> void:
 	if _cell_crossings < 3: _fail("measurement did not exercise enough render-cell crossings"); return
 	if int(snapshot.get("active_cells", 0)) > int(snapshot.get("max_resident_cells", 0)): _fail("resident-cell bound exceeded"); return
 	if int(snapshot.get("pending_cells", 0)) > int(snapshot.get("max_pending_cells", 0)) + 1: _fail("pending-cell bound exceeded"); return
-	print("GeoDot Drive FPS real-data test: OK")
 	_shutdown_before_quit(0)
 
 func _shutdown_before_quit(code: int) -> void:
-	# Explicitly destroy GeoDot/GDAL-backed resources while the GDExtension is still
-	# alive. Relying on SceneTree shutdown lets Godot unload the extension before
-	# cached native resources finish destruction on macOS, which can abort the process.
 	if _geodot_layer != null and _geodot_layer.has_method("shutdown"): _geodot_layer.call("shutdown")
 	_geodot_layer = null; _camera_rig = null; _gps_layer = null; _player = null
-	if _main != null:
-		_main.free(); _main = null
+	if _main != null: _main.free(); _main = null
+	# Emit success only after explicit GeoDot/GDAL resource destruction. The parent
+	# test also requires process exit 0, so a later native teardown abort still fails.
+	if code == 0: print("GeoDot Drive FPS real-data test: OK")
 	quit(code)
 
 func _percentile(fraction: float) -> float:
