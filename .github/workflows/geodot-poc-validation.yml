@@ -61,9 +61,15 @@ jobs:
           BIN="$(find "$RUNNER_TEMP/godot" -path '*/Godot.app/Contents/MacOS/Godot' -type f | head -1)"
           test -n "$BIN"; chmod +x "$BIN"; echo "GODOT_BIN=$BIN" >> "$GITHUB_ENV"
       - name: Prove photo-zoom ownership and residency process exits cleanly
-        run: "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_photo_zoom_contract.gd
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_photo_zoom_contract.gd
       - name: Prove mesh/resource contract process exits cleanly
-        run: "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_renderer_contracts.gd
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_renderer_contracts.gd
 
   macos-native-geodot-lifecycle:
     runs-on: macos-14
