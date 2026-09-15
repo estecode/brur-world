@@ -11,6 +11,7 @@ script = ExtResource("4_debug")
 [node name="GeoDotWorldLayer" type="Node3D" parent="World" index="0"]
 script = ExtResource("3_geodot")
 cell_size_m = 3000.0
+viewport_margin_cells = 2
 max_buildings_per_cell = 3000
 max_roads_per_cell = 2500
 max_pending_cells = 64
