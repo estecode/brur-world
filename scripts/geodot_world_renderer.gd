@@ -57,7 +57,8 @@ func setup(world_coordinates, camera_rig: Node, gpkg_path: String) -> Dictionary
 
 func _exit_tree() -> void:
 	_shutdown_query_worker()
-	_clear_active()
+	_clear_active(true)
+	_release_render_resources()
 	_release_source()
 
 func shutdown() -> void:
@@ -69,8 +70,18 @@ func shutdown() -> void:
 	_queued.clear()
 	_desired.clear()
 	_shutdown_query_worker()
-	_clear_active()
+	# shutdown() is an explicit lifecycle barrier used before SceneTree/renderer
+	# teardown. Free resident render nodes synchronously here rather than leaving
+	# Mesh/Material RIDs in the deferred-delete queue until engine shutdown.
+	_clear_active(true)
+	_release_render_resources()
 	_release_source()
+	_coordinates = null
+	_camera_rig = null
+
+func _release_render_resources() -> void:
+	_building_material = null
+	_road_material = null
 
 func _release_source() -> void:
 	if _source == null:
@@ -295,10 +306,16 @@ func _setup_materials() -> void:
 	_road_material.vertex_color_use_as_albedo = true
 	_road_material.albedo_color = Color.WHITE
 
-func _clear_active() -> void:
+func _clear_active(immediate: bool = false) -> void:
 	for value in _active.values():
 		var node: Node = (value as Dictionary).get("node")
-		if node != null:
+		if node == null:
+			continue
+		if node is Node3D:
+			(node as Node3D).visible = false
+		if immediate:
+			node.free()
+		else:
 			node.queue_free()
 	_active.clear()
 
