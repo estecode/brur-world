@@ -28,6 +28,7 @@ func _ready() -> void:
 		push_warning("GeoDot POC setup failed: %s; keeping legacy world presentation" % String(result.get("error", "unknown")))
 		return
 	_geodot_ready = true
+	_sync_geodot_surface_height()
 	set_geodot_renderer_enabled(true)
 	print("GeoDot POC dataset: ", result)
 	if OS.get_environment("BRUR_GEODOT_KEEP_VIEW") != "1" and camera_rig.has_method("set_view_altitude"):
@@ -38,10 +39,12 @@ func _process(delta: float) -> void:
 		return
 	if not _geodot_active:
 		super._process(delta)
+		_sync_geodot_surface_height()
 		return
 	# Keep the ordinary BRUR background/depth layout alive, but intentionally do not
 	# schedule or publish the legacy BRS/BRT road presentation while GeoDot is active.
 	_update_depth_layout(false)
+	_sync_geodot_surface_height()
 
 func set_geodot_renderer_enabled(enabled: bool) -> bool:
 	if enabled and not _geodot_ready:
@@ -55,6 +58,7 @@ func set_geodot_renderer_enabled(enabled: bool) -> bool:
 		if legacy_building_layer != null and legacy_building_layer.has_method("set_streaming_enabled"):
 			legacy_building_layer.call("set_streaming_enabled", false)
 		_clear_legacy_roads()
+		_sync_geodot_surface_height()
 		if geodot_world_layer != null and geodot_world_layer.has_method("set_enabled"):
 			geodot_world_layer.call("set_enabled", true)
 		_geodot_active = true
@@ -69,6 +73,13 @@ func set_geodot_renderer_enabled(enabled: bool) -> bool:
 		legacy_building_layer.call("set_streaming_enabled", _legacy_buildings_enabled_before_geodot)
 	_refresh_tiles(true)
 	return true
+
+func _sync_geodot_surface_height() -> void:
+	if geodot_world_layer == null:
+		return
+	# GeoDot owns only presentation geometry. Match the same current presentation
+	# surface height used by production roads/buildings rather than inventing y=0.
+	geodot_world_layer.position.y = get_road_surface_height()
 
 func _legacy_buildings_streaming_enabled() -> bool:
 	if legacy_building_layer != null and legacy_building_layer.has_method("is_streaming_enabled"):
