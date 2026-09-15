@@ -35,6 +35,10 @@ var _crossing_start_prepared := false
 var _crossing_low_x := 0.0
 var _crossing_high_x := 0.0
 var _switch_contract_checked := false
+var _switch_reactivation_requested := false
+var _switch_gps_before: Node = null
+var _switch_camera_before: Node = null
+var _switch_player_before: Node = null
 var _shutdown_exit_code := -1
 var _shutdown_frames := 0
 
@@ -74,6 +78,8 @@ func _process(delta: float) -> bool:
 			_player = _gps_layer.call("get_player_vehicle") as Node3D
 			if _player != null and bool(_geodot_layer.call("is_ready")):
 				if not _verify_renderer_switch_preserves_gameplay_state():
+					if _shutdown_exit_code < 0 and _setup_elapsed >= SETUP_TIMEOUT_S:
+						_fail("renderer switch did not reactivate GeoDot within %.1fs snapshot=%s" % [SETUP_TIMEOUT_S, str(_debug_snapshot())])
 					return false
 				if not _verify_shared_surface_height("map"):
 					return false
@@ -120,19 +126,24 @@ func _verify_renderer_switch_preserves_gameplay_state() -> bool:
 	if not _main.has_method("set_geodot_renderer_enabled") or not _main.has_method("is_geodot_active"):
 		_fail("GeoDot POC does not expose in-place renderer switching")
 		return false
-	var gps_before: Node = _main.get_node_or_null("GpsRouteLayer")
-	var camera_before: Node = _main.get_node_or_null("CameraRig")
-	var player_before: Node = _gps_layer.call("get_player_vehicle") as Node
-	if not bool(_main.call("set_geodot_renderer_enabled", false)) or bool(_main.call("is_geodot_active")):
-		_fail("could not switch from GeoDot to legacy presentation in place")
+	if not _switch_reactivation_requested:
+		_switch_gps_before = _main.get_node_or_null("GpsRouteLayer")
+		_switch_camera_before = _main.get_node_or_null("CameraRig")
+		_switch_player_before = _gps_layer.call("get_player_vehicle") as Node
+		if not bool(_main.call("set_geodot_renderer_enabled", false)) or bool(_main.call("is_geodot_active")):
+			_fail("could not switch from GeoDot to legacy presentation in place")
+			return false
+		if _main.get_node_or_null("GpsRouteLayer") != _switch_gps_before or _main.get_node_or_null("CameraRig") != _switch_camera_before or _gps_layer.call("get_player_vehicle") != _switch_player_before:
+			_fail("renderer switch replaced GPS/camera/player gameplay state")
+			return false
+		if not bool(_main.call("set_geodot_renderer_enabled", true)):
+			_fail("could not request switch from legacy back to GeoDot presentation in place")
+			return false
+		_switch_reactivation_requested = true
 		return false
-	if _main.get_node_or_null("GpsRouteLayer") != gps_before or _main.get_node_or_null("CameraRig") != camera_before or _gps_layer.call("get_player_vehicle") != player_before:
-		_fail("renderer switch replaced GPS/camera/player gameplay state")
+	if not bool(_main.call("is_geodot_active")):
 		return false
-	if not bool(_main.call("set_geodot_renderer_enabled", true)) or not bool(_main.call("is_geodot_active")):
-		_fail("could not switch from legacy back to GeoDot presentation in place")
-		return false
-	if _main.get_node_or_null("GpsRouteLayer") != gps_before or _main.get_node_or_null("CameraRig") != camera_before or _gps_layer.call("get_player_vehicle") != player_before:
+	if _main.get_node_or_null("GpsRouteLayer") != _switch_gps_before or _main.get_node_or_null("CameraRig") != _switch_camera_before or _gps_layer.call("get_player_vehicle") != _switch_player_before:
 		_fail("renderer switch back to GeoDot replaced GPS/camera/player gameplay state")
 		return false
 	_switch_contract_checked = true
@@ -249,6 +260,9 @@ func _shutdown_and_quit(exit_code: int) -> void:
 	_gps_layer = null
 	_camera_rig = null
 	_player = null
+	_switch_gps_before = null
+	_switch_camera_before = null
+	_switch_player_before = null
 	if _main != null:
 		# This test owns the production scene outright. A deferred queue_free() leaves
 		# renderer RIDs alive until the SceneTree delete queue is flushed, which can
