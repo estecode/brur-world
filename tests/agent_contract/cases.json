@@ -28,6 +28,13 @@
       "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "DONE"]
     },
     {
+      "id": "premature_safe_check_handoff",
+      "situation": "An agent is about to present a Safe Check link, but merge-decision syntax, exact PR head, handoff contract, or an agent-executable objective prerequisite has not yet been verified green for the handoff candidate.",
+      "expected": "CONTINUE",
+      "forbidden_terminal": ["WAITING_FOR_HUMAN", "PRESENT_SAFE_CHECK", "RUNNING", "DONE"],
+      "regression_example": "Ask the project leader to run Safe Check while the local objective chain can still fail before the required GeoDot stage."
+    },
+    {
       "id": "targeted_before_full_regression",
       "situation": "A small implementation edit is still in the debugging loop and a smaller deterministic validation can answer the current question.",
       "expected": "TARGETED_VALIDATION",
