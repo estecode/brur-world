@@ -36,18 +36,10 @@ TRAFFIC_INTERSECTION_SCOPE="skip"
 DRIVING_VISUAL_SCOPE="skip"
 DRIVE_HUD_VISUAL_SCOPE="skip"
 GEODOT_POC_SCOPE="skip"
-if printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(traffic_intersections\.py|check_traffic_intersections_real_data\.py|test_traffic_intersections\.py)$'; then
-  TRAFFIC_INTERSECTION_SCOPE="required"
-fi
-if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(harness/driving/|scripts/(route_driving_policy|vehicle_route_follower|vehicle_dynamics|player_vehicle|player_vehicle_controller)\.gd$|scenes/player_vehicle\.tscn$)'; then
-  DRIVING_VISUAL_SCOPE="required"
-fi
-if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(scripts/(drive_hud|drive_hud_adapter|speed_limit_sign|road_speed_limit_query)\.gd|scenes/main\.tscn)$'; then
-  DRIVE_HUD_VISUAL_SCOPE="required"
-fi
-if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(scripts/geodot_|scenes/geodot_poc\.tscn$|tests/godot/test_geodot_|tools/(setup_geodot_poc\.sh|check_geodot_gpkg\.py)$|\.github/workflows/geodot-poc-validation\.yml$)'; then
-  GEODOT_POC_SCOPE="required"
-fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(traffic_intersections\.py|check_traffic_intersections_real_data\.py|test_traffic_intersections\.py)$'; then TRAFFIC_INTERSECTION_SCOPE="required"; fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(harness/driving/|scripts/(route_driving_policy|vehicle_route_follower|vehicle_dynamics|player_vehicle|player_vehicle_controller)\.gd$|scenes/player_vehicle\.tscn$)'; then DRIVING_VISUAL_SCOPE="required"; fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(scripts/(drive_hud|drive_hud_adapter|speed_limit_sign|road_speed_limit_query)\.gd|scenes/main\.tscn)$'; then DRIVE_HUD_VISUAL_SCOPE="required"; fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(scripts/geodot_|scenes/geodot_poc\.tscn$|tests/godot/test_geodot_|tools/(setup_geodot_poc\.sh|check_geodot_gpkg\.py)$|\.github/workflows/geodot-poc-validation\.yml$)'; then GEODOT_POC_SCOPE="required"; fi
 
 if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" ]]; then printf 'PR_CHECK=SKIP_E6_BJARRED_ROUTE pr=%s reason=unrelated-changes\n' "${BRUR_PR_CHECK_PR:?}"; fi
 if [[ "$ROAD_LOD_SCOPE" == "skip" ]]; then printf 'PR_CHECK=SKIP_ROAD_LODS pr=%s reason=unrelated-changes\n' "${BRUR_PR_CHECK_PR:?}"; fi
@@ -58,16 +50,10 @@ if [[ "$TRAFFIC_INTERSECTION_SCOPE" == "skip" ]]; then printf 'PR_CHECK=SKIP_TRA
 if [[ "$DRIVING_VISUAL_SCOPE" == "skip" ]]; then printf 'PR_CHECK=SKIP_DRIVING_VISUAL_REVIEW pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"; fi
 if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]]; then printf 'PR_CHECK=SKIP_DRIVE_HUD_VISUAL_REVIEW pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"; fi
 if [[ "$GEODOT_POC_SCOPE" == "skip" ]]; then printf 'PR_CHECK=SKIP_GEODOT_POC pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR"; fi
-
-if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$TRAFFIC_INTERSECTION_SCOPE" == "skip" && "$GEODOT_POC_SCOPE" == "skip" ]]; then
-  printf 'PR_CHECK=NO_EXPENSIVE_LOCAL_PREPARATION pr=%s\n' "$BRUR_PR_CHECK_PR"
-fi
+if [[ "$ROUTE_GEOMETRY_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" && "$BUILDING_TILE_SCOPE" == "skip" && "$TRAFFIC_INTERSECTION_SCOPE" == "skip" && "$GEODOT_POC_SCOPE" == "skip" ]]; then printf 'PR_CHECK=NO_EXPENSIVE_LOCAL_PREPARATION pr=%s\n' "$BRUR_PR_CHECK_PR"; fi
 
 resolve_sweden_pbf() {
-  if [[ -n "${BRUR_WORLD_PBF:-}" ]]; then
-    [[ -f "$BRUR_WORLD_PBF" ]] || { printf 'PR_CHECK=FAIL BRUR_WORLD_PBF does not exist\n' >&2; return 1; }
-    printf '%s\n' "$BRUR_WORLD_PBF"; return 0
-  fi
+  if [[ -n "${BRUR_WORLD_PBF:-}" ]]; then [[ -f "$BRUR_WORLD_PBF" ]] || { printf 'PR_CHECK=FAIL BRUR_WORLD_PBF does not exist\n' >&2; return 1; }; printf '%s\n' "$BRUR_WORLD_PBF"; return 0; fi
   local repo_parent candidate
   repo_parent="$(cd "$(dirname "$WORLD_DATA")/.." && pwd)"
   candidate="$(find "$repo_parent/syndicate/data" "$repo_parent/data" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n 1)"
@@ -76,20 +62,12 @@ resolve_sweden_pbf() {
 }
 
 resolve_geodot_gpkg() {
-  if [[ -n "${BRUR_GEODOT_GPKG:-}" ]]; then
-    [[ -f "$BRUR_GEODOT_GPKG" ]] || { printf 'PR_CHECK=FAIL BRUR_GEODOT_GPKG does not exist\n' >&2; return 1; }
-    printf '%s\n' "$BRUR_GEODOT_GPKG"; return 0
-  fi
+  if [[ -n "${BRUR_GEODOT_GPKG:-}" ]]; then [[ -f "$BRUR_GEODOT_GPKG" ]] || { printf 'PR_CHECK=FAIL BRUR_GEODOT_GPKG does not exist\n' >&2; return 1; }; printf '%s\n' "$BRUR_GEODOT_GPKG"; return 0; fi
   local checkout_root checkout_parent mapped_root candidate search_root
   checkout_root="$(cd "$(dirname "$WORLD_DATA")" && pwd)"
   checkout_parent="$(cd "$checkout_root/.." && pwd)"
   mapped_root="${BRUR_PR_CHECK_MAPPED_ROOT:-$checkout_root}"
-  for candidate in \
-    "$mapped_root/sweden-brur.gpkg" \
-    "$checkout_root/sweden-brur.gpkg" \
-    "$checkout_parent/sweden-brur.gpkg" \
-    "$checkout_parent/data/sweden-brur.gpkg" \
-    "$checkout_parent/brur-world/sweden-brur.gpkg"; do
+  for candidate in "$mapped_root/sweden-brur.gpkg" "$checkout_root/sweden-brur.gpkg" "$checkout_parent/sweden-brur.gpkg" "$checkout_parent/data/sweden-brur.gpkg" "$checkout_parent/brur-world/sweden-brur.gpkg"; do
     if [[ -f "$candidate" ]]; then printf '%s\n' "$candidate"; return 0; fi
   done
   for search_root in "$mapped_root" "$checkout_root" "$checkout_parent"; do
@@ -123,11 +101,7 @@ prepare_traffic_intersection_data() {
 prepare_road_runtime_data() {
   local pbf entry name; pbf="$(resolve_sweden_pbf)"
   rm -rf "$RUNTIME_WORLD_DATA"; mkdir -p "$RUNTIME_WORLD_DATA"
-  for entry in "$WORLD_DATA"/*; do
-    name="$(basename "$entry")"
-    case "$name" in lod0|lod1|lod2|manifest.json) continue ;; esac
-    ln -s "$entry" "$RUNTIME_WORLD_DATA/$name"
-  done
+  for entry in "$WORLD_DATA"/*; do name="$(basename "$entry")"; case "$name" in lod0|lod1|lod2|manifest.json) continue ;; esac; ln -s "$entry" "$RUNTIME_WORLD_DATA/$name"; done
   cp "$WORLD_DATA/manifest.json" "$RUNTIME_WORLD_DATA/manifest.json"
   printf 'PR_CHECK=BUILD_ROAD_LODS pr=%s reason=relevant-changes source=%s\n' "$BRUR_PR_CHECK_PR" "$(basename "$pbf")"
   "$PYTHON" "$WORKTREE/tools/build_roads.py" "$pbf" --output "$RUNTIME_WORLD_DATA"
@@ -139,8 +113,7 @@ PY
 }
 
 run_godot_test() {
-  local scene="$1" marker="${2:-}"
-  local output
+  local scene="$1" marker="${2:-}" output
   set +e
   output="$(BRUR_WORLD_DATA="$WORLD_DATA" "$GODOT" --headless --path "$WORKTREE" --editor --quit-after 2 "$scene" 2>&1)"
   local status=$?
@@ -151,28 +124,11 @@ run_godot_test() {
 }
 
 if [[ "$ROUTE_GEOMETRY_SCOPE" == "required" ]]; then ensure_routing_dataset_identity; fi
-if [[ "$TRAFFIC_INTERSECTION_SCOPE" == "required" ]]; then
-  TRAFFIC_DATA="$(prepare_traffic_intersection_data)"
-  "$PYTHON" "$WORKTREE/tools/check_traffic_intersections_real_data.py" "$TRAFFIC_DATA"
-fi
-if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
-  printf 'PR_CHECK=CHECK_PRODUCTION_DRIVE_FPS_REAL_DATA pr=%s targets=avg33.4ms-p95_50ms-worst250ms\n' "$BRUR_PR_CHECK_PR"
-  run_godot_test res://tests/godot/test_production_fps_real_data.gd 'production Drive FPS real-data test: OK'
-fi
-if [[ "$ROAD_LOD_SCOPE" == "required" ]]; then
-  prepare_road_runtime_data
-  printf 'PR_CHECK=CHECK_WORLD_STREAMING_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"; run_godot_test res://tests/godot/test_world_streaming_foundation.gd
-  printf 'PR_CHECK=CHECK_ROAD_SURFACE_REAL_DATA pr=%s\n' "$BRUR_PR_CHECK_PR"; run_godot_test res://tests/godot/test_road_surface_query_real_data.gd
-fi
-if [[ "$CITY_LIGHT_SCOPE" == "required" ]]; then
-  [[ -d "$WORLD_DATA/poi_tiles" ]] || { printf 'PR_CHECK=FAIL missing runtime POI tiles for city-light density\n' >&2; exit 66; }
-  "$PYTHON" "$WORKTREE/tools/build_city_light_density.py" "$WORLD_DATA"
-  GODOT_BIN="$GODOT" bash "$WORKTREE/tools/test_city_lights_real_data.sh"
-fi
-if [[ "$WORLD_SHOWCASE_SCOPE" == "required" ]]; then
-  "$PYTHON" "$WORKTREE/tools/prepare_world_showcase.py" "$WORLD_DATA" --output "$CACHE"
-  run_godot_test res://tests/godot/test_world_showcase.gd
-fi
+if [[ "$TRAFFIC_INTERSECTION_SCOPE" == "required" ]]; then TRAFFIC_DATA="$(prepare_traffic_intersection_data)"; "$PYTHON" "$WORKTREE/tools/check_traffic_intersections_real_data.py" "$TRAFFIC_DATA"; fi
+if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then printf 'PR_CHECK=CHECK_PRODUCTION_DRIVE_FPS_REAL_DATA pr=%s targets=avg33.4ms-p95_50ms-worst250ms\n' "$BRUR_PR_CHECK_PR"; run_godot_test res://tests/godot/test_production_fps_real_data.gd 'production Drive FPS real-data test: OK'; fi
+if [[ "$ROAD_LOD_SCOPE" == "required" ]]; then prepare_road_runtime_data; printf 'PR_CHECK=CHECK_WORLD_STREAMING_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"; run_godot_test res://tests/godot/test_world_streaming_foundation.gd; printf 'PR_CHECK=CHECK_ROAD_SURFACE_REAL_DATA pr=%s\n' "$BRUR_PR_CHECK_PR"; run_godot_test res://tests/godot/test_road_surface_query_real_data.gd; fi
+if [[ "$CITY_LIGHT_SCOPE" == "required" ]]; then [[ -d "$WORLD_DATA/poi_tiles" ]] || { printf 'PR_CHECK=FAIL missing runtime POI tiles for city-light density\n' >&2; exit 66; }; "$PYTHON" "$WORKTREE/tools/build_city_light_density.py" "$WORLD_DATA"; GODOT_BIN="$GODOT" bash "$WORKTREE/tools/test_city_lights_real_data.sh"; fi
+if [[ "$WORLD_SHOWCASE_SCOPE" == "required" ]]; then "$PYTHON" "$WORKTREE/tools/prepare_world_showcase.py" "$WORLD_DATA" --output "$CACHE"; run_godot_test res://tests/godot/test_world_showcase.gd; fi
 
 GEODOT_GPKG=""
 if [[ "$GEODOT_POC_SCOPE" == "required" ]]; then
@@ -188,7 +144,6 @@ if [[ "$GEODOT_POC_SCOPE" == "required" ]]; then
 fi
 
 if [[ "$MANUAL_REVIEW" == "none" && "$DRIVING_VISUAL_SCOPE" == "skip" && "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]]; then printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "$BRUR_PR_CHECK_PR"; exit 0; fi
-
 printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
 if [[ "$GEODOT_POC_SCOPE" == "required" ]]; then
   printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/geodot_poc.tscn reason=geodot-poc\n'
@@ -197,13 +152,11 @@ if [[ "$GEODOT_POC_SCOPE" == "required" ]]; then
   BRUR_GEODOT_GPKG="$GEODOT_GPKG" "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/geodot_poc.tscn"
   exit 0
 fi
-if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then
-  "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"; exit 0
-fi
-if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then
-  "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"; exit 0
-fi
+if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"; exit 0; fi
+if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"; exit 0; fi
 if [[ "$MANUAL_REVIEW" == "required" && "$BUILDING_TILE_SCOPE" == "skip" && "$ROAD_LOD_SCOPE" == "skip" && "$CITY_LIGHT_SCOPE" == "skip" && "$WORLD_SHOWCASE_SCOPE" == "skip" ]]; then
-  "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"; exit 0
+  printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=pr-merge-decision\n'
+  "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"
+  exit 0
 fi
 "$GODOT" --path "$WORKTREE"
