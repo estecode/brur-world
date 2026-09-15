@@ -9,6 +9,7 @@ const MeshBuilder = preload("res://scripts/geodot_world_mesh_builder.gd")
 @export var far_radius_cells := 3
 @export var max_view_radius_cells := 6
 @export var coverage_altitude_factor := 0.72
+@export var viewport_margin_cells := 1
 @export var max_resident_cells := 169
 @export var max_pending_cells := 96
 @export var max_query_cache_cells := 192
@@ -97,35 +98,81 @@ static func coverage_radius_for_altitude(altitude_m: float, cell_size: float, ba
 	var altitude_radius := ceili(maxf(0.0, altitude_m) * maxf(0.0, altitude_factor) / safe_cell_size) + 1
 	return clampi(maxi(base_radius, altitude_radius), maxi(1, base_radius), maxi(base_radius, max_radius))
 
+static func coverage_cells_for_bounds(bounds: Rect2, cell_size: float, margin_cells: int, max_cells: int, focus_abs: Vector2) -> Array[Vector2i]:
+	var safe_cell_size := maxf(1.0, cell_size)
+	var margin := maxi(0, margin_cells)
+	var min_cell := Vector2i(floori(bounds.position.x / safe_cell_size) - margin, floori(bounds.position.y / safe_cell_size) - margin)
+	var max_point := bounds.position + bounds.size
+	var max_cell := Vector2i(floori(max_point.x / safe_cell_size) + margin, floori(max_point.y / safe_cell_size) + margin)
+	var focus_cell := Vector2i(floori(focus_abs.x / safe_cell_size), floori(focus_abs.y / safe_cell_size))
+	var candidates: Array[Dictionary] = []
+	for cell_y in range(min_cell.y, max_cell.y + 1):
+		for cell_x in range(min_cell.x, max_cell.x + 1):
+			var cell := Vector2i(cell_x, cell_y)
+			var delta := cell - focus_cell
+			candidates.append({"cell": cell, "distance": maxi(absi(delta.x), absi(delta.y)), "distance_sq": delta.length_squared()})
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var a_distance := int(a["distance"]); var b_distance := int(b["distance"])
+		if a_distance != b_distance: return a_distance < b_distance
+		var a_sq := int(a["distance_sq"]); var b_sq := int(b["distance_sq"])
+		if a_sq != b_sq: return a_sq < b_sq
+		var a_cell: Vector2i = a["cell"]; var b_cell: Vector2i = b["cell"]
+		return a_cell.y < b_cell.y or (a_cell.y == b_cell.y and a_cell.x < b_cell.x)
+	)
+	var result: Array[Vector2i] = []
+	var limit := mini(maxi(1, max_cells), candidates.size())
+	for index in range(limit): result.append(candidates[index]["cell"] as Vector2i)
+	return result
+
+func _view_world_points(focus_world: Vector3) -> Array[Vector3]:
+	var points: Array[Vector3] = []
+	if _camera_rig.has_method("get_ground_view_corners"):
+		var corners: Variant = _camera_rig.call("get_ground_view_corners")
+		if typeof(corners) == TYPE_PACKED_VECTOR3_ARRAY or typeof(corners) == TYPE_ARRAY:
+			for value in corners:
+				if typeof(value) == TYPE_VECTOR3 and (value as Vector3).is_finite(): points.append(value)
+	if not points.is_empty() and _camera_rig.has_method("is_driving_view") and bool(_camera_rig.call("is_driving_view")):
+		var radius_m := 0.0
+		if _camera_rig.has_method("get_streaming_ground_radius_m"): radius_m = maxf(0.0, float(_camera_rig.call("get_streaming_ground_radius_m")))
+		if radius_m > 0.0:
+			points = [focus_world + Vector3(-radius_m, 0.0, -radius_m), focus_world + Vector3(radius_m, 0.0, -radius_m), focus_world + Vector3(radius_m, 0.0, radius_m), focus_world + Vector3(-radius_m, 0.0, radius_m)]
+	if points.is_empty(): points.append(focus_world)
+	return points
+
+func _view_absolute_bounds(focus_world: Vector3) -> Rect2:
+	var points := _view_world_points(focus_world)
+	var first: Vector2 = _coordinates.world_to_absolute(points[0])
+	var min_x := first.x; var max_x := first.x; var min_y := first.y; var max_y := first.y
+	for index in range(1, points.size()):
+		var absolute: Vector2 = _coordinates.world_to_absolute(points[index])
+		min_x = minf(min_x, absolute.x); max_x = maxf(max_x, absolute.x); min_y = minf(min_y, absolute.y); max_y = maxf(max_y, absolute.y)
+	return Rect2(Vector2(min_x, min_y), Vector2(max_x - min_x, max_y - min_y))
+
 func _refresh_desired(force: bool) -> void:
 	if _camera_rig == null or not _camera_rig.has_method("get_focus_world"): return
 	var focus_world: Vector3 = _camera_rig.call("get_focus_world")
 	var focus_abs: Vector2 = _coordinates.world_to_absolute(focus_world)
-	var center := Vector2i(floori(focus_abs.x / cell_size_m), floori(focus_abs.y / cell_size_m))
 	var altitude := float(_camera_rig.call("get_altitude")) if _camera_rig.has_method("get_altitude") else 0.0
-	var radius := coverage_radius_for_altitude(altitude, cell_size_m, far_radius_cells, max_view_radius_cells, coverage_altitude_factor)
+	var cells: Array[Vector2i]
+	if _camera_rig.has_method("get_ground_view_corners"):
+		cells = coverage_cells_for_bounds(_view_absolute_bounds(focus_world), cell_size_m, viewport_margin_cells, max_resident_cells, focus_abs)
+	else:
+		var center := Vector2i(floori(focus_abs.x / cell_size_m), floori(focus_abs.y / cell_size_m))
+		var radius := coverage_radius_for_altitude(altitude, cell_size_m, far_radius_cells, max_view_radius_cells, coverage_altitude_factor)
+		var fallback_bounds := Rect2(Vector2(center.x - radius, center.y - radius) * cell_size_m, Vector2((radius * 2 + 1) * cell_size_m, (radius * 2 + 1) * cell_size_m))
+		cells = coverage_cells_for_bounds(fallback_bounds, cell_size_m, 0, max_resident_cells, focus_abs)
 	var next_desired: Dictionary = {}; var candidates: Array[Dictionary] = []
-	for dy in range(-radius, radius + 1):
-		for dx in range(-radius, radius + 1):
-			var distance_cells := maxi(absi(dx), absi(dy)); var cell := center + Vector2i(dx, dy); var lod := MeshBuilder.LOD_NEAR
-			if distance_cells > near_radius_cells or altitude >= far_lod_altitude_m: lod = MeshBuilder.LOD_FAR
-			candidates.append({"cell": cell, "lod": lod, "distance": distance_cells})
-	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["distance"]) < int(b["distance"]))
-	var limit := mini(maxi(1, max_resident_cells), candidates.size())
-	for i in range(limit):
-		var request: Dictionary = candidates[i]; next_desired[_cell_key(request["cell"])] = int(request["lod"])
+	var focus_cell := Vector2i(floori(focus_abs.x / cell_size_m), floori(focus_abs.y / cell_size_m))
+	for cell in cells:
+		var delta := cell - focus_cell; var distance_cells := maxi(absi(delta.x), absi(delta.y)); var lod := MeshBuilder.LOD_NEAR
+		if distance_cells > near_radius_cells or altitude >= far_lod_altitude_m: lod = MeshBuilder.LOD_FAR
+		var request := {"cell": cell, "lod": lod, "distance": distance_cells}; candidates.append(request); next_desired[_cell_key(cell)] = lod
 	var changed := force or next_desired.hash() != _desired.hash(); _desired = next_desired
 	if changed:
 		_generation += 1; _queue.clear(); _queued.clear()
-		# A pure coverage contraction can retire immediately because every desired
-		# replacement is already resident. During pan/zoom expansion keep the old
-		# visible cells until their replacements arrive; resident-slot eviction then
-		# removes stale cells incrementally without exposing a streaming hole.
 		if desired_coverage_ready(_active, _desired): _retire_stale_active_cells()
 	for request in candidates:
-		var cell: Vector2i = request["cell"]; var key := _cell_key(cell)
-		if not _desired.has(key): continue
-		var wanted_lod := int(_desired[key])
+		var cell: Vector2i = request["cell"]; var key := _cell_key(cell); var wanted_lod := int(_desired[key])
 		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == wanted_lod: continue
 		_enqueue_cell(key, wanted_lod)
 	_trim_queue(); _start_query_if_needed()
