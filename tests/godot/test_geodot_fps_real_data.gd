@@ -16,6 +16,7 @@ const MAX_AVG_FRAME_MS := 33.4
 const MAX_P95_FRAME_MS := 50.0
 const MAX_P99_FRAME_MS := 100.0
 const MAX_WORST_FRAME_MS := 250.0
+const SURFACE_HEIGHT_TOLERANCE_M := 0.001
 
 var _main: Node3D
 var _camera_rig: Node
@@ -32,6 +33,7 @@ var _cell_crossings := 0
 var _crossing_start_prepared := false
 var _crossing_low_x := 0.0
 var _crossing_high_x := 0.0
+var _switch_contract_checked := false
 
 func _initialize() -> void:
 	if OS.has_environment("BRUR_PARSE_ONLY"):
@@ -63,6 +65,10 @@ func _process(delta: float) -> bool:
 			_setup_elapsed += delta
 			_player = _gps_layer.call("get_player_vehicle") as Node3D
 			if _player != null and bool(_geodot_layer.call("is_ready")):
+				if not _verify_renderer_switch_preserves_gameplay_state():
+					return false
+				if not _verify_shared_surface_height("map"):
+					return false
 				_camera_rig.call("set_follow_target", _player)
 				_camera_rig.call("set_drive_mode", true)
 				_state = 1
@@ -71,6 +77,8 @@ func _process(delta: float) -> bool:
 				_fail("GeoDot/player did not become ready within %.1fs snapshot=%s" % [SETUP_TIMEOUT_S, str(_debug_snapshot())])
 		1:
 			_settle_elapsed += delta
+			if not _verify_shared_surface_height("drive"):
+				return false
 			var snapshot := _debug_snapshot()
 			var active := int(snapshot.get("active_cells", 0))
 			var desired := int(snapshot.get("desired_cells", 0))
@@ -97,6 +105,42 @@ func _process(delta: float) -> bool:
 				_cross_render_cell()
 			_frame_started_usec = Time.get_ticks_usec()
 	return false
+
+func _verify_renderer_switch_preserves_gameplay_state() -> bool:
+	if _switch_contract_checked:
+		return true
+	if not _main.has_method("set_geodot_renderer_enabled") or not _main.has_method("is_geodot_active"):
+		_fail("GeoDot POC does not expose in-place renderer switching")
+		return false
+	var gps_before := _main.get_node_or_null("GpsRouteLayer")
+	var camera_before := _main.get_node_or_null("CameraRig")
+	var player_before := _gps_layer.call("get_player_vehicle")
+	if not bool(_main.call("set_geodot_renderer_enabled", false)) or bool(_main.call("is_geodot_active")):
+		_fail("could not switch from GeoDot to legacy presentation in place")
+		return false
+	if _main.get_node_or_null("GpsRouteLayer") != gps_before or _main.get_node_or_null("CameraRig") != camera_before or _gps_layer.call("get_player_vehicle") != player_before:
+		_fail("renderer switch replaced GPS/camera/player gameplay state")
+		return false
+	if not bool(_main.call("set_geodot_renderer_enabled", true)) or not bool(_main.call("is_geodot_active")):
+		_fail("could not switch from legacy back to GeoDot presentation in place")
+		return false
+	if _main.get_node_or_null("GpsRouteLayer") != gps_before or _main.get_node_or_null("CameraRig") != camera_before or _gps_layer.call("get_player_vehicle") != player_before:
+		_fail("renderer switch back to GeoDot replaced GPS/camera/player gameplay state")
+		return false
+	_switch_contract_checked = true
+	print("GEODOT_RENDERER_SWITCH gameplay_state_preserved=true")
+	return true
+
+func _verify_shared_surface_height(context: String) -> bool:
+	if not _main.has_method("get_road_surface_height"):
+		_fail("Main does not expose shared road/building surface height")
+		return false
+	var expected := float(_main.call("get_road_surface_height"))
+	var actual := float((_geodot_layer as Node3D).position.y)
+	if absf(actual - expected) > SURFACE_HEIGHT_TOLERANCE_M:
+		_fail("GeoDot %s surface y %.6f differs from shared production y %.6f" % [context, actual, expected])
+		return false
+	return true
 
 func _prepare_render_cell_crossing() -> void:
 	var render_origin: Vector3 = _camera_rig.call("get_render_origin_world")
