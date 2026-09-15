@@ -5,7 +5,6 @@ class_name GeoDotBudgetedWorldRenderer
 @export var max_publishes_per_frame := 1
 var _last_publish_frame_ms := 0.0
 var _over_budget_publishes := 0
-var _presentation_visible := true
 
 func set_enabled(value: bool) -> void:
 	# Streaming activity and residency are deliberately separate. A temporary LOD
@@ -59,9 +58,6 @@ func _process(delta: float) -> void:
 	if not _enabled: return
 	_poll_queries()
 	var started := Time.get_ticks_usec()
-	# Mesh publication itself is currently atomic in Godot. Never compound an
-	# expensive publication with another one in the same frame; query work stays
-	# on workers and later results remain queued for subsequent frames.
 	if not _ready_results.is_empty():
 		_publish_one_ready_result()
 		_last_publish_frame_ms = float(Time.get_ticks_usec()-started)/1000.0
