@@ -158,6 +158,13 @@ Before producing any final user-facing response while tracked work remains activ
 5. Re-evaluate from step 2 and repeat.
 6. Send a final response only when the task is complete or one of the genuine stopping conditions below applies.
 
+##### MANDATORY UNINTERRUPTED EXECUTION INVARIANTS
+
+1. **Human interruptions are NOT stop conditions:** If the project leader injects a comment, question, correction, explanation request, or status request while a task is `RUNNING`, answer it concisely and immediately continue with the next concrete agent-owned action in the same turn. Answering the project leader is a sub-step, never a handoff or reason to stop.
+2. **A response boundary is NOT a workflow boundary:** Reaching a convenient reporting point, completing a tool call, receiving output, or having enough information to write a useful response does not end a `RUNNING` task. The agent must execute the next available agent-owned action and re-evaluate the task state before finalizing.
+3. **No deadlocks on `RUNNING`:** A final response must never leave a task in `RUNNING` merely because the agent described what comes next. If executable agent-owned work remains, execute it. If no executable action exists, explicitly prove that the state is `WAITING_FOR_HUMAN` or `BLOCKED` under the termination gate rather than silently stopping.
+4. **Large-output work must continue through tools/files, not placeholders:** Verbose Godot C++, Git output, generated files, or other large work must not be truncated with fake placeholders or treated as a reason to hand back control. Use available repository/file tools and bounded inspection so the implementation continues without requiring the project leader to type `fortsätt`. Do not invent a continuation token or claim that the environment will automatically resume a response unless such a mechanism actually exists.
+
 Example:
 
 ```text
@@ -221,19 +228,39 @@ This guard takes precedence over agent-owned continuation when the tracked objec
 
 #### Response termination gate
 
-Before producing a final response for unresolved tracked work, explicitly determine whether the next action is agent-owned. If it is agent-owned, the response must not end while the required tools are available and no genuine human-only blocker exists. Execute the next action instead. This check occurs after answering any conversational interruption and before treating the turn as finished.
+Before producing a final response for unresolved tracked work, explicitly determine the current execution state and whether the next action is agent-owned. If the state is `RUNNING` and the next action is agent-owned, the response must not end while the required tools are available and no genuine human-only blocker exists. **Execute the next action, re-evaluate the state, and repeat.**
 
-Writing "I will continue", "I'll fix that next", "I will investigate", or equivalent never satisfies this gate. If the next action is agent-owned, perform it before responding. **A user-facing answer is not a termination condition.**
+Writing "I will continue", "I'll fix that next", "I will investigate", "I will wait for CI", "I'll check that", or equivalent never satisfies this gate. If the next action is agent-owned, perform it before responding. **A user-facing answer is not a termination condition, and a response boundary is not a workflow boundary.**
+
+Use this mandatory decision loop before every final response for unresolved tracked work:
+
+```text
+STATE?
+├─ DONE -> final response allowed
+├─ WAITING_FOR_HUMAN -> final response allowed only with the exact human-only action
+├─ BLOCKED -> final response allowed only with the exact technical blocker and smallest required user action
+└─ RUNNING
+   └─ agent-owned executable action exists?
+      ├─ YES -> EXECUTE IT NOW -> re-evaluate STATE
+      └─ NO  -> determine and justify WAITING_FOR_HUMAN or BLOCKED; never silently stop
+```
 
 A response for unresolved tracked work may end only when at least one of these conditions is true:
 
-1. The tracked task is complete for the current scope.
-2. A concrete human action is genuinely required because the remaining step is a product/architecture decision, meaningful subjective or hardware-specific verification, unsafe/destructive approval, credential/permission action, or another step the agent cannot reasonably perform; that action has been persisted in `BRUR — Needs You` where applicable.
-3. Execution is technically impossible with the currently available tools or environment, and the exact blocker plus the smallest required user action is stated explicitly.
+1. The tracked task is complete for the current scope (`DONE`).
+2. A concrete human action is genuinely required because the remaining step is a product/architecture decision, meaningful subjective or hardware-specific verification, unsafe/destructive approval, credential/permission action, or another step the agent cannot reasonably perform; that action has been persisted in `BRUR — Needs You` where applicable (`WAITING_FOR_HUMAN`).
+3. Execution is technically impossible with the currently available tools or environment, no safe agent-owned workaround exists, and the exact blocker plus the smallest required user action is stated explicitly (`BLOCKED`).
 
-The following are **not** valid stopping conditions when the agent can continue safely: failed CI, failed `brur-world/local-pr-check`, a red test, a suspected implementation/model/check bug, stale branch state, ordinary merge/rebase work, recoverable conflicts, missing investigation, or a `DO NOT MERGE` result whose blocker is agent-fixable. These states mean continue: investigate, fix, revalidate, and repeat until green or a genuine human-only blocker is reached.
+The following are **not** valid stopping conditions when the agent can continue safely: failed CI, failed `brur-world/local-pr-check`, a red test, a suspected implementation/model/check bug, stale branch state, ordinary merge/rebase work, recoverable conflicts, missing investigation, a `DO NOT MERGE` result whose blocker is agent-fixable, or merely waiting for a pollable CI/build/test result. These states mean continue: investigate, fix, poll when appropriate, revalidate, and repeat until green or a genuine human-only/technical blocker is reached.
 
-In short: **red + agent-fixable = keep working**. Do not report an agent-owned intermediate failure as a handoff. Do not end with "I will investigate/fix/check next"; perform that work in the same active turn.
+##### AUTOMATIC CONTINUOUS EXECUTION RULES (GIT, PR & CI)
+
+1. **CI & test waiting:** If a local `pr-check`, CI workflow, build, or test is still running and tools are available to check its status, use them rather than ending the task. Poll with bounded, reasonable checks; do not spin indefinitely. While waiting, execute other safe independent agent-owned work inside the active task or requested wave when available. For a wave, continue with another ready `Independent` child when the dependency graph and isolation rules permit it. Do not start an unrelated backlog issue merely to fill time.
+2. **Red means repair, not handoff:** Failed CI, failed local checks, compiler errors, Godot/native test failures, recoverable Git conflicts, or agent-fixable merge blockers keep the task `RUNNING`. Diagnose, fix, rerun the smallest relevant validation, and continue until the evidence is green or a genuine stopping condition exists.
+3. **PR finalization is part of the task:** A successful merge is not by itself permission to stop if distinct required cleanup remains. In the same active turn, verify the merge result, confirm the linked issue is closed by `Closes #XX` (close it only if it remains open and the workflow requires closure), synchronize/remove the corresponding `BRUR — Needs You` entry, and perform branch cleanup when repository policy, permissions, and the terminal-state guard allow it. Never repeat a mutation whose terminal state is already confirmed.
+4. **No analysis paralysis:** Investigation must converge on executable actions. Once enough evidence exists to perform the smallest safe next step, perform it. Do not keep producing plans, alternative analyses, status prose, or speculative branches of reasoning while an executable agent-owned action is available.
+
+In short: **`RUNNING` + agent-owned executable work = keep executing.** Red + agent-fixable = keep working. A question, status update, CI wait, completed substep, useful explanation, or successful merge is not automatically the end of the tracked workflow.
 
 ### Parallel sessions and isolated work
 
