@@ -1,4 +1,5 @@
 extends SceneTree
+# Ephemeral hosted full-validation trigger.
 
 const FarRenderer = preload("res://scripts/geodot_far_renderer.gd")
 
