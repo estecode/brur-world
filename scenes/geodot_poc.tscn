@@ -8,14 +8,11 @@
 [node name="Main" instance=ExtResource("1_main")]
 script = ExtResource("2_poc")
 
-[node name="DebugOverlay" parent="." index="12"]
+[node name="DebugOverlay" parent="."]
 script = ExtResource("4_debug")
 
 [node name="GeoDotWorldLayer" type="Node3D" parent="World" index="0"]
 script = ExtResource("3_geodot")
-# Spatial cells are implementation only. Full building geometry remains until a
-# representative footprint is subpixel; hysteresis makes the transition stable.
-# Query/ready/resident queues are independently bounded.
 cell_size_m = 3000.0
 max_buildings_per_cell = 3000
 max_roads_per_cell = 2500
