@@ -3,11 +3,16 @@
 set -euo pipefail
 WORKTREE="${BRUR_PR_CHECK_WORKTREE:?}"; WORLD_DATA="${BRUR_PR_CHECK_WORLD_DATA:?}"; PYTHON="${PYTHON_BIN:?}"; GODOT="${GODOT_BIN:?}"
 MANUAL_REVIEW="${BRUR_PR_CHECK_MANUAL_REVIEW:-none}"; CHANGED_FILES="${BRUR_PR_CHECK_CHANGED_FILES:-}"
+DRIVE_HUD_VISUAL_SCOPE="skip"; DRIVING_VISUAL_SCOPE="skip"
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^scripts/(drive_hud|drive_hud_adapter|speed_limit_sign|road_speed_limit_query)\.gd$|^scenes/main\.tscn$'; then DRIVE_HUD_VISUAL_SCOPE="required"; fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(harness/driving/|scripts/(route_driving_policy|vehicle_route_follower|vehicle_dynamics|player_vehicle|player_vehicle_controller)\.gd$|scenes/player_vehicle\.tscn$)'; then DRIVING_VISUAL_SCOPE="required"; fi
 if ! printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(geodot[^/]*|test_geodot[^/]*)'; then
   STANDARD_HOOK="$WORKTREE/tools/pr_check_standard.sh"
   if [[ ! -f "$STANDARD_HOOK" && -n "${GITHUB_WORKSPACE:-}" && -f "$GITHUB_WORKSPACE/tools/pr_check_standard.sh" ]]; then STANDARD_HOOK="$GITHUB_WORKSPACE/tools/pr_check_standard.sh"; fi
   if [[ ! -f "$STANDARD_HOOK" && -f "$(pwd)/tools/pr_check_standard.sh" ]]; then STANDARD_HOOK="$(pwd)/tools/pr_check_standard.sh"; fi
   if [[ -f "$STANDARD_HOOK" ]]; then exec bash "$STANDARD_HOOK"; fi
+  if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud\n'; printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=driving-harness\n'; "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"; exit 0; fi
+  if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"; exit 0; fi
   exit 0
 fi
 run_stage(){ local stage="$1"; shift; local status=0; printf 'PR_CHECK=STAGE_BEGIN stage=%s pr=%s\n' "$stage" "$BRUR_PR_CHECK_PR"; "$@" || status=$?; if [[ $status -eq 0 ]]; then printf 'PR_CHECK=STAGE_OK stage=%s pr=%s\n' "$stage" "$BRUR_PR_CHECK_PR"; return 0; fi; printf 'PR_CHECK=STAGE_FAIL stage=%s pr=%s status=%s\n' "$stage" "$BRUR_PR_CHECK_PR" "$status" >&2; return "$status"; }
@@ -29,7 +34,5 @@ run_stage geodot-failure-contract run_godot_test res://tests/godot/test_geodot_f
 run_stage geodot-real-data run_godot_test res://tests/godot/test_geodot_real_data.gd 'geodot real-data test: OK'
 printf 'PR_CHECK=GEODOT_OBJECTIVE_OK pr=%s clean_exit=true bounded_pipeline=true screen_space_lod=true\n' "$BRUR_PR_CHECK_PR"
 if [[ "$MANUAL_REVIEW" != "required" ]]; then printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "$BRUR_PR_CHECK_PR"; exit 0; fi
-printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
-printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/geodot_poc.tscn reason=geodot-perceptual-lund\n'
-printf 'PR_CHECK=VISUAL_REVIEW_EXPECT same-world-look=true smooth-pan-zoom=true bounded-memory-observation=true\n'
+printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"; printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/geodot_poc.tscn reason=geodot-perceptual-lund\n'; printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-brur-with-geodot not=editor\n'; printf 'PR_CHECK=VISUAL_REVIEW_INSTRUCTION inspect density, scale, seamless LOD, smooth pan/zoom and whether memory/object counts plateau rather than grow with travelled distance\n'
 BRUR_GEODOT_GPKG="$GPKG" "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/geodot_poc.tscn"
