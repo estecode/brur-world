@@ -250,11 +250,12 @@ func _shutdown_and_quit(exit_code: int) -> void:
 	_camera_rig = null
 	_player = null
 	if _main != null:
-		_main.queue_free()
+		# This test owns the production scene outright. A deferred queue_free() leaves
+		# renderer RIDs alive until the SceneTree delete queue is flushed, which can
+		# overlap Godot 4.7/macOS renderer teardown after this headless child exits.
+		# Free synchronously while RenderingServer and the GeoDot extension are alive.
+		_main.free()
 	_main = null
-	# Let SceneTree process the queued production scene destruction before quit.
-	# In particular, this releases rendering resources while RenderingServer is
-	# still running instead of racing Metal/Vulkan teardown at process exit.
 	_shutdown_exit_code = exit_code
 	_shutdown_frames = 0
 
