@@ -37,14 +37,19 @@ def build_status_command(*, pr: int, sha: str, state: str, stage: str) -> list[s
     return ["api", "--method", "POST", f"repos/{REPOSITORY}/statuses/{sha}", "-f", f"state={state}", "-f", f"context={STATUS_CONTEXT}", "-f", f"description={description}", "-f", f"target_url=https://github.com/{REPOSITORY}/pull/{pr}"]
 
 
-def build_context_body(*, pr: int, working_branch: str, main_sha: str, target_branch: str, target_sha: str, result: str) -> str:
+def context_lines(*, pr: int, working_branch: str, main_sha: str, target_branch: str, target_sha: str, result: str) -> list[str]:
     if result not in ALLOWED_STATES:
         raise ValueError(f"unsupported context result: {result}")
-    return "\n".join([COMMENT_MARKER, "### Safe Check execution context", "", "```text", f"working_checkout_branch={working_branch}", f"safe_check_source=origin/main@{main_sha}", f"target_pr={pr}", f"target_branch={target_branch}", f"target_head={target_sha}", f"result={result}", "```", "", "This comment is updated in place. `brur-world/local-pr-check` on the exact target SHA remains the authoritative merge gate."])
+    return [f"working_checkout_branch={working_branch}", f"safe_check_source=origin/main@{main_sha}", f"target_pr={pr}", f"target_branch={target_branch}", f"target_head={target_sha}", f"result={result}"]
 
 
-def persist_context(*, pr: int, working_branch: str, main_sha: str, target_branch: str, target_sha: str, result: str) -> None:
-    body = build_context_body(pr=pr, working_branch=working_branch, main_sha=main_sha, target_branch=target_branch, target_sha=target_sha, result=result)
+def build_context_body(**kwargs: object) -> str:
+    return "\n".join([COMMENT_MARKER, "### Safe Check execution context", "", "```text", *context_lines(**kwargs), "```", "", "This comment is updated in place. `brur-world/local-pr-check` on the exact target SHA remains the authoritative merge gate."])
+
+
+def persist_context(**kwargs: object) -> None:
+    pr = int(kwargs["pr"])
+    body = build_context_body(**kwargs)
     comments = json.loads(_run_gh(["api", f"repos/{REPOSITORY}/issues/{pr}/comments", "--paginate"]) or "[]")
     existing = next((item for item in comments if COMMENT_MARKER in str(item.get("body", ""))), None)
     if existing:
@@ -59,8 +64,13 @@ def record_status(*, pr: int, sha: str, state: str, stage: str) -> None:
     main_sha = os.environ.get("BRUR_PR_CHECK_MAIN_SHA", "unknown")
     if working != "unknown" and main_sha != "unknown":
         metadata = resolve_pr(pr)
-        # Persist the SHA actually tested, not a newly resolved SHA. This keeps stale evidence visible.
-        persist_context(pr=pr, working_branch=working, main_sha=main_sha, target_branch=metadata["branch"], target_sha=sha, result=state)
+        context = dict(pr=pr, working_branch=working, main_sha=main_sha, target_branch=metadata["branch"], target_sha=sha, result=state)
+        # The exact SHA passed by the runner is intentionally retained even if the PR has advanced.
+        print("PR_CHECK=CONTEXT_BEGIN")
+        for line in context_lines(**context):
+            print(f"PR_CHECK=CONTEXT {line}")
+        print("PR_CHECK=CONTEXT_END")
+        persist_context(**context)
 
 
 def main() -> None:
