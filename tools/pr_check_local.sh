@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 WORKTREE="${BRUR_PR_CHECK_WORKTREE:?}"; PYTHON="${PYTHON_BIN:?}"; GODOT="${GODOT_BIN:?}"; CHANGED_FILES="${BRUR_PR_CHECK_CHANGED_FILES:-}"; MANUAL_REVIEW="${BRUR_PR_CHECK_MANUAL_REVIEW:-none}"
-DRIVE_HUD_VISUAL_SCOPE="required"
-DRIVING_VISUAL_SCOPE="required"
-# Standard Safe Check owns all non-GeoDot scopes. Keep these canonical markers here
-# because the repository regression contract validates selector ordering statically.
-if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then :; fi
-# PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud
-# PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=driving-harness
-if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then :; fi
-if ! printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(geodot[^/]*|test_geodot[^/]*)'; then exec bash "$WORKTREE/tools/pr_check_standard.sh"; fi
+DRIVE_HUD_VISUAL_SCOPE="skip"
+DRIVING_VISUAL_SCOPE="skip"
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(scripts/(drive_hud|drive_hud_adapter|speed_limit_sign|road_speed_limit_query)\.gd|scenes/main\.tscn)$'; then DRIVE_HUD_VISUAL_SCOPE="required"; fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(harness/driving/|scripts/(route_driving_policy|vehicle_route_follower|vehicle_dynamics|player_vehicle|player_vehicle_controller)\.gd$|scenes/player_vehicle\.tscn$)'; then DRIVING_VISUAL_SCOPE="required"; fi
+if ! printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(geodot[^/]*|test_geodot[^/]*)'; then
+  if [[ -x "$WORKTREE/tools/pr_check_standard.sh" ]]; then exec bash "$WORKTREE/tools/pr_check_standard.sh"; fi
+  if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then
+    printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud\n'
+    printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=driving-harness\n'
+    exec "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"
+  fi
+  if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then exec "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"; fi
+  printf 'PR_CHECK=SKIP_VISUAL_REVIEW reason=no-geodot-or-visual-scope\n'; exit 0
+fi
 run(){ printf 'PR_CHECK=STAGE_BEGIN stage=%s\n' "$1"; local n="$1"; shift; "$@"; printf 'PR_CHECK=STAGE_OK stage=%s\n' "$n"; }
 testgd(){ local s="$1" m="${2:-}" l; l="$(mktemp)"; "$GODOT" --headless --path "$WORKTREE" --script "$s" 2>&1 | tee "$l"; ! grep -Eq 'SCRIPT ERROR:|Failed to load script|ASSERT FAILED:|=FAIL' "$l"; [[ -z "$m" ]] || grep -Fq "$m" "$l"; rm -f "$l"; }
 GPKG="${BRUR_GEODOT_GPKG:-$HOME/Dropbox/Code/brur-world/sweden-brur.gpkg}"; [[ -f "$GPKG" ]] || { echo 'PR_CHECK=FAIL gpkg missing' >&2; exit 1; }; export BRUR_GEODOT_GPKG="$GPKG" BRUR_GEODOT_FAR_CACHE="$WORKTREE/.cache/geodot-far-cache.json"
