@@ -85,9 +85,12 @@ jobs:
           (cd geodot-upstream/godot-cpp && scons -j3 platform=macos use_hot_reload=yes arch=arm64 generate_bindings=yes)
           (cd geodot-upstream && scons -j3 platform=macos arch=arm64 osgeo_path="$(brew --prefix gdal)")
           PLUGIN="geodot-upstream/demo/addons/geodot/macos"
-          GDAL="$(brew --prefix gdal)/lib/libgdal.38.dylib"
-          cp "$GDAL" "$PLUGIN/libgdal.38.dylib"
-          install_name_tool -change @rpath/libgdal.38.dylib @loader_path/libgdal.38.dylib "$PLUGIN/libgeodot.dylib"
+          GEODOT="$PLUGIN/libgeodot.dylib"
+          GDAL_DEP="$(otool -L "$GEODOT" | awk '/libgdal/{print $1; exit}')"
+          GDAL_CURRENT="$(brew --prefix gdal)/lib/libgdal.dylib"
+          test -n "$GDAL_DEP"
+          test -f "$GDAL_CURRENT"
+          install_name_tool -change "$GDAL_DEP" "$GDAL_CURRENT" "$GEODOT"
           rm -rf addons/geodot
           mkdir -p addons
           cp -R geodot-upstream/demo/addons/geodot addons/geodot
