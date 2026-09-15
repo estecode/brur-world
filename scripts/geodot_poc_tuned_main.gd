@@ -9,6 +9,7 @@ const TALL_BUILDING_M := 30.0
 var _transition_prefetching := false
 var _transition_detail_ready := false
 var _effective_resident_cells := 128
+var _detail_owns_presentation := false
 
 func _apply_tuning() -> void:
 	super._apply_tuning()
@@ -24,10 +25,6 @@ func _update_distance_policy() -> void:
 	var tall_3d_distance := maxf(full_3d_distance,float(_tuning.get("tall_3d_distance_m",6000.0)))
 	var full_threshold := clampf(float(_tuning.get("full_3d_threshold_px",4.0)),0.2,32.0)
 	geodot_world_layer.set("far_exit_pixels",-1.0 if distance<=full_3d_distance else full_threshold)
-	# Between the ordinary and tall retention distances the screen-space decision
-	# is evaluated using a representative tall structure. This deliberately keeps
-	# conspicuous skyline mass in the detailed batch longer without changing the
-	# guaranteed 3 km ordinary-building rule.
 	geodot_world_layer.set("representative_building_m",TALL_BUILDING_M if distance<=tall_3d_distance and distance>full_3d_distance else ORDINARY_BUILDING_M)
 
 	var base_resident := clampi(int(_tuning.get("resident_cells",128)),16,169)
@@ -41,13 +38,29 @@ func _update_distance_policy() -> void:
 	var prefetch_distance := TransitionPolicy.prefetch_distance(FAR_PRESENTATION_M,prefetch_scale)
 	var want_detail := distance <= prefetch_distance
 	if want_detail != _detail_streaming_enabled:
-		_detail_streaming_enabled = want_detail; geodot_world_layer.call("set_enabled",want_detail); _transition_prefetching = want_detail; _transition_detail_ready = false
-	if want_detail: _transition_detail_ready = TransitionPolicy.detail_ready(geodot_world_layer.call("debug_snapshot"))
-	else: _transition_detail_ready = false
-	if geodot_far_layer != null and geodot_far_layer.has_method("set_transition_hold"):
-		geodot_far_layer.call("set_transition_hold",TransitionPolicy.hold_far(distance,FAR_PRESENTATION_M,want_detail,_transition_detail_ready))
+		_detail_streaming_enabled = want_detail
+		geodot_world_layer.call("set_enabled",want_detail)
+		_transition_prefetching = want_detail
+		_transition_detail_ready = false
+	if want_detail:
+		_transition_detail_ready = TransitionPolicy.detail_ready(geodot_world_layer.call("debug_snapshot"))
+	else:
+		_transition_detail_ready = false
+
+	# Exactly one layer owns presentation. Detail may prefetch invisibly, but it is
+	# never shown over the far aggregate. Once complete requested coverage is warm,
+	# ownership changes in this frame; reverse zoom gives ownership back to the far
+	# representation before detail streaming is demoted.
+	_detail_owns_presentation = TransitionPolicy.detail_owns_presentation(distance,FAR_PRESENTATION_M,want_detail,_transition_detail_ready)
+	if geodot_world_layer.has_method("set_presentation_visible"):
+		geodot_world_layer.call("set_presentation_visible",_detail_owns_presentation)
+	if geodot_far_layer != null:
+		if geodot_far_layer.has_method("set_detail_owner"):
+			geodot_far_layer.call("set_detail_owner",_detail_owns_presentation)
+		if geodot_far_layer.has_method("set_transition_hold"):
+			geodot_far_layer.call("set_transition_hold",TransitionPolicy.hold_far(distance,FAR_PRESENTATION_M,want_detail,_transition_detail_ready))
 
 func geodot_debug_snapshot() -> Dictionary:
 	var snapshot := super.geodot_debug_snapshot()
-	snapshot["transition"] = {"prefetching":_transition_prefetching,"detail_ready":_transition_detail_ready,"prefetch_scale":float(_tuning.get("prefetch_scale",1.35)),"prefetch_distance_m":TransitionPolicy.prefetch_distance(FAR_PRESENTATION_M,float(_tuning.get("prefetch_scale",1.35))),"effective_resident_cells":_effective_resident_cells,"tall_3d_distance_m":float(_tuning.get("tall_3d_distance_m",6000.0))}
+	snapshot["transition"] = {"prefetching":_transition_prefetching,"detail_ready":_transition_detail_ready,"detail_owner":_detail_owns_presentation,"prefetch_scale":float(_tuning.get("prefetch_scale",1.35)),"prefetch_distance_m":TransitionPolicy.prefetch_distance(FAR_PRESENTATION_M,float(_tuning.get("prefetch_scale",1.35))),"effective_resident_cells":_effective_resident_cells,"tall_3d_distance_m":float(_tuning.get("tall_3d_distance_m",6000.0))}
 	return snapshot
