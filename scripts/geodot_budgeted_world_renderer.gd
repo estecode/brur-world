@@ -16,11 +16,20 @@ func set_enabled(value: bool) -> void:
 func set_presentation_visible(value: bool) -> void: _presentation_visible = value; _apply_presentation_visibility()
 
 func _apply_presentation_visibility() -> void:
+	# Residency and visibility are intentionally separate. A resident cell stays
+	# visible while its requested replacement is loading. Hiding it merely because
+	# _desired changed exposed streaming latency as empty world during fast zoom.
 	for key_value in _active.keys():
 		var key := String(key_value); var entry: Dictionary = _active[key]; var node := entry.get("node") as Node3D
 		if node == null: continue
-		var owns_desired := _desired.has(key) and int(entry.get("lod", -1)) == int(_desired[key])
-		node.visible = _presentation_visible and _enabled and owns_desired
+		var desired_lod := int(_desired.get(key, -1))
+		var entry_lod := int(entry.get("lod", -1))
+		var owns_region := _desired.has(key) and (entry_lod == desired_lod or not _has_ready_desired_owner(key, desired_lod))
+		node.visible = _presentation_visible and _enabled and owns_region
+
+func _has_ready_desired_owner(key: String, desired_lod: int) -> bool:
+	if not _active.has(key): return false
+	return int((_active[key] as Dictionary).get("lod", -1)) == desired_lod
 
 func _touch_desired_residents() -> void:
 	_resident_tick += 1
@@ -28,7 +37,7 @@ func _touch_desired_residents() -> void:
 		var key := String(key_value)
 		if _active.has(key):
 			var entry: Dictionary = _active[key]
-			if int(entry.get("lod", -1)) == int(_desired[key]): entry["last_touch"] = _resident_tick; _active[key] = entry
+			entry["last_touch"] = _resident_tick; _active[key] = entry
 
 static func choose_lru_stale_eviction_key(active: Dictionary, desired: Dictionary, publishing_key: String) -> String:
 	var candidate := ""; var oldest := 9223372036854775807
