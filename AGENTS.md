@@ -108,12 +108,38 @@ Do not use `CHECK THEN MERGE` merely because this is Godot. Do not delegate a ch
 
 ### Verification and the merge decision
 
-You must take responsibility for proving the objective correctness of your changes. Human verification must never be used as a shortcut for something you can reasonably prove yourself.
+You must take responsibility for proving the objective correctness of your changes. Human verification must never be used as a shortcut for something you can reasonably prove yourself. **Validation depth must grow with implementation maturity: use the smallest relevant proof during iteration, then broaden validation as the candidate stabilizes, while preserving every existing final merge gate.**
 
 - `CHECK THEN MERGE` is not justified by the fact that a check requires Godot, scene execution, rendering state, spatial state, interaction state, or real runtime data. If the remaining property is objectively verifiable and can reasonably be asserted by the agent, that verification must be executed before handover.
 - If an invariant can reasonably be asserted in headless Godot, write and execute that verification before requesting a human playtest. Examples include viewport bounds, camera/terrain clearance, target-tracking tolerances, object placement against the expected drivable surface, visibility/existence, and state transitions such as manual takeover, GPS control and reroute requests.
 - If a bug can be described as a broken objective rule, translate that rule into the smallest stable deterministic assertion rather than asking a human to look for it.
 - Do not create brittle or disproportionately expensive automation merely because a property is theoretically measurable. `ARCHITECTURE.md`'s "where reasonably possible" rule still applies.
+
+#### Tiered validation strategy
+
+Verification must be complete without using the most expensive validation as the ordinary development feedback loop. Treat CI time, full builds, real-data runs, and global regression time as finite project resources while never weakening the evidence required for merge.
+
+Use validation in increasing scope as the implementation stabilizes:
+
+```text
+TARGETED VALIDATION
+smallest tests that directly exercise the touched behavior
+        ↓
+INTEGRATION VALIDATION
+affected subsystem / Godot / native / real-data boundaries
+        ↓
+FINAL REGRESSION
+full relevant regression for the final candidate
+        ↓
+MERGE DECISION
+```
+
+1. **Targeted validation during implementation:** While writing code, debugging, or iterating on a fix, run the smallest deterministic/core tests, native tests, headless Godot scenes, scripts, or focused real-data checks that directly exercise the touched behavior. Do not run the repository-wide regression suite or trigger a global CI build merely to discover whether a local edit works when a smaller relevant check can answer that question.
+2. **Integration validation after targeted green:** Once the directly affected behavior is green, broaden to the affected subsystem and its real boundaries. Run the relevant headless Godot, native, adapter, data-contract, or real-data integration checks needed to catch interactions that targeted tests cannot prove. Integration scope follows actual dependencies and behavioral impact; it is not automatically repository-wide.
+3. **Final regression on the final candidate:** Run the full relevant regression/CI suite when the implementation and affected integration scope are stable and the candidate is entering final validation. This should normally happen once per final candidate, not after every edit. "Full relevant regression" means the complete regression scope required by the repository for the change's actual impact; central or cross-cutting changes may require repository-wide validation, while a truly isolated subsystem may have a defined complete subsystem regression.
+4. **Do not use full regression as a debugging loop:** A failure in a targeted or integration check means diagnose, fix, and rerun the smallest check that proves the fix. Broaden again only after that scope is green. Do not repeatedly consume full CI/regression runs to debug a failure that can be reproduced and verified at a smaller scope.
+5. **Revalidation follows invalidated evidence:** A successful final regression remains evidence only for the revision and integration context it actually tested. If code changes afterward, rerun the targeted/integration checks affected by that change and rerun final regression when the prior final evidence is no longer valid. If `main` changes, use the existing merge-safety rules to determine the smallest relevant refresh/revalidation; do not blindly rerun unrelated tests and do not merge on stale evidence.
+6. **Efficiency never weakens merge gates:** Scoped validation changes when and how tests are scheduled, not what correctness must be proven. Never skip a relevant objective check, required commit status, `brur-world/local-pr-check`, full regression gate, or meaningful integration validation merely to save time or CI resources. Existing `MERGE`, `CHECK THEN MERGE`, `DO NOT MERGE`, fail-closed, and human-verification rules remain authoritative.
 
 Final delivery reporting must include issue, branch, delivery commit, actual validation/results, PR, issue-update status, outstanding notes, and the same merge decision as the PR.
 
