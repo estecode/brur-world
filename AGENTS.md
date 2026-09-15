@@ -161,6 +161,8 @@ TARGETED VALIDATION
 - Run full relevant regression/CI on the stable final candidate, not as the ordinary debugging loop.
 - After a failure, repair and rerun the smallest invalidated proof, then broaden again.
 - Evidence applies to the revision/integration context actually tested. Revalidate invalidated evidence after code/main changes.
+- **Before starting a test suite or CI workflow, establish its relevance to the changed code, an affected dependency/integration boundary, the issue acceptance criteria, or an explicit repository-required final gate. If none applies, do not run it.** Unrelated subsystem suites are not useful safety work merely because they exist; for example, a world-renderer-only iteration must not trigger police/dispatch regressions unless a touched dependency or required final gate connects them.
+- **Do not use broad regression as a substitute for selecting the smallest relevant proof.** Broad/full regression belongs on a stable final candidate when required by the affected dependency surface or repository gate.
 - Efficiency never weakens required merge gates, statuses, local PR checks, integration validation, or relevant regression.
 - Objective runtime invariants should be automated where reasonably possible; do not create brittle or disproportionately expensive automation merely because a property is theoretically measurable.
 
@@ -247,6 +249,26 @@ Failed CI, failed `brur-world/local-pr-check`, red tests, objective Safe Check f
 
 ### Continuous Git/PR/CI execution
 
+#### CI RESUME + SINGLE-FLIGHT — MANDATORY
+
+**Resume before trigger.** Whenever an agent starts, resumes, or takes over a tracked task/PR, synchronize existing relevant CI/build/check state before starting anything new.
+
+```text
+RESUME TASK
+-> discover relevant existing runs/checks for the task/PR/current candidate
+-> queued/pending/running -> follow them to terminal
+-> completed green -> reuse evidence if it still applies to the exact candidate/integration context
+-> completed red -> inspect and diagnose before deciding what must be rerun
+-> stale/superseded -> ignore or cancel when appropriate
+-> only then decide whether a new run is necessary
+```
+
+**Single-flight by candidate and validation purpose.** If a relevant run/check for the current candidate and same validation purpose is queued, pending, or running, do not start another equivalent run. Do not push, rerun, workflow-dispatch, amend metadata, or otherwise mutate merely to create more CI while the applicable run is still in flight. Follow the existing run instead.
+
+Parallel CI is allowed only when the checks are intentionally independent parts of the same validation plan. Parallelism must not duplicate the same proof, repeatedly supersede candidates, or create unrelated suites merely to keep the agent busy.
+
+A new CI run is justified only when the previous relevant run is terminal and a code/config change, invalidated evidence, explicit retry of infrastructure failure, or required next validation stage makes another run necessary.
+
 #### CI FOLLOW-THROUGH LOOP — MANDATORY
 
 Once an agent-owned task has started, triggered, discovered, or become dependent on a CI/build/check that is still pending, the agent automatically enters CI follow-through mode.
@@ -277,13 +299,13 @@ RED
 -> diagnose
 -> fix if agent-owned
 -> run targeted validation
--> retrigger/recheck CI as required
+-> retrigger/recheck CI only if the failure or changed candidate requires it
 -> re-enter this loop
 ```
 
 Do not terminate merely because polling requires elapsed wall-clock time. Continue waiting and polling within the current execution opportunity until the check reaches a terminal state or a genuine external/tool limitation makes continued polling technically impossible.
 
-- Pollable CI/build/test/status pending work remains active. Poll at sane bounded intervals or perform safe same-task work between polls.
+- Pollable CI/build/test/status pending work remains active. Poll at sane bounded intervals or perform safe same-task work between polls that **cannot invalidate or duplicate the in-flight candidate/check**.
 - On terminal green, immediately apply the response-before-action guard and perform the next PR/task/merge-safety action.
 - On terminal red, diagnose, repair, rerun the smallest relevant validation, and continue.
 - Missing hosted CI is not by itself `WAITING_FOR_HUMAN` if other agent-owned analysis, implementation, tests, Git/GitHub work, or verification remains.
