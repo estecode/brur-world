@@ -48,7 +48,7 @@ func set_streaming_enabled(value:bool)->void:
 	if next==_streaming_enabled:return
 	_streaming_enabled=next
 	if not _streaming_enabled:
-		_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_shutdown_query_workers();_trim_active_to_budget();coverage_changed.emit();return
+		_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_trim_active_to_budget();coverage_changed.emit();return
 	_refresh_desired(true)
 func set_presentation_visible(value:bool)->void:
 	_presentation_visible=value
@@ -60,7 +60,8 @@ func is_ready()->bool:return _ready
 func source_metadata()->Dictionary:return _source.metadata() if _source!=null else {}
 func _process(delta:float)->void:
 	if not _enabled:return
-	if _streaming_enabled:_poll_queries();_publish_one_ready_result();_refresh_accum+=delta
+	_poll_queries()
+	if _streaming_enabled:_publish_one_ready_result();_refresh_accum+=delta
 	if _streaming_enabled and _refresh_accum>=refresh_interval_s:_refresh_accum=0.0;_refresh_desired(false)
 	if _streaming_enabled:_start_queries_if_needed()
 static func coverage_cell_size_for_bounds(_bounds:Rect2,base_cell_size:float,_margin_cells:int,_max_cells:int)->float:return maxf(1.0,base_cell_size)
@@ -123,7 +124,7 @@ func _query_worker(request:Dictionary)->Dictionary:
 	var started:=Time.get_ticks_usec();var cell:Vector2i=request.cell;var size:=float(request.cell_size_m);var result:Dictionary=_source.query_cell(Vector2(float(cell.x)*size,float(cell.y+1)*size),size,max_buildings_per_cell,max_roads_per_cell);result.request=request;result.total_query_ms=float(Time.get_ticks_usec()-started)/1000.0;return result
 func _poll_queries()->void:
 	var done:Array[int]=[];for i in range(_workers.size()):var t:Thread=_workers[i].thread as Thread;if t==null or not t.is_alive():done.append(i)
-	for r in range(done.size()-1,-1,-1):var i:=done[r];var w:Dictionary=_workers[i];_workers.remove_at(i);var t:Thread=w.thread as Thread;if t==null:continue;var v:Variant=t.wait_to_finish();if typeof(v)!=TYPE_DICTIONARY:continue;var result:Dictionary=v;var req:Dictionary=result.get("request",{});if int(req.get("generation",-1))==_generation and _ready_results.size()<maxi(1,max_ready_cells):_ready_results.append(result)
+	for r in range(done.size()-1,-1,-1):var i:=done[r];var w:Dictionary=_workers[i];_workers.remove_at(i);var t:Thread=w.thread as Thread;if t==null:continue;var v:Variant=t.wait_to_finish();if typeof(v)!=TYPE_DICTIONARY:continue;var result:Dictionary=v;var req:Dictionary=result.get("request",{});if _streaming_enabled and int(req.get("generation",-1))==_generation and _ready_results.size()<maxi(1,max_ready_cells):_ready_results.append(result)
 func _drop_obsolete_ready_results()->void:
 	var kept:Array[Dictionary]=[]
 	for result in _ready_results:
