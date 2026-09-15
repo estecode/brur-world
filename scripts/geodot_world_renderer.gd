@@ -9,6 +9,7 @@ signal coverage_changed
 @export var cell_size_m := 2000.0
 @export var viewport_margin_cells := 1
 @export var max_resident_cells := 169
+@export var max_transition_cells := 16
 @export var max_pending_cells := 64
 @export var max_ready_cells := 4
 @export var max_buildings_per_cell := 3000
@@ -94,7 +95,7 @@ func _refresh_desired(force:bool)->void:
 	var focus:Vector3=_camera_rig.call("get_focus_world");var abs:Vector2=_coordinates.world_to_absolute(focus);var bounds:=_view_absolute_bounds(focus);_current_bounds=bounds;var size:=coverage_cell_size_for_bounds(bounds,cell_size_m,viewport_margin_cells,max_resident_cells);var cells:=coverage_cells_for_bounds(bounds,size,viewport_margin_cells,max_resident_cells,abs);var vp:=get_viewport().get_visible_rect().size if get_viewport()!=null else Vector2(1920,1080);var px:=projected_pixels_for_size(representative_building_m,bounds,vp);var lod:=choose_screen_lod(_far_screen_lod,px,far_enter_pixels,far_exit_pixels);_far_screen_lod=lod==MeshBuilder.LOD_FAR;var next:Dictionary={};var candidates:Array[Dictionary]=[]
 	for cell in cells:var key:=_cell_key(cell,size);next[key]=lod;candidates.append({"key":key,"cell":cell,"cell_size_m":size,"lod":lod})
 	var changed:=force or next.hash()!=_desired.hash();_desired=next
-	if changed:_generation+=1;_queue.clear();_queued.clear();_drop_obsolete_ready_results();_park_nonoverlapping_active()
+	if changed:_generation+=1;_queue.clear();_queued.clear();_drop_obsolete_ready_results();_park_nonoverlapping_active();_trim_transition_overlap()
 	for request in candidates:
 		var key:=String(request.key);if _active.has(key) and int((_active[key] as Dictionary).get("lod",-1))==lod:continue
 		if _restore_warm(key,lod):continue
@@ -107,6 +108,13 @@ func _park_nonoverlapping_active()->void:
 	for value in keys:
 		var key:=String(value)
 		if not _desired.has(key) and not _entry_rect(_active[key]).intersects(_current_bounds):_park_warm(key)
+func _trim_transition_overlap()->void:
+	var transition:Array[String]=[]
+	for value in _active.keys():
+		var key:=String(value)
+		if not _desired.has(key):transition.append(key)
+	transition.sort()
+	while transition.size()>maxi(0,max_transition_cells):_park_warm(transition.pop_front())
 func _active_coverage_rects()->Array[Rect2]:
 	var out:Array[Rect2]=[]
 	if not _streaming_enabled:return out
@@ -149,7 +157,7 @@ func _publish_cell(request:Dictionary,result:Dictionary)->void:
 	if _active.has(key):_park_warm(key)
 	add_child(group);_active[key]={"node":group,"lod":lod,"origin_abs":origin,"cell_size_m":size,"buildings":int(result.get("building_features",0)),"warm_tick":Time.get_ticks_msec()};group.visible=_presentation_visible;_retire_obsolete_after_publish();coverage_changed.emit()
 func _retire_obsolete_after_publish()->void:
-	while _active.size()>maxi(1,max_resident_cells):
+	while _active.size()>maxi(1,max_resident_cells+max_transition_cells):
 		var stale:=choose_stale_eviction_key(_active,_desired,"")
 		if stale.is_empty():break
 		_park_warm(stale)
@@ -199,7 +207,7 @@ func _clear_warm(immediate:bool=false)->void:
 	for v in _warm.values():var n:Node=(v as Dictionary).get("node");if n!=null:if immediate:n.free();else:n.queue_free()
 	_warm.clear()
 func ready_coverage_rects()->Array[Rect2]:return _active_coverage_rects()
-func debug_snapshot()->Dictionary:return {"enabled":_enabled,"streaming_enabled":_streaming_enabled,"ready":_ready,"presentation_visible":_presentation_visible,"active_cells":_active.size(),"warm_cells":_warm.size(),"desired_cells":_desired.size(),"ready_desired_cells":ready_coverage_rects().size(),"desired_lod_ready":desired_coverage_ready(_active,_desired),"pending_cells":_queue.size()+_workers.size(),"ready_cells":_ready_results.size(),"screen_lod":"far" if _far_screen_lod else "near","max_resident_cells":max_resident_cells,"stable_cell_size_m":cell_size_m,"source":source_metadata()}
+func debug_snapshot()->Dictionary:return {"enabled":_enabled,"streaming_enabled":_streaming_enabled,"ready":_ready,"presentation_visible":_presentation_visible,"active_cells":_active.size(),"warm_cells":_warm.size(),"desired_cells":_desired.size(),"ready_desired_cells":ready_coverage_rects().size(),"desired_lod_ready":desired_coverage_ready(_active,_desired),"pending_cells":_queue.size()+_workers.size(),"ready_cells":_ready_results.size(),"screen_lod":"far" if _far_screen_lod else "near","max_resident_cells":max_resident_cells,"max_transition_cells":max_transition_cells,"stable_cell_size_m":cell_size_m,"source":source_metadata()}
 func consume_perf_metrics()->Dictionary:return {"renderer":"geodot","geodot_active_cells":_active.size(),"geodot_warm_cells":_warm.size(),"geodot_pending_cells":_queue.size()+_workers.size()}
 func apply_render_origin_shift(delta_world:Vector3)->void:
 	for v in _active.values():var n:Node3D=(v as Dictionary).get("node") as Node3D;if n!=null:n.position+=delta_world
