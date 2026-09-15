@@ -16,6 +16,13 @@
       "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "BLOCKED", "DONE"]
     },
     {
+      "id": "pending_ci_must_poll_until_terminal",
+      "situation": "A relevant agent-owned CI/build/check has started and is still pending. A bounded wait followed by another status poll is available.",
+      "expected": "CONTINUE",
+      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "BLOCKED", "DONE"],
+      "regression_example": "CI is still running; tell the project leader to say follow CI later."
+    },
+    {
       "id": "red_test_returns_to_agent",
       "situation": "An objective test is red and the failure can be diagnosed or repaired with available tools.",
       "expected": "CONTINUE",
