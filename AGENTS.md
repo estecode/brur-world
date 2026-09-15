@@ -190,6 +190,8 @@ Before producing any final user-facing response while tracked work remains activ
 2. **A response boundary is NOT a workflow boundary:** Reaching a convenient reporting point, completing a tool call, receiving output, or having enough information to write a useful response does not end a `RUNNING` task. The agent must execute the next available agent-owned action and re-evaluate the task state before finalizing.
 3. **No deadlocks on `RUNNING`:** A final response must never leave a task in `RUNNING` merely because the agent described what comes next. If executable agent-owned work remains, execute it. If no executable action exists, explicitly prove that the state is `WAITING_FOR_HUMAN` or `BLOCKED` under the termination gate rather than silently stopping.
 4. **Large-output work must continue through tools/files, not placeholders:** Verbose Godot C++, Git output, generated files, or other large work must not be truncated with fake placeholders or treated as a reason to hand back control. Use available repository/file tools and bounded inspection so the implementation continues without requiring the project leader to type `fortsätt`. Do not invent a continuation token or claim that the environment will automatically resume a response unless such a mechanism actually exists.
+5. **Human environment is not human verification:** The fact that a later check needs the project leader's Mac, local Godot installation, production GPKG, credentials, hardware, or another unavailable local resource does not make the task `WAITING_FOR_HUMAN` while agent-owned analysis, implementation, targeted tests, integration tests, CI, Git/GitHub work, or other executable verification remains. Exhaust all relevant agent-owned work first.
+6. **Never use the project leader as an iterative test runner:** A human-executed Safe Check is a final/environment-specific handoff, not a debugging loop. If it returns an objective failure, crash, assertion, compiler/test error, or other machine-verifiable defect, ownership immediately returns to the agent and the task becomes `RUNNING`. Diagnose, repair, and exhaust relevant agent-owned targeted/integration/CI validation before asking the project leader to run another Safe Check.
 
 Example:
 
@@ -216,6 +218,8 @@ The project leader must never need to repeatedly type `fortsätt` merely to adva
 When the project leader resolves the final required human check for a tracked PR, for example with `test ok #191`, that message transfers control back to the agent. The agent must immediately continue through all remaining agent-owned steps in the same active turn: synchronize the current PR and `main`, repair stale PR metadata or merge-decision text, perform the smallest required merge-safety refresh/revalidation, update `BRUR — Needs You` if applicable, and merge automatically when the resulting decision is `MERGE`.
 
 Do not stop after stating that these steps remain or that you will continue with them. A stale PR body, stale merge-decision block, missing issue comment, branch refresh, routine merge operation, or other administrative cleanup is agent-owned work and is never by itself a valid handoff to the project leader.
+
+If a human-executed Safe Check or local-environment run reports an objective failure instead of approval, that is not a new human handoff. The failure is evidence for the active task: set/keep the task `RUNNING`, diagnose it, fix it, and perform the smallest relevant agent-owned revalidation. Ask for another local run only after the candidate has again reached the genuine human/environment boundary.
 
 Example:
 
@@ -263,7 +267,10 @@ Use this mandatory decision loop before every final response for unresolved trac
 ```text
 STATE?
 ├─ DONE -> final response allowed
-├─ WAITING_FOR_HUMAN -> final response allowed only with the exact human-only action
+├─ WAITING_FOR_HUMAN
+│  └─ is the next required action genuinely impossible without project-leader input or execution in an unavailable local environment?
+│     ├─ YES -> final response allowed only with that exact human-only action
+│     └─ NO  -> RUNNING -> execute the next agent-owned action now
 ├─ BLOCKED -> final response allowed only with the exact technical blocker and smallest required user action
 └─ RUNNING
    └─ agent-owned executable action exists?
@@ -274,19 +281,21 @@ STATE?
 A response for unresolved tracked work may end only when at least one of these conditions is true:
 
 1. The tracked task is complete for the current scope (`DONE`).
-2. A concrete human action is genuinely required because the remaining step is a product/architecture decision, meaningful subjective or hardware-specific verification, unsafe/destructive approval, credential/permission action, or another step the agent cannot reasonably perform; that action has been persisted in `BRUR — Needs You` where applicable (`WAITING_FOR_HUMAN`).
+2. A concrete human action is genuinely required **now**, and all relevant executable agent-owned work leading up to that boundary is exhausted. Valid examples are a product/architecture decision, meaningful subjective or hardware-specific verification, unsafe/destructive approval, credential/permission action, or execution in the project leader's unavailable local environment that the agent cannot reasonably perform; that action has been persisted in `BRUR — Needs You` where applicable (`WAITING_FOR_HUMAN`). A future need for the project leader's Mac/data/environment does not justify stopping early while agent-owned work remains.
 3. Execution is technically impossible with the currently available tools or environment, no safe agent-owned workaround exists, and the exact blocker plus the smallest required user action is stated explicitly (`BLOCKED`).
 
-The following are **not** valid stopping conditions when the agent can continue safely: failed CI, failed `brur-world/local-pr-check`, a red test, a suspected implementation/model/check bug, stale branch state, ordinary merge/rebase work, recoverable conflicts, missing investigation, a `DO NOT MERGE` result whose blocker is agent-fixable, or merely waiting for a pollable CI/build/test result. These states mean continue: investigate, fix, poll when appropriate, revalidate, and repeat until green or a genuine human-only/technical blocker is reached.
+The following are **not** valid stopping conditions when the agent can continue safely: failed CI, failed `brur-world/local-pr-check`, a red test, an objective failure returned by a human-executed Safe Check, a suspected implementation/model/check bug, stale branch state, ordinary merge/rebase work, recoverable conflicts, missing investigation, a `DO NOT MERGE` result whose blocker is agent-fixable, or merely waiting for a pollable CI/build/test result. These states mean continue: investigate, fix, poll when appropriate, revalidate, and repeat until green or a genuine human-only/technical blocker is reached.
 
 ##### AUTOMATIC CONTINUOUS EXECUTION RULES (GIT, PR & CI)
 
-1. **CI & test waiting:** If a local `pr-check`, CI workflow, build, or test is still running and tools are available to check its status, use them rather than ending the task. Poll with bounded, reasonable checks; do not spin indefinitely. While waiting, execute other safe independent agent-owned work inside the active task or requested wave when available. For a wave, continue with another ready `Independent` child when the dependency graph and isolation rules permit it. Do not start an unrelated backlog issue merely to fill time.
-2. **Red means repair, not handoff:** Failed CI, failed local checks, compiler errors, Godot/native test failures, recoverable Git conflicts, or agent-fixable merge blockers keep the task `RUNNING`. Diagnose, fix, rerun the smallest relevant validation, and continue until the evidence is green or a genuine stopping condition exists.
-3. **PR finalization is part of the task:** A successful merge is not by itself permission to stop if distinct required cleanup remains. In the same active turn, verify the merge result, confirm the linked issue is closed by `Closes #XX` (close it only if it remains open and the workflow requires closure), synchronize/remove the corresponding `BRUR — Needs You` entry, and perform branch cleanup when repository policy, permissions, and the terminal-state guard allow it. Never repeat a mutation whose terminal state is already confirmed.
-4. **No analysis paralysis:** Investigation must converge on executable actions. Once enough evidence exists to perform the smallest safe next step, perform it. Do not keep producing plans, alternative analyses, status prose, or speculative branches of reasoning while an executable agent-owned action is available.
+1. **Pending CI is `RUNNING`, never a handoff:** If a GitHub Actions workflow, hosted CI check, remote PR status, local process whose status is agent-observable, build, or test is pending and the agent has a tool/API/CLI capable of checking it, the task remains `RUNNING`. The agent must poll that status until it reaches a terminal result. Do not end the response merely because CI is still running, do not ask the project leader to watch it, and do not classify pollable CI as `WAITING_FOR_HUMAN`.
+2. **Continue immediately after terminal CI:** The transition from pending CI to terminal CI is not a response boundary. On green, immediately execute the next agent-owned PR/task/merge-safety step. On red, immediately diagnose the failure, repair it when agent-fixable, rerun the smallest relevant validation under the tiered-validation strategy, and continue. Do not insert a status-only handoff between CI completion and the next executable action.
+3. **Polling must be active but sane:** Poll at bounded, reasonable intervals and avoid wasteful high-frequency requests, but keep polling while the current execution environment/tool budget permits it. If safe independent work exists inside the same active task or requested wave, execute that work between polls. A temporary response/tool execution limit does not transform pending CI into `WAITING_FOR_HUMAN`; never claim that the project leader must resume the task merely because CI outlived one execution window.
+4. **Red means repair, not handoff:** Failed CI, failed local checks, compiler errors, Godot/native test failures, objective Safe Check failures, recoverable Git conflicts, or agent-fixable merge blockers keep the task `RUNNING`. Diagnose, fix, rerun the smallest relevant validation, and continue until the evidence is green or a genuine stopping condition exists.
+5. **PR finalization is part of the task:** A successful merge is not by itself permission to stop if distinct required cleanup remains. In the same active turn, verify the merge result, confirm the linked issue is closed by `Closes #XX` (close it only if it remains open and the workflow requires closure), synchronize/remove the corresponding `BRUR — Needs You` entry, and perform branch cleanup when repository policy, permissions, and the terminal-state guard allow it. Never repeat a mutation whose terminal state is already confirmed.
+6. **No analysis paralysis:** Investigation must converge on executable actions. Once enough evidence exists to perform the smallest safe next step, perform it. Do not keep producing plans, alternative analyses, status prose, or speculative branches of reasoning while an executable agent-owned action is available.
 
-In short: **`RUNNING` + agent-owned executable work = keep executing.** Red + agent-fixable = keep working. A question, status update, CI wait, completed substep, useful explanation, or successful merge is not automatically the end of the tracked workflow.
+In short: **`RUNNING` + agent-owned executable work = keep executing. Pollable CI = `RUNNING` until terminal, then continue without a handoff. Human environment required later does not mean human action required now. Red + agent-fixable = keep working.** A question, status update, CI wait, completed substep, useful explanation, or successful merge is not automatically the end of the tracked workflow.
 
 ### Parallel sessions and isolated work
 
@@ -380,6 +389,7 @@ After all relevant available objective validation has been completed, if human v
 - **Merged/current-main work:** when the supported `playtest` action can launch the required current game/harness check, provide that Safe Command Link instead of asking the project leader to update branches or run terminal commands manually.
 - Clearly state exactly what remains for the user to verify and why that property could not reasonably have been verified automatically.
 - Never ask the user to manually verify something that should reasonably have been covered by deterministic, native, headless Godot, or real-data validation first.
+- A Safe Check that returns an objective failure is not a completed human verification and must not cause another immediate handoff. The agent owns the failure until it has repaired and revalidated the candidate as far as its available environment permits.
 
 ## Dependency graph execution
 
