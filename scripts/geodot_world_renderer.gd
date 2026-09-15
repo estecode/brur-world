@@ -41,13 +41,8 @@ func _shutdown_query_workers()->void:
 	_workers.clear()
 func set_enabled(value:bool)->void:
 	_enabled=value and _ready;set_process(_enabled)
-	if not _enabled:
-		_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_shutdown_query_workers();_park_all_active_warm();return
+	if not _enabled:_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_shutdown_query_workers();return
 	_refresh_desired(true)
-func _park_all_active_warm()->void:
-	var keys:=_active.keys()
-	for value in keys:_park_warm(String(value))
-	_trim_warm();coverage_changed.emit()
 func set_presentation_visible(value:bool)->void:
 	_presentation_visible=value
 	for entry in _active.values():
