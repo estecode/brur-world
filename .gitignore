@@ -8,5 +8,6 @@ __pycache__/
 .DS_Store
 bin/
 .poc_runtime/
+.cache/
 .safecommand/logs/
 safecommand-logs/
