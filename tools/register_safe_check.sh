@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Registers brur-world PR Safe Check so its first executed project code is always fetched from current origin/main.
-# Run from the safe-command-links checkout; the mapped brur-world checkout may be on any branch/revision.
+# The mapped brur-world checkout may be on any branch/revision.
 set -euo pipefail
 
-SAFE_COMMAND_ROOT="$(git rev-parse --show-toplevel)"
-BRUR_ROOT="${1:-}"
-if [[ -z "$BRUR_ROOT" ]]; then
-  printf 'Usage: %s /absolute/path/to/brur-world\n' "$0" >&2
+BRUR_ROOT="$(git rev-parse --show-toplevel)"
+SAFE_COMMAND_ROOT="${1:-$(cd "$BRUR_ROOT/../safe-command-links" 2>/dev/null && pwd || true)}"
+if [[ -z "$SAFE_COMMAND_ROOT" || ! -f "$SAFE_COMMAND_ROOT/allow-project.sh" || ! -f "$SAFE_COMMAND_ROOT/allow-repo.sh" ]]; then
+  printf 'Usage: %s /absolute/path/to/safe-command-links\n' "$0" >&2
   exit 64
 fi
-BRUR_ROOT="$(cd "$BRUR_ROOT" && pwd)"
+SAFE_COMMAND_ROOT="$(cd "$SAFE_COMMAND_ROOT" && pwd)"
 
 bash "$SAFE_COMMAND_ROOT/allow-repo.sh" estecode/brur-world "$BRUR_ROOT"
 bash "$SAFE_COMMAND_ROOT/allow-project.sh" "$BRUR_ROOT" pr-check . /bin/bash -c \
