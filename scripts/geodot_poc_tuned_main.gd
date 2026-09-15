@@ -13,10 +13,19 @@ var _loading_label: Label = null
 func _ready() -> void:
 	_create_loading_gate()
 	super._ready()
-	# Far HLOD is the mandatory base representation. Detail may refine it only
-	# after a same-region mesh has been published and reported READY.
+	if not _geodot_ready:
+		_disable_loading_gate_for_legacy()
+		return
 	if geodot_far_layer != null and geodot_far_layer.has_method("set_detail_provider"):
 		geodot_far_layer.call("set_detail_provider", geodot_world_layer)
+	if geodot_far_layer == null or not geodot_far_layer.has_method("is_cache_ready") or not bool(geodot_far_layer.call("is_cache_ready")):
+		push_warning("GeoDot base HLOD unavailable; keeping legacy world presentation")
+		_geodot_ready = false
+		_geodot_activation_pending = false
+		if geodot_world_layer != null and geodot_world_layer.has_method("set_enabled"):
+			geodot_world_layer.call("set_enabled", false)
+		_disable_loading_gate_for_legacy()
+		return
 	if geodot_world_layer != null and geodot_world_layer.has_method("set_presentation_visible"):
 		geodot_world_layer.call("set_presentation_visible", true)
 	_refresh_base_readiness()
@@ -38,8 +47,12 @@ func _create_loading_gate() -> void:
 	_loading_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	background.add_child(_loading_label)
 
+func _disable_loading_gate_for_legacy() -> void:
+	if _loading_layer != null:
+		_loading_layer.visible = false
+
 func _refresh_base_readiness() -> void:
-	_base_ready = geodot_far_layer != null and geodot_far_layer.has_method("is_coverage_ready") and bool(geodot_far_layer.call("is_coverage_ready"))
+	_base_ready = _geodot_ready and geodot_far_layer != null and geodot_far_layer.has_method("is_coverage_ready") and bool(geodot_far_layer.call("is_coverage_ready"))
 	if _loading_label != null:
 		_loading_label.text = "Preparing world…" if not _base_ready else "World ready"
 
@@ -57,8 +70,6 @@ func _process(delta: float) -> void:
 		_loading_layer.visible = false
 
 func _geodot_activation_coverage_ready() -> bool:
-	# Gameplay is never exposed before a completed base-HLOD query has established
-	# coverage for the initial view. Detailed GeoPackage geometry is refinement.
 	return _base_ready
 
 func _update_distance_policy() -> void:
@@ -81,8 +92,6 @@ func _update_distance_policy() -> void:
 	if want_detail != _detail_streaming_enabled:
 		_detail_streaming_enabled = want_detail
 		geodot_world_layer.call("set_enabled", want_detail)
-	# No global presentation switch: base remains resident and detail owns only
-	# completed spatial rectangles exposed by ready_coverage_rects().
 	if geodot_world_layer.has_method("set_presentation_visible"):
 		geodot_world_layer.call("set_presentation_visible", true)
 
