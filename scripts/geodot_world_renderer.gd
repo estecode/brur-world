@@ -123,11 +123,14 @@ func _active_coverage_rects()->Array[Rect2]:
 		var key:=String(key_value)
 		if not _active.has(key):continue
 		var e:Dictionary=_active[key]
+		if int(e.get("lod",-1))!=int(_desired[key]):continue
 		if _entry_rect(e).intersects(_current_bounds):out.append(_entry_rect(e))
 	return out
 static func desired_coverage_ready(active:Dictionary,desired:Dictionary)->bool:
 	if desired.is_empty():return false
-	for v in desired.keys():var k:=String(v);if not active.has(k):return false
+	for v in desired.keys():
+		var k:=String(v)
+		if not active.has(k) or int((active[k] as Dictionary).get("lod",-1))!=int(desired[k]):return false
 	return true
 func _enqueue_request(request:Dictionary)->void:
 	var id:="%s:%d"%[String(request.key),int(request.lod)];if _queued.has(id) or _worker_has_queue_id(id):return
