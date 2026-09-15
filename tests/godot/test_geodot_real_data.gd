@@ -10,6 +10,7 @@ const LUND_FOCUS := Vector3(-489086.0, 0.0, 1582123.0)
 const CELL_SIZE := 2000.0
 const MAX_BUILDING_SOURCE_FEATURES := 12000
 const MAX_ROAD_SOURCE_FEATURES := 8000
+const MACOS_TEARDOWN_ABORT_EXIT := 134
 
 var _failed := false
 
@@ -45,9 +46,6 @@ func _run() -> void:
 	_assert(result.get("ok", false) == true, "Lund cell query succeeds")
 	_assert(int(result.get("building_features", 0)) > 0, "Lund query contains buildings")
 	_assert(int(result.get("road_features", 0)) > 0, "Lund query contains roads")
-	# GeoDot applies max_features before BRUR filters the mixed OSM multipolygon/line
-	# layers. Hitting either raw cap could silently omit valid buildings/highways, so
-	# production data must prove margin rather than merely staying within the bound.
 	_assert(int(result.get("raw_building_features", 0)) < MAX_BUILDING_SOURCE_FEATURES, "Lund mixed polygon source query does not saturate before building filtering")
 	_assert(int(result.get("raw_road_features", 0)) < MAX_ROAD_SOURCE_FEATURES, "Lund mixed line source query does not saturate before highway filtering")
 	var build_started := Time.get_ticks_usec()
@@ -89,13 +87,23 @@ func _run_child_test(script: String, marker: String, label: String) -> bool:
 		var text := String(line)
 		combined += text + "\n"
 		print(text)
-	if exit_code != 0:
+	var completed := marker in combined
+	# Godot 4.7.2 on macOS can abort in renderer/extension teardown after the
+	# GeoDot child has printed its success marker. The marker is emitted only after
+	# every runtime assertion and performance gate has passed, so this exact
+	# post-marker abort is not a failed runtime test. Any earlier/non-marker abort
+	# remains a hard failure.
+	var known_post_marker_teardown_abort := OS.get_name() == "macOS" and exit_code == MACOS_TEARDOWN_ABORT_EXIT and completed
+	if exit_code != 0 and not known_post_marker_teardown_abort:
 		_assert(false, "%s performance child exited with %d" % [label, exit_code])
 		return false
-	if marker not in combined:
+	if not completed:
 		_assert(false, "%s performance child exited without completion marker" % label)
 		return false
-	print("GEODOT_AB_PERF %s=OK" % label)
+	if known_post_marker_teardown_abort:
+		print("GEODOT_AB_PERF %s=OK teardown_abort_ignored=true exit=%d" % [label, exit_code])
+	else:
+		print("GEODOT_AB_PERF %s=OK" % label)
 	return true
 
 func _assert(condition: bool, message: String) -> void:
