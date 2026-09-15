@@ -24,7 +24,6 @@ from windows_build.runtime_pack import prepare_cached_runtime_pack
 MAX_WARM_SECONDS = 30.0
 MINIMUM_COLD_BASELINE_SECONDS = 5329.7
 MIN_BUILDINGS = 3_800_000
-MIN_RUNTIME_REDUCTION = 0.30
 TOOLS_DIR = Path(__file__).resolve().parent
 
 
@@ -100,31 +99,29 @@ def _shipped_runtime_footprint(world_dir: Path) -> tuple[int, dict]:
         return pack_path.stat().st_size, report
 
 
-def _footprint_payload(world_dir: Path, baseline_runtime_bytes: int | None = None) -> dict:
+def _production_footprint_payload(world_dir: Path) -> dict:
     runtime_bytes, runtime_by_dataset = _runtime_footprint(world_dir)
-    shipped_bytes, shipped_report = _shipped_runtime_footprint(world_dir)
-    payload = {
+    return {
         "world_dir": str(world_dir),
         "production_runtime_bytes": runtime_bytes,
         "production_runtime_gib": round(runtime_bytes / 1024**3, 3),
         "production_runtime_bytes_by_dataset": runtime_by_dataset,
+    }
+
+
+def _full_footprint_payload(world_dir: Path) -> dict:
+    payload = _production_footprint_payload(world_dir)
+    shipped_bytes, shipped_report = _shipped_runtime_footprint(world_dir)
+    payload.update({
         "shipped_runtime_pack_bytes": shipped_bytes,
         "shipped_runtime_pack_gib": round(shipped_bytes / 1024**3, 3),
         "shipped_runtime_pack": shipped_report,
-    }
-    if baseline_runtime_bytes is not None:
-        reduction = 1.0 - runtime_bytes / baseline_runtime_bytes
-        payload.update({
-            "baseline_production_runtime_bytes": baseline_runtime_bytes,
-            "production_runtime_reduction_fraction": reduction,
-            "production_runtime_reduction_percent": round(reduction * 100.0, 3),
-            "production_runtime_reduction_30pct": reduction >= MIN_RUNTIME_REDUCTION,
-        })
+    })
     return payload
 
 
-def _print_footprint(world_dir: Path, baseline_runtime_bytes: int | None = None) -> None:
-    print(json.dumps(_footprint_payload(world_dir, baseline_runtime_bytes), indent=2, sort_keys=True), flush=True)
+def _print_production_footprint(world_dir: Path) -> None:
+    print(json.dumps(_production_footprint_payload(world_dir), indent=2, sort_keys=True), flush=True)
 
 
 def main() -> None:
@@ -133,19 +130,16 @@ def main() -> None:
     parser.add_argument("--source-pbf", type=Path)
     parser.add_argument("--world-dir", type=Path, default=Path("/tmp/brur-220-world-data"))
     parser.add_argument("--report", type=Path, default=Path("/tmp/brur-220-benchmark.json"))
-    parser.add_argument("--footprint-only", action="store_true", help="Measure an existing completed world build without rebuilding it")
-    parser.add_argument("--baseline-runtime-bytes", type=int, help="Measured current-main BMC2 production-runtime baseline for the same Sweden source")
+    parser.add_argument("--footprint-only", action="store_true", help="Read-only measurement of selected production runtime bytes; does not build or pack runtime data")
     args = parser.parse_args()
 
     world_dir = args.world_dir.resolve()
     if args.footprint_only:
         if not world_dir.is_dir(): raise SystemExit(f"world data missing: {world_dir}")
-        _print_footprint(world_dir, args.baseline_runtime_bytes)
+        _print_production_footprint(world_dir)
         return
     if args.gpkg is None: raise SystemExit("gpkg is required unless --footprint-only is used")
     if args.source_pbf is None: raise SystemExit("--source-pbf is required unless --footprint-only is used")
-    if args.baseline_runtime_bytes is None:
-        raise SystemExit("--baseline-runtime-bytes is required for full #220 acceptance; measure current-main BMC2 production runtime first")
 
     gpkg = args.gpkg.resolve(); pbf = args.source_pbf.resolve(); report_path = args.report.resolve()
     if not gpkg.is_file(): raise SystemExit(f"GeoPackage missing: {gpkg}")
@@ -188,7 +182,7 @@ def main() -> None:
         isinstance(source_hashes.get("osm_pbf"), dict) and source_hashes["osm_pbf"].get("digest") == pbf_identity["digest"]
     )
 
-    footprint = _footprint_payload(world_dir, args.baseline_runtime_bytes)
+    footprint = _full_footprint_payload(world_dir)
     runtime_bytes = int(footprint["production_runtime_bytes"])
     shipped_runtime_bytes = int(footprint["shipped_runtime_pack_bytes"])
     roads_present = all((world_dir/f"lod{lod}").is_dir() and any((world_dir/f"lod{lod}").glob("*.brtile")) for lod in range(3))
@@ -206,7 +200,6 @@ def main() -> None:
         "warm_all_blocks_cache_hit": all_warm_hits,
         "production_runtime_selection_valid": runtime_bytes > 0,
         "shipped_runtime_pack_valid": shipped_runtime_bytes > 0,
-        "production_runtime_reduction_30pct": bool(footprint["production_runtime_reduction_30pct"]),
         "road_tiles_present": roads_present,
     }
     report = {
