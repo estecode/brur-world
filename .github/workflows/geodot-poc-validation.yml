@@ -54,8 +54,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${{ matrix.godot }}"
-          ZIP="$RUNNER_TEMP/godot.zip"
+          VERSION="${{ matrix.godot }}"; ZIP="$RUNNER_TEMP/godot.zip"
           curl -fsSL "https://github.com/godotengine/godot/releases/download/${VERSION}/Godot_v${VERSION}_macos.universal.zip" -o "$ZIP"
           ditto -x -k "$ZIP" "$RUNNER_TEMP/godot"
           BIN="$(find "$RUNNER_TEMP/godot" -path '*/Godot.app/Contents/MacOS/Godot' -type f | head -1)"
@@ -87,8 +86,9 @@ jobs:
         run: |
           set -euo pipefail
           brew install gdal scons dylibbundler
-          (cd geodot-upstream/godot-cpp && scons platform=macos use_hot_reload=yes arch=arm64 generate_bindings=yes)
-          (cd geodot-upstream && scons platform=macos arch=arm64 osgeo_path="$(brew --prefix gdal)")
+          find geodot-upstream -name '*.dylib' -delete
+          (cd geodot-upstream/godot-cpp && scons -j3 platform=macos use_hot_reload=yes arch=arm64 generate_bindings=yes)
+          (cd geodot-upstream && scons -j3 platform=macos arch=arm64 osgeo_path="$(brew --prefix gdal)")
           dylibbundler -of -b -x geodot-upstream/demo/addons/geodot/macos/libgeodot.dylib -d geodot-upstream/demo/addons/geodot/macos/ -p @loader_path
           rm -rf addons/geodot
           mkdir -p addons
@@ -104,6 +104,11 @@ jobs:
           ditto -x -k "$ZIP" "$RUNNER_TEMP/godot"
           BIN="$(find "$RUNNER_TEMP/godot" -path '*/Godot.app/Contents/MacOS/Godot' -type f | head -1)"
           test -n "$BIN"; chmod +x "$BIN"; echo "GODOT_BIN=$BIN" >> "$GITHUB_ENV"
+      - name: Prove native extension load and unload exits cleanly
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_atomic_ownership.gd
       - name: Prove native extension plus GeoPackage exits cleanly
         shell: bash
         env:
