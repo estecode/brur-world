@@ -9,12 +9,17 @@ script = ExtResource("2_poc")
 
 [node name="GeoDotWorldLayer" type="Node3D" parent="World" index="0"]
 script = ExtResource("3_geodot")
-# Cells are internal streaming units, never visible world boundaries. Viewport
-# coverage adapts cell scale when necessary to remain inside the explicit
-# resident bound; near-first publication lets gameplay resume while the rest
-# of the visible population streams. Far geometry keeps city massing cheap.
+# Spatial cells are implementation only. Full building geometry remains until a
+# representative footprint is subpixel; hysteresis makes the transition stable.
+# Query/ready/resident queues are independently bounded.
 cell_size_m = 3000.0
 max_buildings_per_cell = 3000
 max_roads_per_cell = 2500
-far_lod_altitude_m = 3500.0
+max_pending_cells = 64
+max_ready_cells = 4
+max_query_cache_cells = 0
+query_workers = 2
+representative_building_m = 10.0
+far_enter_pixels = 1.5
+far_exit_pixels = 2.25
 refresh_interval_s = 0.1
