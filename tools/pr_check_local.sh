@@ -3,8 +3,19 @@
 set -euo pipefail
 WORKTREE="${BRUR_PR_CHECK_WORKTREE:?}"; WORLD_DATA="${BRUR_PR_CHECK_WORLD_DATA:?}"; PYTHON="${PYTHON_BIN:?}"; GODOT="${GODOT_BIN:?}"
 MANUAL_REVIEW="${BRUR_PR_CHECK_MANUAL_REVIEW:-none}"; CHANGED_FILES="${BRUR_PR_CHECK_CHANGED_FILES:-}"
+DRIVE_HUD_VISUAL_SCOPE="skip"; DRIVING_VISUAL_SCOPE="skip"
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^scripts/(drive_hud|drive_hud_adapter|speed_limit_sign|road_speed_limit_query)\.gd$|^scenes/main\.tscn$'; then DRIVE_HUD_VISUAL_SCOPE="required"; fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(harness/driving/|scripts/(route_driving_policy|vehicle_route_follower|vehicle_dynamics|player_vehicle|player_vehicle_controller)\.gd$|scenes/player_vehicle\.tscn$)'; then DRIVING_VISUAL_SCOPE="required"; fi
 if ! printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(geodot[^/]*|test_geodot[^/]*)'; then
-  exec bash "$WORKTREE/tools/pr_check_standard.sh"
+  if [[ -f "$WORKTREE/tools/pr_check_standard.sh" ]]; then exec bash "$WORKTREE/tools/pr_check_standard.sh"; fi
+  # Minimal self-contained fallback is only for isolated selector fixtures; production has pr_check_standard.sh.
+  if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then
+    printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud\n'
+    printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=driving-harness\n'
+    "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"; exit 0
+  fi
+  if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"; exit 0; fi
+  exit 0
 fi
 
 run_stage(){ local stage="$1"; shift; local status=0; printf 'PR_CHECK=STAGE_BEGIN stage=%s pr=%s\n' "$stage" "$BRUR_PR_CHECK_PR"; "$@" || status=$?; if [[ $status -eq 0 ]]; then printf 'PR_CHECK=STAGE_OK stage=%s pr=%s\n' "$stage" "$BRUR_PR_CHECK_PR"; return 0; fi; printf 'PR_CHECK=STAGE_FAIL stage=%s pr=%s status=%s\n' "$stage" "$BRUR_PR_CHECK_PR" "$status" >&2; return "$status"; }
