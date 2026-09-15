@@ -112,9 +112,9 @@ func _verify_renderer_switch_preserves_gameplay_state() -> bool:
 	if not _main.has_method("set_geodot_renderer_enabled") or not _main.has_method("is_geodot_active"):
 		_fail("GeoDot POC does not expose in-place renderer switching")
 		return false
-	var gps_before := _main.get_node_or_null("GpsRouteLayer")
-	var camera_before := _main.get_node_or_null("CameraRig")
-	var player_before := _gps_layer.call("get_player_vehicle")
+	var gps_before: Node = _main.get_node_or_null("GpsRouteLayer")
+	var camera_before: Node = _main.get_node_or_null("CameraRig")
+	var player_before: Node = _gps_layer.call("get_player_vehicle") as Node
 	if not bool(_main.call("set_geodot_renderer_enabled", false)) or bool(_main.call("is_geodot_active")):
 		_fail("could not switch from GeoDot to legacy presentation in place")
 		return false
