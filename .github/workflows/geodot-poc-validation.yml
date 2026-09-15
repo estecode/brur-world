@@ -4,7 +4,7 @@ on:
   push:
     branches: [issue/342-geodot-poc]
   pull_request:
-    branches: [main]
+    branches: [main, issue/342-geodot-poc]
     paths:
       - 'scripts/geodot_**'
       - 'scenes/geodot_poc.tscn'
