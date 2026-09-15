@@ -20,7 +20,7 @@ signal coverage_changed
 @export var far_exit_pixels := 2.25
 var _coordinates=null; var _camera_rig:Node=null; var _source=null
 var _enabled:=false; var _streaming_enabled:=true; var _ready:=false; var _presentation_visible:=true; var _refresh_accum:=0.0
-var _active:Dictionary={}; var _warm:Dictionary={}; var _desired:Dictionary={}; var _queue:Array[Dictionary]=[]; var _queued:Dictionary={}; var _ready_results:Array[Dictionary]=[]; var _workers:Array[Dictionary]=[]; var _generation:=0; var _far_screen_lod:=false
+var _active:Dictionary={}; var _warm:Dictionary={}; var _desired:Dictionary={}; var _queue:Array[Dictionary]=[]; var _queued:Dictionary={}; var _ready_results:Array[Dictionary]=[]; var _workers:Array[Dictionary]=[]; var _generation:=0; var _far_screen_lod:=false; var _current_bounds:=Rect2()
 var _building_material:StandardMaterial3D=null; var _road_material:StandardMaterial3D=null
 
 func setup(world_coordinates,camera_rig:Node,gpkg_path:String)->Dictionary:
@@ -91,20 +91,27 @@ static func choose_screen_lod(was_far:bool,pixels:float,enter:float,exit:float)-
 	return MeshBuilder.LOD_FAR if pixels<=enter else MeshBuilder.LOD_NEAR
 func _refresh_desired(force:bool)->void:
 	if not _streaming_enabled or _camera_rig==null or not _camera_rig.has_method("get_focus_world"):return
-	var focus:Vector3=_camera_rig.call("get_focus_world");var abs:Vector2=_coordinates.world_to_absolute(focus);var bounds:=_view_absolute_bounds(focus);var size:=coverage_cell_size_for_bounds(bounds,cell_size_m,viewport_margin_cells,max_resident_cells);var cells:=coverage_cells_for_bounds(bounds,size,viewport_margin_cells,max_resident_cells,abs);var vp:=get_viewport().get_visible_rect().size if get_viewport()!=null else Vector2(1920,1080);var px:=projected_pixels_for_size(representative_building_m,bounds,vp);var lod:=choose_screen_lod(_far_screen_lod,px,far_enter_pixels,far_exit_pixels);_far_screen_lod=lod==MeshBuilder.LOD_FAR;var next:Dictionary={};var candidates:Array[Dictionary]=[]
+	var focus:Vector3=_camera_rig.call("get_focus_world");var abs:Vector2=_coordinates.world_to_absolute(focus);var bounds:=_view_absolute_bounds(focus);_current_bounds=bounds;var size:=coverage_cell_size_for_bounds(bounds,cell_size_m,viewport_margin_cells,max_resident_cells);var cells:=coverage_cells_for_bounds(bounds,size,viewport_margin_cells,max_resident_cells,abs);var vp:=get_viewport().get_visible_rect().size if get_viewport()!=null else Vector2(1920,1080);var px:=projected_pixels_for_size(representative_building_m,bounds,vp);var lod:=choose_screen_lod(_far_screen_lod,px,far_enter_pixels,far_exit_pixels);_far_screen_lod=lod==MeshBuilder.LOD_FAR;var next:Dictionary={};var candidates:Array[Dictionary]=[]
 	for cell in cells:var key:=_cell_key(cell,size);next[key]=lod;candidates.append({"key":key,"cell":cell,"cell_size_m":size,"lod":lod})
 	var changed:=force or next.hash()!=_desired.hash();_desired=next
-	if changed:_generation+=1;_queue.clear();_queued.clear();_drop_obsolete_ready_results()
+	if changed:_generation+=1;_queue.clear();_queued.clear();_drop_obsolete_ready_results();_park_nonoverlapping_active()
 	for request in candidates:
 		var key:=String(request.key);if _active.has(key) and int((_active[key] as Dictionary).get("lod",-1))==lod:continue
 		if _restore_warm(key,lod):continue
 		_enqueue_request(request)
 	_trim_queue();_trim_warm();_start_queries_if_needed()
+func _entry_rect(entry:Dictionary)->Rect2:
+	var o:Vector2=entry.get("origin_abs",Vector2.ZERO);var s:=float(entry.get("cell_size_m",0.0));return Rect2(o,Vector2(s,s))
+func _park_nonoverlapping_active()->void:
+	var keys:=_active.keys()
+	for value in keys:
+		var key:=String(value)
+		if not _desired.has(key) and not _entry_rect(_active[key]).intersects(_current_bounds):_park_warm(key)
 func _active_coverage_rects()->Array[Rect2]:
 	var out:Array[Rect2]=[]
 	if not _streaming_enabled:return out
 	for e_value in _active.values():
-		var e:Dictionary=e_value;var o:Vector2=e.get("origin_abs",Vector2.ZERO);var s:=float(e.get("cell_size_m",0.0));if s>0.0:out.append(Rect2(o,Vector2(s,s)))
+		var e:Dictionary=e_value;if _entry_rect(e).intersects(_current_bounds):out.append(_entry_rect(e))
 	return out
 static func desired_coverage_ready(active:Dictionary,desired:Dictionary)->bool:
 	if desired.is_empty():return false
