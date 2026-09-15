@@ -94,17 +94,12 @@ func _refresh_desired(force:bool)->void:
 	var focus:Vector3=_camera_rig.call("get_focus_world");var abs:Vector2=_coordinates.world_to_absolute(focus);var bounds:=_view_absolute_bounds(focus);var size:=coverage_cell_size_for_bounds(bounds,cell_size_m,viewport_margin_cells,max_resident_cells);var cells:=coverage_cells_for_bounds(bounds,size,viewport_margin_cells,max_resident_cells,abs);var vp:=get_viewport().get_visible_rect().size if get_viewport()!=null else Vector2(1920,1080);var px:=projected_pixels_for_size(representative_building_m,bounds,vp);var lod:=choose_screen_lod(_far_screen_lod,px,far_enter_pixels,far_exit_pixels);_far_screen_lod=lod==MeshBuilder.LOD_FAR;var next:Dictionary={};var candidates:Array[Dictionary]=[]
 	for cell in cells:var key:=_cell_key(cell,size);next[key]=lod;candidates.append({"key":key,"cell":cell,"cell_size_m":size,"lod":lod})
 	var changed:=force or next.hash()!=_desired.hash();_desired=next
-	if changed:_generation+=1;_queue.clear();_queued.clear();_drop_obsolete_ready_results();_park_obsolete_active()
+	if changed:_generation+=1;_queue.clear();_queued.clear();_drop_obsolete_ready_results()
 	for request in candidates:
 		var key:=String(request.key);if _active.has(key) and int((_active[key] as Dictionary).get("lod",-1))==lod:continue
 		if _restore_warm(key,lod):continue
 		_enqueue_request(request)
 	_trim_queue();_trim_warm();_trim_active_to_budget();_start_queries_if_needed()
-func _park_obsolete_active()->void:
-	var keys:=_active.keys()
-	for value in keys:
-		var key:=String(value)
-		if not _desired.has(key):_park_warm(key)
 func _active_coverage_rects()->Array[Rect2]:
 	var out:Array[Rect2]=[]
 	if not _streaming_enabled:return out
@@ -146,7 +141,12 @@ func _publish_cell(request:Dictionary,result:Dictionary)->void:
 	var roads:=MeshBuilder.build_roads(result.get("roads",[]),origin,lod);if roads!=null:var ri:=MeshInstance3D.new();ri.mesh=roads;ri.material_override=_road_material;group.add_child(ri)
 	if not _prepare_resident_slot(key):group.free();return
 	if _active.has(key):_park_warm(key)
-	add_child(group);_active[key]={"node":group,"lod":lod,"origin_abs":origin,"cell_size_m":size,"buildings":int(result.get("building_features",0)),"warm_tick":Time.get_ticks_msec()};group.visible=_presentation_visible;coverage_changed.emit()
+	add_child(group);_active[key]={"node":group,"lod":lod,"origin_abs":origin,"cell_size_m":size,"buildings":int(result.get("building_features",0)),"warm_tick":Time.get_ticks_msec()};group.visible=_presentation_visible;_park_obsolete_after_publish();coverage_changed.emit()
+func _park_obsolete_after_publish()->void:
+	var keys:=_active.keys()
+	for value in keys:
+		var key:=String(value)
+		if not _desired.has(key):_park_warm(key)
 func _warm_key(key:String,lod:int)->String:return "%s:%d"%[key,lod]
 func _park_warm(key:String)->void:
 	if not _active.has(key):return
@@ -169,14 +169,16 @@ func _trim_warm()->void:
 		var node:Node=(_warm[oldest] as Dictionary).get("node") as Node;_warm.erase(oldest);if node!=null:node.free()
 func _trim_active_to_budget()->void:
 	while _active.size()>maxi(1,max_resident_cells):
-		var keys:=_active.keys();keys.sort();var key:=String(keys[0]);_evict_active_key(key,false)
+		var stale:=choose_stale_eviction_key(_active,_desired,"")
+		if stale.is_empty():break
+		_park_warm(stale)
 func evict_warm_for_pressure(target_bytes:int=0)->void:
 	var _unused:=target_bytes
 	_clear_warm(true)
 	if not _streaming_enabled:_clear_active(true)
 func _prepare_resident_slot(key:String)->bool:
 	if _active.has(key):return true
-	while _active.size()>=maxi(1,max_resident_cells):var stale:=choose_stale_eviction_key(_active,_desired,key);if stale.is_empty():return false;_evict_active_key(stale)
+	while _active.size()>=maxi(1,max_resident_cells):var stale:=choose_stale_eviction_key(_active,_desired,key);if stale.is_empty():return false;_park_warm(stale)
 	return true
 static func choose_stale_eviction_key(active:Dictionary,desired:Dictionary,publishing_key:String)->String:
 	var keys:=active.keys();keys.sort();for v in keys:var k:=String(v);if k!=publishing_key and not desired.has(k):return k
