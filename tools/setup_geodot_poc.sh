@@ -7,35 +7,36 @@ PIN="0301e42eecc45b36503da3c02a6296bcc5dc32a8"
 GODOT_CPP_PIN="27d9dd23c83871e0619fca5dc2cddfbfd69e926a"
 REPO="boku-ilen/geodot-plugin"
 TARGET="$ROOT/addons/geodot"
-CACHE_ROOT="$ROOT/.poc_runtime/geodot"
+PLATFORM="$(uname -s)"
+ARCH="$(uname -m)"
+CACHE_BASE="${BRUR_GEODOT_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/brur-world/geodot}"
+BUILD_ID="${PIN}-${GODOT_CPP_PIN}-crs-v1-${PLATFORM}-${ARCH}"
+CACHE_ROOT="$CACHE_BASE/$BUILD_ID"
 SRC="$CACHE_ROOT/src"
-ARTIFACT="$CACHE_ROOT/artifact"
+INSTALLED="$CACHE_ROOT/addon"
+
+install_cached_addon() {
+  [[ -f "$INSTALLED/geodot.gdextension" ]] || return 1
+  mkdir -p "$ROOT/addons"
+  rm -rf "$TARGET"
+  cp -R "$INSTALLED" "$TARGET"
+  printf 'GEODOT_SETUP=CACHED build_id=%s cache=%s target=%s\n' "$BUILD_ID" "$INSTALLED" "$TARGET"
+}
 
 if [[ -f "$TARGET/geodot.gdextension" ]]; then
   printf 'GEODOT_SETUP=READY target=%s\n' "$TARGET"
   exit 0
 fi
 
-mkdir -p "$CACHE_ROOT"
-rm -rf "$ARTIFACT"
-mkdir -p "$ARTIFACT"
+if install_cached_addon; then
+  exit 0
+fi
 
-platform="$(uname -s)"
-workflow=""
-artifact=""
+mkdir -p "$CACHE_ROOT"
+platform="$PLATFORM"
 case "$platform" in
-  Darwin)
-    workflow="build-silicon.yml"
-    artifact="macos-build"
-    ;;
-  Linux)
-    workflow="build-linux.yml"
-    artifact="linux-build"
-    ;;
-  *)
-    printf 'GEODOT_SETUP=FAIL unsupported host platform=%s\n' "$platform" >&2
-    exit 69
-    ;;
+  Darwin|Linux) ;;
+  *) printf 'GEODOT_SETUP=FAIL unsupported host platform=%s\n' "$platform" >&2; exit 69 ;;
 esac
 
 prepare_source() {
@@ -46,32 +47,17 @@ prepare_source() {
   fi
   git -C "$SRC" fetch --depth=1 origin "$PIN"
   git -C "$SRC" checkout --detach "$PIN"
-  [[ "$(git -C "$SRC" rev-parse HEAD)" == "$PIN" ]] || {
-    printf 'GEODOT_SETUP=FAIL pinned source revision mismatch\n' >&2
-    return 1
-  }
+  [[ "$(git -C "$SRC" rev-parse HEAD)" == "$PIN" ]] || { printf 'GEODOT_SETUP=FAIL pinned source revision mismatch\n' >&2; return 1; }
 }
 
 pin_godot_cpp() {
-  # GeoDot master currently points at Godot 4.6 godot-cpp. BRUR is intentionally
-  # still on Godot 4.5.x, and GDExtensions built for a newer engine are rejected
-  # by 4.5 at load time. Keep the GeoDot source pin, but compile its binding layer
-  # against a fixed 4.5-compatible godot-cpp revision instead of changing BRUR's
-  # engine version just for the POC.
   git -C "$SRC/godot-cpp" fetch --depth=1 origin "$GODOT_CPP_PIN"
   git -C "$SRC/godot-cpp" checkout --detach "$GODOT_CPP_PIN"
-  [[ "$(git -C "$SRC/godot-cpp" rev-parse HEAD)" == "$GODOT_CPP_PIN" ]] || {
-    printf 'GEODOT_SETUP=FAIL pinned godot-cpp revision mismatch\n' >&2
-    return 1
-  }
+  [[ "$(git -C "$SRC/godot-cpp" rev-parse HEAD)" == "$GODOT_CPP_PIN" ]] || { printf 'GEODOT_SETUP=FAIL pinned godot-cpp revision mismatch\n' >&2; return 1; }
   printf 'GEODOT_SETUP=GODOT_CPP sha=%s\n' "$GODOT_CPP_PIN"
 }
 
 patch_geopackage_crs() {
-  # GeoDot's pinned NativeDataset::get_epsg_code() only calls GDALDataset::GetSpatialRef().
-  # Vector-only GeoPackages commonly expose their SRS on each OGRLayer instead, so GeoDot
-  # returns -1 even though gpkg_contents/gpkg_geometry_columns correctly declare the CRS.
-  # Keep this POC patch narrow and deterministic: fall back to the first vector layer SRS.
   python3 - "$SRC/src/vector-extractor/NativeDataset.cpp" <<'PY'
 from pathlib import Path
 import sys
@@ -126,25 +112,11 @@ PY
   printf 'GEODOT_SETUP=CRS_PATCH vector-layer-fallback\n'
 }
 
-try_artifact() {
-  # Upstream artifacts follow GeoDot's own godot-cpp submodule and also lack the
-  # vector-only GeoPackage CRS fallback required by this POC. Use a source build
-  # until both compatibility fixes are available in an upstream artifact.
-  return 1
-}
-
 ensure_macos_build_dependencies() {
   command -v brew >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL Homebrew required for macOS source build\n' >&2; return 1; }
-  local missing=()
-  command -v scons >/dev/null 2>&1 || missing+=(scons)
-  brew --prefix gdal >/dev/null 2>&1 || missing+=(gdal)
-  command -v dylibbundler >/dev/null 2>&1 || missing+=(dylibbundler)
-  if (( ${#missing[@]} > 0 )); then
-    printf 'GEODOT_SETUP=BOOTSTRAP macos dependencies=%s\n' "${missing[*]}"
-    HOMEBREW_NO_AUTO_UPDATE=1 brew install "${missing[@]}"
-  fi
-  command -v scons >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL scons unavailable after Homebrew bootstrap\n' >&2; return 1; }
-  brew --prefix gdal >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL gdal unavailable after Homebrew bootstrap\n' >&2; return 1; }
+  command -v scons >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL scons missing; install development dependencies first\n' >&2; return 1; }
+  brew --prefix gdal >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL gdal missing; install development dependencies first\n' >&2; return 1; }
+  command -v dylibbundler >/dev/null 2>&1 || { printf 'GEODOT_SETUP=FAIL dylibbundler missing; install development dependencies first\n' >&2; return 1; }
 }
 
 build_from_source() {
@@ -164,30 +136,24 @@ build_from_source() {
       osgeo="$(brew --prefix gdal)"
       (cd "$SRC/godot-cpp" && scons platform=macos arch=arm64 generate_bindings=yes)
       (cd "$SRC" && scons platform=macos arch=arm64 osgeo_path="$osgeo")
-      if command -v dylibbundler >/dev/null 2>&1; then
-        (cd "$SRC" && dylibbundler -of -b -x ./demo/addons/geodot/macos/libgeodot.dylib -d ./demo/addons/geodot/macos/ -p @loader_path)
-      fi
+      (cd "$SRC" && dylibbundler -of -b -x ./demo/addons/geodot/macos/libgeodot.dylib -d ./demo/addons/geodot/macos/ -p @loader_path)
       ;;
     Linux)
       (cd "$SRC/godot-cpp" && scons platform=linux generate_bindings=yes)
       (cd "$SRC" && scons platform=linux)
-      # Match upstream packaging: keep runtime dependencies beside the extension so
-      # the POC does not silently depend on the build machine's exact GDAL SONAME.
       (cd "$SRC/demo/addons/geodot/x11" && ldd libgeodot.so | awk '/=> \/\// {print $3}' | xargs -r -I '{}' cp -n '{}' ./)
       ;;
   esac
-  mkdir -p "$ROOT/addons"
-  rm -rf "$TARGET"
-  cp -R "$SRC/demo/addons/geodot" "$TARGET"
-  printf 'GEODOT_SETUP=SOURCE sha=%s godot_cpp=%s platform=%s\n' "$PIN" "$GODOT_CPP_PIN" "$platform"
+
+  rm -rf "$INSTALLED"
+  mkdir -p "$CACHE_ROOT"
+  cp -R "$SRC/demo/addons/geodot" "$INSTALLED"
+  install_cached_addon
+  printf 'GEODOT_SETUP=SOURCE sha=%s godot_cpp=%s platform=%s cache=%s\n' "$PIN" "$GODOT_CPP_PIN" "$platform" "$INSTALLED"
 }
 
-if try_artifact; then
-  :
-else
-  printf 'GEODOT_SETUP=ARTIFACT_UNAVAILABLE sha=%s; building patched source against BRUR-compatible host dependencies\n' "$PIN"
-  build_from_source
-fi
+printf 'GEODOT_SETUP=ARTIFACT_UNAVAILABLE sha=%s; building once into persistent cache=%s\n' "$PIN" "$CACHE_ROOT"
+build_from_source
 
 [[ -f "$TARGET/geodot.gdextension" ]] || { printf 'GEODOT_SETUP=FAIL addon missing after setup\n' >&2; exit 1; }
-printf 'GEODOT_SETUP=OK sha=%s godot_cpp=%s target=%s\n' "$PIN" "$GODOT_CPP_PIN" "$TARGET"
+printf 'GEODOT_SETUP=OK sha=%s godot_cpp=%s target=%s cache=%s\n' "$PIN" "$GODOT_CPP_PIN" "$TARGET" "$INSTALLED"
