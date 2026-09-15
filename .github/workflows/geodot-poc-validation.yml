@@ -1,6 +1,8 @@
 name: GeoDot POC validation
 
 on:
+  push:
+    branches: [issue/342-geodot-poc]
   pull_request:
     branches: [main]
     paths:
