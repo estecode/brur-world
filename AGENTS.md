@@ -28,6 +28,8 @@ YES -> USER-FACING RESPONSE IS FORBIDDEN.
 NO  -> only now evaluate DONE / WAITING_FOR_HUMAN / BLOCKED.
 ```
 
+**A bounded wait followed by another status poll counts as a concrete agent-owned action. Therefore a relevant pending CI/build/check means this guard returns YES, not NO.**
+
 This guard applies at every tempting response boundary: after a tool call, commit, test result, discovered bug, fix, PR update, CI observation, explanation, status request, or completed substep. **The existence of a useful status update never outranks an executable next action.**
 
 A response whose final state is `RUNNING` is **invalid by definition**. `RUNNING` may be mentioned while answering a conversational interruption only when another concrete tool/action call for that task follows in the same response. It may never be the terminal state of a response.
@@ -244,6 +246,42 @@ A progress report, partial completion summary, validation list, commit/PR update
 Failed CI, failed `brur-world/local-pr-check`, red tests, objective Safe Check failures, suspected implementation/check bugs, stale branches, routine merge/rebase work, recoverable conflicts, missing investigation, agent-fixable `DO NOT MERGE` blockers, and pollable pending work all remain agent-owned.
 
 ### Continuous Git/PR/CI execution
+
+#### CI FOLLOW-THROUGH LOOP — MANDATORY
+
+Once an agent-owned task has started, triggered, discovered, or become dependent on a CI/build/check that is still pending, the agent automatically enters CI follow-through mode.
+
+**PENDING IS NOT `NO ACTION AVAILABLE`.**
+
+While the relevant check is pending:
+
+```text
+CHECK STATUS
+-> if pending, wait a sane bounded interval
+-> CHECK STATUS AGAIN
+-> repeat until terminal
+```
+
+The wait itself is an agent-owned continuation action. A pending check therefore never satisfies `RESPONSE-BEFORE-ACTION GUARD = NO` and never permits a final response.
+
+The project leader must never need to say `follow CI`, `wait for CI`, `check again`, `continue`, or send another message to make polling continue.
+
+When the check becomes terminal:
+
+```text
+GREEN
+-> immediately continue with the next agent-owned task/PR/merge-safety action
+
+RED
+-> immediately inspect failure
+-> diagnose
+-> fix if agent-owned
+-> run targeted validation
+-> retrigger/recheck CI as required
+-> re-enter this loop
+```
+
+Do not terminate merely because polling requires elapsed wall-clock time. Continue waiting and polling within the current execution opportunity until the check reaches a terminal state or a genuine external/tool limitation makes continued polling technically impossible.
 
 - Pollable CI/build/test/status pending work remains active. Poll at sane bounded intervals or perform safe same-task work between polls.
 - On terminal green, immediately apply the response-before-action guard and perform the next PR/task/merge-safety action.
