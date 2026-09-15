@@ -13,6 +13,7 @@ func _run() -> void:
 	_assert(Renderer.coverage_radius_for_altitude(24000.0, 3000.0, 3, 6, 0.72) == 6, "fallback 24 km view reaches bounded 13x13 coverage")
 	_assert(Renderer.coverage_radius_for_altitude(100000.0, 3000.0, 3, 6, 0.72) == 6, "fallback coverage remains explicitly bounded at extreme altitude")
 	_test_viewport_bounds_follow_visible_region()
+	_test_exact_boundary_is_half_open()
 	_test_viewport_margin_preloads_outside_visible_region()
 	_test_adaptive_cell_size_preserves_full_viewport()
 	if _failed:
@@ -29,10 +30,15 @@ func _test_viewport_bounds_follow_visible_region() -> void:
 		_assert(cells.has(cell), "viewport coverage includes visible cell %s" % cell)
 	_assert(not cells.has(Vector2i(0, 0)), "viewport coverage does not load unrelated cells around an altitude-derived square")
 
+func _test_exact_boundary_is_half_open() -> void:
+	var cells := Renderer.coverage_cells_for_bounds(Rect2(Vector2(2000.0, 2000.0), Vector2(1000.0, 1000.0)), 1000.0, 0, 64, Vector2(2500.0, 2500.0))
+	_assert(cells == [Vector2i(2, 2)], "exact maximum boundary does not claim the adjacent source cell")
+
 func _test_viewport_margin_preloads_outside_visible_region() -> void:
 	var cells := Renderer.coverage_cells_for_bounds(Rect2(Vector2(2000.0, 2000.0), Vector2(1000.0, 1000.0)), 1000.0, 1, 64, Vector2(2500.0, 2500.0))
-	_assert(cells.has(Vector2i(1, 1)) and cells.has(Vector2i(4, 4)), "viewport margin preloads one cell beyond the visible bounds")
-	_assert(cells.size() == 16, "one-cell preload margin stays deterministic")
+	_assert(cells.has(Vector2i(1, 1)) and cells.has(Vector2i(3, 3)), "viewport margin preloads one cell beyond the visible bounds")
+	_assert(not cells.has(Vector2i(4, 4)), "preload margin does not overclaim a second cell at an exact boundary")
+	_assert(cells.size() == 9, "one-cell preload margin stays deterministic")
 
 func _test_adaptive_cell_size_preserves_full_viewport() -> void:
 	var bounds := Rect2(Vector2.ZERO, Vector2(100000.0, 70000.0))
@@ -42,7 +48,7 @@ func _test_adaptive_cell_size_preserves_full_viewport() -> void:
 	_assert(cells.size() <= 169, "adaptive viewport coverage obeys the resident bound")
 	var min_cell := Vector2i(floori(bounds.position.x / cell_size) - 1, floori(bounds.position.y / cell_size) - 1)
 	var max_point := bounds.position + bounds.size
-	var max_cell := Vector2i(floori(max_point.x / cell_size) + 1, floori(max_point.y / cell_size) + 1)
+	var max_cell := Vector2i(ceili(max_point.x / cell_size), ceili(max_point.y / cell_size))
 	var expected_count := (max_cell.x - min_cell.x + 1) * (max_cell.y - min_cell.y + 1)
 	_assert(cells.size() == expected_count, "resident bound never truncates the visible viewport after adaptive sizing")
 	_assert(cells.has(min_cell) and cells.has(max_cell), "adaptive coverage includes both viewport extremes plus preload margin")
