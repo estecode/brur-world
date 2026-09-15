@@ -8,7 +8,9 @@ on:
       - 'scripts/geodot_**'
       - 'scenes/geodot_poc.tscn'
       - 'tests/godot/test_geodot_**'
+      - 'tests/test_geodot_far_cache.py'
       - 'tools/check_geodot_gpkg.py'
+      - 'tools/build_geodot_far_cache.py'
       - 'tools/setup_geodot_poc.sh'
       - '.github/workflows/geodot-poc-validation.yml'
 
@@ -22,6 +24,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Validate deterministic far cache builder
+        run: python3 tests/test_geodot_far_cache.py
 
       - name: Install Godot 4 headless runtime
         shell: bash
