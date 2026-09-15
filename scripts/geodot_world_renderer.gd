@@ -98,6 +98,21 @@ static func coverage_radius_for_altitude(altitude_m: float, cell_size: float, ba
 	var altitude_radius := ceili(maxf(0.0, altitude_m) * maxf(0.0, altitude_factor) / safe_cell_size) + 1
 	return clampi(maxi(base_radius, altitude_radius), maxi(1, base_radius), maxi(base_radius, max_radius))
 
+static func coverage_cell_size_for_bounds(bounds: Rect2, base_cell_size: float, margin_cells: int, max_cells: int) -> float:
+	var size := maxf(1.0, base_cell_size)
+	var margin := maxi(0, margin_cells)
+	var budget := maxi(1, max_cells)
+	# Increase only presentation/query granularity until the complete visible
+	# bounds plus preload margin fit the resident budget. World identity remains
+	# absolute-coordinate based; this scale is not a second spatial truth.
+	for _iteration in range(16):
+		var columns := maxi(1, ceili(bounds.size.x / size) + 1 + margin * 2)
+		var rows := maxi(1, ceili(bounds.size.y / size) + 1 + margin * 2)
+		if columns * rows <= budget: return size
+		var scale := sqrt(float(columns * rows) / float(budget))
+		size *= maxf(1.05, scale)
+	return size
+
 static func coverage_cells_for_bounds(bounds: Rect2, cell_size: float, margin_cells: int, max_cells: int, focus_abs: Vector2) -> Array[Vector2i]:
 	var safe_cell_size := maxf(1.0, cell_size)
 	var margin := maxi(0, margin_cells)
@@ -153,28 +168,36 @@ func _refresh_desired(force: bool) -> void:
 	var focus_world: Vector3 = _camera_rig.call("get_focus_world")
 	var focus_abs: Vector2 = _coordinates.world_to_absolute(focus_world)
 	var altitude := float(_camera_rig.call("get_altitude")) if _camera_rig.has_method("get_altitude") else 0.0
+	var query_cell_size := cell_size_m
 	var cells: Array[Vector2i]
 	if _camera_rig.has_method("get_ground_view_corners"):
-		cells = coverage_cells_for_bounds(_view_absolute_bounds(focus_world), cell_size_m, viewport_margin_cells, max_resident_cells, focus_abs)
+		var view_bounds := _view_absolute_bounds(focus_world)
+		query_cell_size = coverage_cell_size_for_bounds(view_bounds, cell_size_m, viewport_margin_cells, max_resident_cells)
+		cells = coverage_cells_for_bounds(view_bounds, query_cell_size, viewport_margin_cells, max_resident_cells, focus_abs)
 	else:
-		var center := Vector2i(floori(focus_abs.x / cell_size_m), floori(focus_abs.y / cell_size_m))
-		var radius := coverage_radius_for_altitude(altitude, cell_size_m, far_radius_cells, max_view_radius_cells, coverage_altitude_factor)
-		var fallback_bounds := Rect2(Vector2(center.x - radius, center.y - radius) * cell_size_m, Vector2((radius * 2 + 1) * cell_size_m, (radius * 2 + 1) * cell_size_m))
-		cells = coverage_cells_for_bounds(fallback_bounds, cell_size_m, 0, max_resident_cells, focus_abs)
+		var center := Vector2i(floori(focus_abs.x / query_cell_size), floori(focus_abs.y / query_cell_size))
+		var radius := coverage_radius_for_altitude(altitude, query_cell_size, far_radius_cells, max_view_radius_cells, coverage_altitude_factor)
+		var fallback_bounds := Rect2(Vector2(center.x - radius, center.y - radius) * query_cell_size, Vector2((radius * 2 + 1) * query_cell_size, (radius * 2 + 1) * query_cell_size))
+		cells = coverage_cells_for_bounds(fallback_bounds, query_cell_size, 0, max_resident_cells, focus_abs)
 	var next_desired: Dictionary = {}; var candidates: Array[Dictionary] = []
-	var focus_cell := Vector2i(floori(focus_abs.x / cell_size_m), floori(focus_abs.y / cell_size_m))
+	var focus_cell := Vector2i(floori(focus_abs.x / query_cell_size), floori(focus_abs.y / query_cell_size))
 	for cell in cells:
 		var delta := cell - focus_cell; var distance_cells := maxi(absi(delta.x), absi(delta.y)); var lod := MeshBuilder.LOD_NEAR
 		if distance_cells > near_radius_cells or altitude >= far_lod_altitude_m: lod = MeshBuilder.LOD_FAR
-		var request := {"cell": cell, "lod": lod, "distance": distance_cells}; candidates.append(request); next_desired[_cell_key(cell)] = lod
+		var key := _cell_key(cell, query_cell_size)
+		var request := {"cell": cell, "cell_size_m": query_cell_size, "lod": lod, "distance": distance_cells}; candidates.append(request); next_desired[key] = lod
 	var changed := force or next_desired.hash() != _desired.hash(); _desired = next_desired
 	if changed:
 		_generation += 1; _queue.clear(); _queued.clear()
 		if desired_coverage_ready(_active, _desired): _retire_stale_active_cells()
 	for request in candidates:
-		var cell: Vector2i = request["cell"]; var key := _cell_key(cell); var wanted_lod := int(_desired[key])
+		var key := String(request.get("key", ""))
+		if key.is_empty():
+			key = _cell_key(request["cell"] as Vector2i, float(request.get("cell_size_m", cell_size_m)))
+			request["key"] = key
+		var wanted_lod := int(_desired[key])
 		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == wanted_lod: continue
-		_enqueue_cell(key, wanted_lod)
+		_enqueue_request(request)
 	_trim_queue(); _start_query_if_needed()
 
 static func desired_coverage_ready(active: Dictionary, desired: Dictionary) -> bool:
@@ -191,10 +214,11 @@ func _retire_stale_active_cells() -> void:
 		if not _desired.has(key): stale_keys.append(key)
 	for key in stale_keys: _evict_active_key(key)
 
-func _enqueue_cell(key: String, lod: int) -> void:
-	var queue_id := "%s:%d" % [key, lod]
+func _enqueue_request(request: Dictionary) -> void:
+	var key := String(request.get("key", "")); var lod := int(request.get("lod", -1)); var queue_id := "%s:%d" % [key, lod]
 	if _queued.has(queue_id) or _query_key == queue_id: return
-	_queue.append({"key": key, "queue_id": queue_id, "cell": _parse_cell_key(key), "lod": lod, "generation": _generation}); _queued[queue_id] = true
+	request["queue_id"] = queue_id; request["generation"] = _generation
+	_queue.append(request); _queued[queue_id] = true
 
 func _trim_queue() -> void:
 	while _queue.size() > maxi(1, max_pending_cells):
@@ -212,9 +236,9 @@ func _start_query_if_needed() -> void:
 		push_error("GeoDot cell query thread failed to start: %s" % error_string(error)); _query_thread = null; _query_key = ""
 
 func _query_worker(request: Dictionary) -> Dictionary:
-	var started := Time.get_ticks_usec(); var cell: Vector2i = request["cell"]
-	var top_left := Vector2(float(cell.x) * cell_size_m, float(cell.y + 1) * cell_size_m)
-	var result: Dictionary = _source.query_cell(top_left, cell_size_m, max_buildings_per_cell, max_roads_per_cell)
+	var started := Time.get_ticks_usec(); var cell: Vector2i = request["cell"]; var request_cell_size := float(request.get("cell_size_m", cell_size_m))
+	var top_left := Vector2(float(cell.x) * request_cell_size, float(cell.y + 1) * request_cell_size)
+	var result: Dictionary = _source.query_cell(top_left, request_cell_size, max_buildings_per_cell, max_roads_per_cell)
 	result["request"] = request; result["total_query_ms"] = float(Time.get_ticks_usec() - started) / 1000.0
 	return result
 
@@ -240,8 +264,8 @@ func _cache_query_result(key: String, result: Dictionary) -> void:
 func _clear_query_cache() -> void: _query_cache.clear(); _query_cache_order.clear()
 
 func _publish_cell(request: Dictionary, result: Dictionary) -> void:
-	var started := Time.get_ticks_usec(); var cell: Vector2i = request["cell"]; var key := String(request["key"]); var lod := int(request["lod"])
-	var origin_abs := Vector2(float(cell.x) * cell_size_m, float(cell.y) * cell_size_m); var group := Node3D.new()
+	var started := Time.get_ticks_usec(); var cell: Vector2i = request["cell"]; var key := String(request["key"]); var lod := int(request["lod"]); var request_cell_size := float(request.get("cell_size_m", cell_size_m))
+	var origin_abs := Vector2(float(cell.x) * request_cell_size, float(cell.y) * request_cell_size); var group := Node3D.new()
 	group.name = "GeoDotCell_%d_%d_L%d" % [cell.x, cell.y, lod]; group.position = _coordinates.absolute_to_world(origin_abs); group.visible = false
 	var building_mesh := MeshBuilder.build_buildings(result.get("buildings", []), origin_abs, lod)
 	if building_mesh != null:
@@ -309,6 +333,6 @@ func apply_render_origin_shift(delta_world: Vector3) -> void:
 		var node: Node3D = (value as Dictionary).get("node") as Node3D
 		if node != null: node.position += delta_world
 
-static func _cell_key(cell: Vector2i) -> String: return "%d:%d" % [cell.x, cell.y]
-static func _parse_cell_key(key: String) -> Vector2i:
-	var parts := key.split(":"); return Vector2i(int(parts[0]), int(parts[1]))
+static func _cell_key(cell: Vector2i, query_cell_size: float = 0.0) -> String:
+	if query_cell_size <= 0.0: return "%d:%d" % [cell.x, cell.y]
+	return "%.3f:%d:%d" % [query_cell_size, cell.x, cell.y]
