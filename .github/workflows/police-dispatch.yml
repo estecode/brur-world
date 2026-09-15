@@ -4,6 +4,11 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - "scripts/police_dispatch/**"
+      - "tests/godot/test_police_dispatch*.gd"
+      - "tools/test_police_dispatch.sh"
+      - ".github/workflows/police-dispatch.yml"
 
 permissions:
   contents: read
