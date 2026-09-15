@@ -1,7 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 WORKTREE="${BRUR_PR_CHECK_WORKTREE:?}"; PYTHON="${PYTHON_BIN:?}"; GODOT="${GODOT_BIN:?}"; CHANGED_FILES="${BRUR_PR_CHECK_CHANGED_FILES:-}"; MANUAL_REVIEW="${BRUR_PR_CHECK_MANUAL_REVIEW:-none}"
-if ! printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(geodot[^/]*|test_geodot[^/]*)'; then exec bash "$WORKTREE/tools/pr_check_standard.sh"; fi
+DRIVE_HUD_VISUAL_SCOPE="skip"
+DRIVING_VISUAL_SCOPE="skip"
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)scripts/drive_hud\.gd$'; then DRIVE_HUD_VISUAL_SCOPE="required"; fi
+if printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(scripts/(vehicle|drive|camera)[^/]*\.gd|harness/driving/)'; then DRIVING_VISUAL_SCOPE="required"; fi
+if ! printf '%s\n' "$CHANGED_FILES" | grep -Eq '(^|/)(geodot[^/]*|test_geodot[^/]*)'; then
+  if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then
+    printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud\n'
+    printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=driving-harness\n'
+    "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"
+    exit 0
+  fi
+  if [[ "$DRIVING_VISUAL_SCOPE" == "required" ]]; then
+    printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=harness/driving/driving_harness.tscn reason=driving\n'
+    "$GODOT" --path "$WORKTREE" "$WORKTREE/harness/driving/driving_harness.tscn"
+    exit 0
+  fi
+  exec bash "$WORKTREE/tools/pr_check_standard.sh"
+fi
 run(){ printf 'PR_CHECK=STAGE_BEGIN stage=%s\n' "$1"; local n="$1"; shift; "$@"; printf 'PR_CHECK=STAGE_OK stage=%s\n' "$n"; }
 testgd(){ local s="$1" m="${2:-}" l; l="$(mktemp)"; "$GODOT" --headless --path "$WORKTREE" --script "$s" 2>&1 | tee "$l"; ! grep -Eq 'SCRIPT ERROR:|Failed to load script|ASSERT FAILED:|=FAIL' "$l"; [[ -z "$m" ]] || grep -Fq "$m" "$l"; rm -f "$l"; }
 GPKG="${BRUR_GEODOT_GPKG:-$HOME/Dropbox/Code/brur-world/sweden-brur.gpkg}"; [[ -f "$GPKG" ]] || { echo 'PR_CHECK=FAIL gpkg missing' >&2; exit 1; }; export BRUR_GEODOT_GPKG="$GPKG" BRUR_GEODOT_FAR_CACHE="$WORKTREE/.cache/geodot-far-cache.json"
