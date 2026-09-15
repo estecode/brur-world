@@ -67,6 +67,7 @@ static func build_tile_mesh(records: Array, tile_origin_absolute: Vector2) -> Ar
 	if emitted == 0:
 		return null
 	st.generate_normals()
+	st.index()
 	return st.commit()
 
 static func _tile_local_ring(raw: Array, tile_origin_absolute: Vector2) -> PackedVector2Array:
