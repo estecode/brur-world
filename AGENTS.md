@@ -14,6 +14,35 @@ If a requested change conflicts with `ARCHITECTURE.md`, identify the conflict an
 
 ## NON-NEGOTIABLE execution invariant
 
+### RESPONSE-BEFORE-ACTION GUARD
+
+**Before sending ANY user-facing response while a tracked task is active, perform this check first:**
+
+```text
+Can I execute another concrete agent-owned action that advances the active task RIGHT NOW?
+
+YES -> USER-FACING RESPONSE IS FORBIDDEN.
+       Execute that action now.
+       Repeat this check after the action.
+
+NO  -> only now evaluate DONE / WAITING_FOR_HUMAN / BLOCKED.
+```
+
+This guard applies at every tempting response boundary: after a tool call, commit, test result, discovered bug, fix, PR update, CI observation, explanation, status request, or completed substep. **The existence of a useful status update never outranks an executable next action.**
+
+A response whose final state is `RUNNING` is **invalid by definition**. `RUNNING` may be mentioned while answering a conversational interruption only when another concrete tool/action call for that task follows in the same response. It may never be the terminal state of a response.
+
+Therefore these are invalid terminal responses:
+
+```text
+"#342 is still RUNNING."
+"I found the next problem; next I will fix viewport coverage."
+"CI is unavailable, but there is still implementation work."
+"I have added the tests; the next implementation is ..."
+```
+
+In every such case, the sentence itself proves that executable agent-owned work remains. **Do the work instead of sending the sentence.**
+
 ### PRIMARY CONTINUATION RULE — ACTION BEFORE STATE CLASSIFICATION
 
 For an active tracked task, the first continuation question is always:
@@ -148,15 +177,15 @@ For conversational interruptions:
 ```text
 answer/correct concisely
 -> re-identify active task
--> apply PRIMARY CONTINUATION RULE
--> execute instead of narrating continuation
+-> apply RESPONSE-BEFORE-ACTION GUARD
+-> execute instead of terminating the response
 ```
 
-Status reporting is observational, not a handoff.
+Status reporting is observational, not a handoff. If status is given while executable work remains, **the same response must contain a subsequent tool/action call**; otherwise the response violates this file.
 
 ### Human-check resolution continuation
 
-When the project leader resolves a required human check, control returns immediately to the agent. Continue through all remaining agent-owned synchronization, metadata repair, merge-safety refresh/revalidation, Needs You cleanup, merge, and post-merge cleanup. Do not stop between these steps unless the primary continuation rule returns NO and a genuine terminal state exists.
+When the project leader resolves a required human check, control returns immediately to the agent. Continue through all remaining agent-owned synchronization, metadata repair, merge-safety refresh/revalidation, Needs You cleanup, merge, and post-merge cleanup. Do not stop between these steps unless the response-before-action guard returns NO and a genuine terminal state exists.
 
 A human-executed Safe Check that reports an objective failure returns ownership to the agent. Diagnose, repair, and exhaust relevant agent-owned validation before requesting another local run. Never use the project leader as an iterative test runner.
 
@@ -172,11 +201,15 @@ Repository mutations are idempotent from the agent's point of view.
 
 ### Response termination gate
 
-The termination gate runs **only after the PRIMARY CONTINUATION RULE has returned NO**.
+The termination gate runs **only after the RESPONSE-BEFORE-ACTION GUARD and PRIMARY CONTINUATION RULE have both returned NO**.
 
 ```text
-1. Is there any concrete agent-owned action that can advance the task?
-   YES -> EXECUTE IT. Return to step 1.
+0. Am I about to end this response with the task described or classified as RUNNING?
+   YES -> INVALID RESPONSE. Do not send it. Find and execute the next concrete action.
+   NO  -> continue.
+
+1. Is there any concrete agent-owned action that can advance the task RIGHT NOW?
+   YES -> RESPONSE FORBIDDEN. EXECUTE IT. Return to step 0 after the action.
    NO  -> continue.
 
 2. Is requested scope and required cleanup complete?
@@ -190,8 +223,10 @@ The termination gate runs **only after the PRIMARY CONTINUATION RULE has returne
 4. Is execution technically impossible with available tools/environment,
    with no safe agent-owned workaround?
    YES -> BLOCKED -> final response allowed with exact blocker and smallest required user action.
-   NO  -> the task remains active; search for the next concrete agent-owned action rather than narrating a stop.
+   NO  -> final response is still forbidden; search for the next concrete agent-owned action.
 ```
+
+**There is no valid final-response path whose resulting task state is `RUNNING`.** If the agent writes or thinks `the task remains RUNNING`, that is a control-flow instruction to continue tool/action execution, not information that may terminate the response.
 
 A progress report, partial completion summary, validation list, commit/PR update, CI-start/pending notice, explanation of remaining work, or statement that work will continue is never itself terminal.
 
@@ -200,7 +235,7 @@ Failed CI, failed `brur-world/local-pr-check`, red tests, objective Safe Check f
 ### Continuous Git/PR/CI execution
 
 - Pollable CI/build/test/status pending work remains active. Poll at sane bounded intervals or perform safe same-task work between polls.
-- On terminal green, immediately apply the primary continuation rule and perform the next PR/task/merge-safety action.
+- On terminal green, immediately apply the response-before-action guard and perform the next PR/task/merge-safety action.
 - On terminal red, diagnose, repair, rerun the smallest relevant validation, and continue.
 - Missing hosted CI is not by itself `WAITING_FOR_HUMAN` if other agent-owned analysis, implementation, tests, Git/GitHub work, or verification remains.
 - PR finalization and required cleanup are part of the task.
