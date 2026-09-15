@@ -2,103 +2,23 @@
   "schema_version": 1,
   "description": "Regression cases for the documented agent workflow contract; these fixtures do not claim to execute or prove a live model.",
   "cases": [
-    {
-      "id": "running_must_continue",
-      "situation": "A tracked task is active, a substep has completed, and another concrete agent-owned repository action is executable now.",
-      "expected": "CONTINUE",
-      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "BLOCKED", "DONE"],
-      "regression_example": "#342 is still RUNNING."
-    },
-    {
-      "id": "missing_ci_must_continue",
-      "situation": "Hosted CI is unavailable or did not start, but implementation, investigation, deterministic tests, Git, or GitHub work remains agent-owned and executable.",
-      "expected": "CONTINUE",
-      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "BLOCKED", "DONE"]
-    },
-    {
-      "id": "pending_ci_must_poll_until_terminal",
-      "situation": "A relevant agent-owned CI/build/check has started and is still pending. A bounded wait followed by another status poll is available.",
-      "expected": "CONTINUE",
-      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "BLOCKED", "DONE"],
-      "regression_example": "CI is still running; tell the project leader to say follow CI later."
-    },
-    {
-      "id": "resume_existing_ci_before_trigger",
-      "situation": "An agent resumes a tracked PR and relevant queued/running checks already exist for its current candidate.",
-      "expected": "FOLLOW_EXISTING_CI",
-      "forbidden_terminal": ["TRIGGER_NEW_CI", "PUSH_TO_RETRIGGER", "RUNNING", "DONE"],
-      "regression_example": "Resume #343 by starting fresh workflows without first inspecting the six existing jobs."
-    },
-    {
-      "id": "single_flight_ci_per_candidate",
-      "situation": "A relevant CI run for the current candidate and validation purpose is still queued or running.",
-      "expected": "FOLLOW_EXISTING_CI",
-      "forbidden_terminal": ["TRIGGER_DUPLICATE_CI", "PUSH_TO_RETRIGGER", "WORKFLOW_DISPATCH_DUPLICATE"],
-      "regression_example": "Start another equivalent GeoDot validation while the previous run is six minutes old and still running."
-    },
-    {
-      "id": "unrelated_regression_not_run",
-      "situation": "A GeoDot/world-renderer-only implementation iteration has no changed dependency or required final gate involving police/dispatch.",
-      "expected": "SKIP_UNRELATED_TEST",
-      "forbidden_terminal": ["RUN_POLICE_DISPATCH", "RUN_UNRELATED_FULL_REGRESSION"],
-      "regression_example": "Run police dispatch regression merely because a new GeoDot renderer implementation was built."
-    },
-    {
-      "id": "red_test_returns_to_agent",
-      "situation": "An objective test is red and the failure can be diagnosed or repaired with available tools.",
-      "expected": "CONTINUE",
-      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "DONE"]
-    },
-    {
-      "id": "safe_check_failure_returns_to_agent",
-      "situation": "A human-executed Safe Check reports an objective failure and agent-owned diagnosis or repair remains.",
-      "expected": "CONTINUE",
-      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "DONE"]
-    },
-    {
-      "id": "premature_safe_check_handoff",
-      "situation": "An agent is about to present a Safe Check link, but merge-decision syntax, exact PR head, handoff contract, or an agent-executable objective prerequisite has not yet been verified green for the handoff candidate.",
-      "expected": "CONTINUE",
-      "forbidden_terminal": ["WAITING_FOR_HUMAN", "PRESENT_SAFE_CHECK", "RUNNING", "DONE"],
-      "regression_example": "Ask the project leader to run Safe Check while the local objective chain can still fail before the required GeoDot stage."
-    },
-    {
-      "id": "safe_check_parser_fix_must_not_immediately_rehandoff",
-      "situation": "Safe Check #343 failed on merge-decision parsing. The agent repaired the PR marker, but has not yet exhausted the objective/downstream Safe Check path or obtained HANDOFF_READY for the repaired candidate.",
-      "expected": "CONTINUE",
-      "forbidden_terminal": ["WAITING_FOR_HUMAN", "PRESENT_SAFE_CHECK", "RUNNING", "DONE"],
-      "regression_example": "Fix **Merge recommendation** and immediately tell the project leader to run Safe Check #343 again."
-    },
-    {
-      "id": "safe_check_pbf_fix_must_not_immediately_rehandoff",
-      "situation": "Safe Check #343 failed because an irrelevant legacy PBF stage ran. The agent repaired that scope bug, but has not yet exhausted the remaining objective/downstream chain or obtained HANDOFF_READY for the repaired candidate.",
-      "expected": "CONTINUE",
-      "forbidden_terminal": ["WAITING_FOR_HUMAN", "PRESENT_SAFE_CHECK", "RUNNING", "DONE"],
-      "regression_example": "Skip the legacy PBF rebuild and immediately tell the project leader to run the corrected Safe Check #343."
-    },
-    {
-      "id": "safe_check_handoff_ready_allows_human",
-      "situation": "A repaired Safe Check candidate has completed all relevant agent-owned objective/downstream validation, the exact-head gate is green, HANDOFF_READY was emitted, and only the concrete perceptual check remains.",
-      "expected": "WAITING_FOR_HUMAN",
-      "forbidden_terminal": ["RUNNING", "BLOCKED", "DONE"]
-    },
-    {
-      "id": "targeted_before_full_regression",
-      "situation": "A small implementation edit is still in the debugging loop and a smaller deterministic validation can answer the current question.",
-      "expected": "TARGETED_VALIDATION",
-      "forbidden_terminal": ["FULL_REGRESSION_AS_DEBUG_LOOP"]
-    },
-    {
-      "id": "genuine_human_handoff",
-      "situation": "All relevant available objective validation is complete and the only remaining requirement is a genuinely perceptual, interactive, hardware-specific, or otherwise non-automatable human check.",
-      "expected": "WAITING_FOR_HUMAN",
-      "forbidden_terminal": ["RUNNING", "BLOCKED", "DONE"]
-    },
-    {
-      "id": "done_may_stop",
-      "situation": "Requested scope, required objective validation, delivery metadata, and agent-owned cleanup are complete and no human-only check remains.",
-      "expected": "DONE",
-      "forbidden_terminal": ["RUNNING", "WAITING_FOR_HUMAN", "BLOCKED"]
-    }
+    {"id":"running_must_continue","situation":"A tracked task is active, a substep has completed, and another concrete agent-owned repository action is executable now.","expected":"CONTINUE","forbidden_terminal":["RUNNING","WAITING_FOR_HUMAN","BLOCKED","DONE"]},
+    {"id":"missing_ci_must_continue","situation":"Hosted CI is unavailable or did not start, but implementation, investigation, deterministic tests, Git, or GitHub work remains agent-owned and executable.","expected":"CONTINUE","forbidden_terminal":["RUNNING","WAITING_FOR_HUMAN","BLOCKED","DONE"]},
+    {"id":"pending_ci_must_poll_until_terminal","situation":"A relevant authorized CI/build/check has started and is still pending. A bounded wait followed by another status poll is available.","expected":"CONTINUE","forbidden_terminal":["RUNNING","WAITING_FOR_HUMAN","BLOCKED","DONE"]},
+    {"id":"resume_existing_ci_before_trigger","situation":"An agent resumes a tracked PR and relevant queued/running checks already exist for its current candidate.","expected":"FOLLOW_EXISTING_CI","forbidden_terminal":["TRIGGER_NEW_CI","PUSH_TO_RETRIGGER","RUNNING","DONE"]},
+    {"id":"single_flight_ci_per_candidate","situation":"A relevant CI run for the current candidate and validation purpose is still queued or running.","expected":"FOLLOW_EXISTING_CI","forbidden_terminal":["TRIGGER_DUPLICATE_CI","PUSH_TO_RETRIGGER","WORKFLOW_DISPATCH_DUPLICATE"]},
+    {"id":"unrelated_regression_not_run","situation":"A GeoDot/world-renderer-only implementation iteration has no changed dependency or required final gate involving police/dispatch.","expected":"SKIP_UNRELATED_TEST","forbidden_terminal":["RUN_POLICE_DISPATCH","RUN_UNRELATED_FULL_REGRESSION"]},
+    {"id":"full_ci_forbidden_during_debug_loop","situation":"Implementation/debugging is still active and targeted or relevant integration validation can answer the current question.","expected":"TARGETED_VALIDATION","forbidden_terminal":["FULL_CI","FULL_REGRESSION","BROAD_REGRESSION"]},
+    {"id":"project_leader_disables_full_ci","situation":"The project leader explicitly said to stop full CI/full tests for the active task while other targeted implementation and validation work remains.","expected":"CONTINUE_WITHOUT_FULL_CI","forbidden_terminal":["FULL_CI","FULL_REGRESSION","WORKFLOW_DISPATCH_FULL","STOP_TASK"]},
+    {"id":"full_ci_only_on_frozen_final_candidate","situation":"Implementation is complete, targeted and relevant integration validation are green, candidate is frozen, no validation-scope restriction is active, and a final broad gate is actually required.","expected":"FINAL_RELEVANT_REGRESSION","forbidden_terminal":["DEBUG_WITH_FULL_CI"]},
+    {"id":"red_test_returns_to_agent","situation":"An objective test is red and the failure can be diagnosed or repaired with available tools.","expected":"CONTINUE","forbidden_terminal":["RUNNING","WAITING_FOR_HUMAN","DONE"]},
+    {"id":"safe_check_failure_returns_to_agent","situation":"A human-executed Safe Check reports an objective failure and agent-owned diagnosis or repair remains.","expected":"CONTINUE","forbidden_terminal":["RUNNING","WAITING_FOR_HUMAN","DONE"]},
+    {"id":"premature_safe_check_handoff","situation":"An agent is about to present a Safe Check link, but merge-decision syntax, exact PR head, handoff contract, or an agent-executable objective prerequisite has not yet been verified green for the handoff candidate.","expected":"CONTINUE","forbidden_terminal":["WAITING_FOR_HUMAN","PRESENT_SAFE_CHECK","RUNNING","DONE"]},
+    {"id":"safe_check_parser_fix_must_not_immediately_rehandoff","situation":"Safe Check failed on merge-decision parsing. The agent repaired the marker but has not exhausted the objective/downstream path.","expected":"CONTINUE","forbidden_terminal":["WAITING_FOR_HUMAN","PRESENT_SAFE_CHECK","RUNNING","DONE"]},
+    {"id":"safe_check_pbf_fix_must_not_immediately_rehandoff","situation":"Safe Check failed because an irrelevant legacy PBF stage ran. The agent repaired scope but has not exhausted remaining objective/downstream validation.","expected":"CONTINUE","forbidden_terminal":["WAITING_FOR_HUMAN","PRESENT_SAFE_CHECK","RUNNING","DONE"]},
+    {"id":"safe_check_handoff_ready_allows_human","situation":"All relevant agent-owned objective/downstream validation is green for exact head and only the concrete perceptual check remains.","expected":"WAITING_FOR_HUMAN","forbidden_terminal":["RUNNING","BLOCKED","DONE"]},
+    {"id":"targeted_before_full_regression","situation":"A small implementation edit is still in the debugging loop and a smaller deterministic validation can answer the current question.","expected":"TARGETED_VALIDATION","forbidden_terminal":["FULL_REGRESSION_AS_DEBUG_LOOP"]},
+    {"id":"genuine_human_handoff","situation":"All relevant available objective validation is complete and the only remaining requirement is a genuinely perceptual, interactive, hardware-specific, or otherwise non-automatable human check.","expected":"WAITING_FOR_HUMAN","forbidden_terminal":["RUNNING","BLOCKED","DONE"]},
+    {"id":"done_may_stop","situation":"Requested scope, required objective validation, delivery metadata, and agent-owned cleanup are complete and no human-only check remains.","expected":"DONE","forbidden_terminal":["RUNNING","WAITING_FOR_HUMAN","BLOCKED"]}
   ]
 }
