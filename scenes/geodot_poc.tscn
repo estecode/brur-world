@@ -9,11 +9,10 @@ script = ExtResource("2_poc")
 
 [node name="GeoDotWorldLayer" type="Node3D" parent="World" index="0"]
 script = ExtResource("3_geodot")
-# Keep the bounded 7x7 resident set while extending prepared coverage from
-# 14 km to 21 km. Cells remain an internal streaming unit, never a visible
-# world boundary. Keep the distant representation deliberately cheap: the
-# city silhouette must survive, but far detail must not consume near-detail
-# geometry budgets at high altitude.
+# Cells are internal streaming units, never visible world boundaries. Viewport
+# coverage adapts cell scale when necessary to remain inside the explicit
+# resident bound; near-first publication lets gameplay resume while the rest
+# of the visible population streams. Far geometry keeps city massing cheap.
 cell_size_m = 3000.0
 max_buildings_per_cell = 3000
 max_roads_per_cell = 2500
