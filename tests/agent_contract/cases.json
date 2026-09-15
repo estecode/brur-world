@@ -35,6 +35,26 @@
       "regression_example": "Ask the project leader to run Safe Check while the local objective chain can still fail before the required GeoDot stage."
     },
     {
+      "id": "safe_check_parser_fix_must_not_immediately_rehandoff",
+      "situation": "Safe Check #343 failed on merge-decision parsing. The agent repaired the PR marker, but has not yet exhausted the objective/downstream Safe Check path or obtained HANDOFF_READY for the repaired candidate.",
+      "expected": "CONTINUE",
+      "forbidden_terminal": ["WAITING_FOR_HUMAN", "PRESENT_SAFE_CHECK", "RUNNING", "DONE"],
+      "regression_example": "Fix **Merge recommendation** and immediately tell the project leader to run Safe Check #343 again."
+    },
+    {
+      "id": "safe_check_pbf_fix_must_not_immediately_rehandoff",
+      "situation": "Safe Check #343 failed because an irrelevant legacy PBF stage ran. The agent repaired that scope bug, but has not yet exhausted the remaining objective/downstream chain or obtained HANDOFF_READY for the repaired candidate.",
+      "expected": "CONTINUE",
+      "forbidden_terminal": ["WAITING_FOR_HUMAN", "PRESENT_SAFE_CHECK", "RUNNING", "DONE"],
+      "regression_example": "Skip the legacy PBF rebuild and immediately tell the project leader to run the corrected Safe Check #343."
+    },
+    {
+      "id": "safe_check_handoff_ready_allows_human",
+      "situation": "A repaired Safe Check candidate has completed all relevant agent-owned objective/downstream validation, the exact-head gate is green, HANDOFF_READY was emitted, and only the concrete perceptual check remains.",
+      "expected": "WAITING_FOR_HUMAN",
+      "forbidden_terminal": ["RUNNING", "BLOCKED", "DONE"]
+    },
+    {
       "id": "targeted_before_full_regression",
       "situation": "A small implementation edit is still in the debugging loop and a smaller deterministic validation can answer the current question.",
       "expected": "TARGETED_VALIDATION",
