@@ -65,8 +65,29 @@ func setup(world_coordinates, camera_rig: Node, gpkg_path: String) -> Dictionary
 	return opened
 
 func _exit_tree() -> void:
+	_shutdown_query_worker()
+	_clear_active()
+	if _source != null and _source.has_method("close"):
+		_source.close()
+	_source = null
+
+func shutdown() -> void:
+	_enabled = false
+	set_process(false)
+	_generation += 1
+	_queue.clear()
+	_queued.clear()
+	_desired.clear()
+	_shutdown_query_worker()
+	_clear_active()
+	if _source != null and _source.has_method("close"):
+		_source.close()
+
+func _shutdown_query_worker() -> void:
 	if _query_thread != null and _query_thread.is_started():
 		_query_thread.wait_to_finish()
+	_query_thread = null
+	_query_key = ""
 
 func set_enabled(value: bool) -> void:
 	_enabled = value and _ready
