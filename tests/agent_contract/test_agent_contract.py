@@ -22,6 +22,9 @@ REQUIRED_AGENT_CONTRACT = {
     "red_tests_agent_owned": "red tests",
     "safe_check_agent_owned": "objective Safe Check failure returns ownership to the agent",
     "missing_ci_not_handoff": "Missing hosted CI is not by itself `WAITING_FOR_HUMAN`",
+    "safe_check_handoff_readiness": "SAFE CHECK HANDOFF READINESS GATE",
+    "safe_check_exact_head": "exact PR head",
+    "safe_check_objective_prerequisites": "agent-executable objective prerequisites",
 }
 
 REQUIRED_CASES = {
@@ -29,6 +32,7 @@ REQUIRED_CASES = {
     "missing_ci_must_continue": "CONTINUE",
     "red_test_returns_to_agent": "CONTINUE",
     "safe_check_failure_returns_to_agent": "CONTINUE",
+    "premature_safe_check_handoff": "CONTINUE",
     "targeted_before_full_regression": "TARGETED_VALIDATION",
     "genuine_human_handoff": "WAITING_FOR_HUMAN",
     "done_may_stop": "DONE",
