@@ -13,14 +13,11 @@ func set_enabled(value: bool) -> void:
 	if not _enabled:
 		_generation += 1
 		_queue.clear(); _queued.clear(); _ready_results.clear(); _desired.clear(); _shutdown_query_workers()
-		_apply_presentation_visibility()
-		return
-	_refresh_desired(true)
-	_apply_presentation_visibility()
+		_apply_presentation_visibility(); return
+	_refresh_desired(true); _apply_presentation_visibility()
 
 func set_presentation_visible(value: bool) -> void:
-	_presentation_visible = value
-	_apply_presentation_visibility()
+	_presentation_visible = value; _apply_presentation_visibility()
 
 func _apply_presentation_visibility() -> void:
 	for key_value in _active.keys():
@@ -35,9 +32,7 @@ func _touch_desired_residents() -> void:
 		var key := String(key_value)
 		if _active.has(key):
 			var entry: Dictionary = _active[key]
-			if int(entry.get("lod", -1)) == int(_desired[key]):
-				entry["last_touch"] = _resident_tick
-				_active[key] = entry
+			if int(entry.get("lod", -1)) == int(_desired[key]): entry["last_touch"] = _resident_tick; _active[key] = entry
 
 static func choose_lru_stale_eviction_key(active: Dictionary, desired: Dictionary, publishing_key: String) -> String:
 	var candidate := ""; var oldest := 9223372036854775807
@@ -45,8 +40,7 @@ static func choose_lru_stale_eviction_key(active: Dictionary, desired: Dictionar
 		var key := String(key_value)
 		if key == publishing_key or desired.has(key): continue
 		var touch := int((active[key] as Dictionary).get("last_touch", 0))
-		if candidate.is_empty() or touch < oldest or (touch == oldest and key < candidate):
-			candidate = key; oldest = touch
+		if candidate.is_empty() or touch < oldest or (touch == oldest and key < candidate): candidate = key; oldest = touch
 	return candidate
 
 func _prepare_resident_slot(key: String) -> bool:
@@ -57,18 +51,24 @@ func _prepare_resident_slot(key: String) -> bool:
 		_evict_active_key(stale)
 	return true
 
+func _enforce_resident_budget() -> void:
+	# RAM pressure can lower max_resident_cells while old detail is warm. Shed only
+	# stale LRU cells; current visible/desired coverage is never sacrificed.
+	while _active.size() > maxi(1, max_resident_cells):
+		var stale := choose_lru_stale_eviction_key(_active, _desired, "")
+		if stale.is_empty(): break
+		_evict_active_key(stale)
+
 func _publish_cell(request: Dictionary, result: Dictionary) -> void:
 	super._publish_cell(request, result)
 	var key := String(request.get("key", ""))
 	if _active.has(key):
 		_resident_tick += 1
 		var entry: Dictionary = _active[key]; entry["last_touch"] = _resident_tick; _active[key] = entry
-	_apply_presentation_visibility()
+	_apply_presentation_visibility(); _enforce_resident_budget()
 
 func _refresh_desired(force: bool) -> void:
-	super._refresh_desired(force)
-	_touch_desired_residents()
-	_apply_presentation_visibility()
+	super._refresh_desired(force); _touch_desired_residents(); _apply_presentation_visibility(); _enforce_resident_budget()
 
 func ready_desired_cells() -> int:
 	var count := 0
@@ -84,16 +84,11 @@ func _process(delta: float) -> void:
 		_publish_one_ready_result(); _last_publish_frame_ms = float(Time.get_ticks_usec()-started)/1000.0
 		if _last_publish_frame_ms > maxf(0.25,streaming_budget_ms): _over_budget_publishes += 1
 	_refresh_accum += delta
-	if _refresh_accum >= refresh_interval_s:
-		_refresh_accum=0.0; _refresh_desired(false)
-	_start_queries_if_needed()
+	if _refresh_accum >= refresh_interval_s: _refresh_accum=0.0; _refresh_desired(false)
+	_enforce_resident_budget(); _start_queries_if_needed()
 
 func debug_snapshot() -> Dictionary:
 	var snapshot := super.debug_snapshot()
-	snapshot["streaming_budget_ms"] = streaming_budget_ms
-	snapshot["last_publish_frame_ms"] = _last_publish_frame_ms
-	snapshot["over_budget_publishes"] = _over_budget_publishes
-	snapshot["presentation_visible"] = _presentation_visible
-	snapshot["ready_desired_cells"] = ready_desired_cells()
-	snapshot["warm_resident_cells"] = _active.size()
+	snapshot["streaming_budget_ms"] = streaming_budget_ms; snapshot["last_publish_frame_ms"] = _last_publish_frame_ms; snapshot["over_budget_publishes"] = _over_budget_publishes
+	snapshot["presentation_visible"] = _presentation_visible; snapshot["ready_desired_cells"] = ready_desired_cells(); snapshot["warm_resident_cells"] = _active.size()
 	return snapshot
