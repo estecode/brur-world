@@ -70,13 +70,27 @@ func _ensure_extension_loaded() -> String:
 	return ""
 
 func close() -> void:
-	dataset = null
+	# GeoDot gives each feature layer its own GDAL dataset and assigns a synthetic
+	# Resource path (dataset.gpkg:layer). Drop those cache paths while the extension
+	# and GDAL library are still alive so NativeDataset destructors run before engine
+	# extension teardown. Otherwise Godot 4.7 can reach shutdown with cached GeoDot
+	# resources and crash after an otherwise successful headless run.
+	for layer in feature_layers.values():
+		_release_cached_resource(layer)
+	_release_cached_resource(dataset)
 	building_layer = null
 	road_layer = null
+	feature_layers.clear()
+	dataset = null
 	dataset_path = ""
 	epsg_code = 0
-	feature_layers.clear()
 	open_ms = 0.0
+
+func _release_cached_resource(value: Variant) -> void:
+	if value is Resource:
+		var resource := value as Resource
+		if not resource.resource_path.is_empty():
+			resource.take_over_path("")
 
 func is_ready() -> bool:
 	return dataset != null and building_layer != null and road_layer != null
