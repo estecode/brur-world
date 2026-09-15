@@ -216,7 +216,7 @@ func _finish_measurement() -> void:
 		_fail("pending-cell bound exceeded")
 		return
 	print("GeoDot Drive FPS real-data test: OK")
-	quit(0)
+	_shutdown_and_quit(0)
 
 func _percentile(fraction: float) -> float:
 	var index := clampi(int(ceil(float(_frame_times.size()) * fraction)) - 1, 0, _frame_times.size() - 1)
@@ -232,6 +232,14 @@ func _consume_metrics() -> Dictionary:
 		return _geodot_layer.call("consume_perf_metrics")
 	return {}
 
+func _shutdown_and_quit(exit_code: int) -> void:
+	if _geodot_layer != null and _geodot_layer.has_method("shutdown"):
+		_geodot_layer.call("shutdown")
+	if _main != null:
+		_main.queue_free()
+		_main = null
+	call_deferred("quit", exit_code)
+
 func _fail(message: String) -> void:
 	push_error("GeoDot Drive FPS real-data test failed: " + message)
-	quit(1)
+	_shutdown_and_quit(1)
