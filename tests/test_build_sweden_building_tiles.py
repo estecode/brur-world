@@ -12,7 +12,7 @@ TOOLS = ROOT / "tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-from benchmark_issue_220 import MAX_WARM_SECONDS, MIN_BUILDINGS, MINIMUM_COLD_BASELINE_SECONDS
+from benchmark_issue_220 import MAX_WARM_SECONDS, MINIMUM_COLD_BASELINE_SECONDS, MIN_BUILDINGS
 from build_background import WATER, background_class, solve_coastline_land
 from world_build_plan import parse_targets, required_source_routes
 
@@ -54,7 +54,7 @@ class Tests(unittest.TestCase):
     def test_inland_natural_water_remains_water(self):
         self.assertEqual(background_class({"natural": "water"}), WATER)
 
-    def test_real_sweden_benchmark_contract_uses_issue_gates_and_production_selection(self):
+    def test_real_sweden_benchmark_contract_uses_new_source_boundary(self):
         self.assertEqual(MIN_BUILDINGS, 3_800_000)
         self.assertEqual(MINIMUM_COLD_BASELINE_SECONDS, 5329.7)
         self.assertEqual(MAX_WARM_SECONDS, 30.0)
@@ -66,9 +66,10 @@ class Tests(unittest.TestCase):
         self.assertIn('"building_records_match_source"', benchmark)
         self.assertIn('"traffic_signals_match_source"', benchmark)
         self.assertIn('"cold_source_cache_at_least_2x_faster_than_minimum_baseline"', benchmark)
-        self.assertIn('selected_runtime_files(world_dir)', benchmark)
+        self.assertIn('"production_runtime_bytes_by_dataset"', benchmark)
+        self.assertIn('"shipped_runtime_pack_bytes"', benchmark)
+        self.assertIn("prepare_cached_runtime_pack", benchmark)
         self.assertNotIn("full_world_build_under_15_minutes", benchmark)
-        self.assertNotIn('"buildings.jsonl"', benchmark)
 
 
 if __name__ == "__main__":
