@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "description": "Regression cases for the documented agent workflow contract; these fixtures do not claim to execute or prove a live model.",
   "cases": [
     {
       "id": "running_must_continue",
