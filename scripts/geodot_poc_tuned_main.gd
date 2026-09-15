@@ -21,7 +21,7 @@ func _ready() -> void:
 	if geodot_far_layer == null or not geodot_far_layer.has_method("is_cache_ready") or not bool(geodot_far_layer.call("is_cache_ready")):
 		push_warning("GeoDot base HLOD unavailable; keeping legacy world presentation")
 		_geodot_ready = false; _geodot_activation_pending = false
-		if geodot_world_layer != null and geodot_world_layer.has_method("set_enabled"): geodot_world_layer.call("set_enabled", false)
+		if geodot_world_layer != null and geodot_world_layer.has_method("set_streaming_enabled"): geodot_world_layer.call("set_streaming_enabled", false)
 		_disable_loading_gate_for_legacy(); return
 	if geodot_world_layer != null and geodot_world_layer.has_method("set_presentation_visible"): geodot_world_layer.call("set_presentation_visible", true)
 	_refresh_base_readiness()
@@ -68,12 +68,12 @@ func _update_distance_policy() -> void:
 	_effective_resident_cells = clampi(roundi(float(base_resident) * LodPolicy.quality_scale_for_pressure(pressure)), 16, base_resident)
 	geodot_world_layer.set("max_resident_cells", _effective_resident_cells)
 	var prefetch_distance := maxf(tall_3d_distance, full_3d_distance * clampf(float(_tuning.get("prefetch_scale", 1.35)), 1.0, 3.0))
-	# Far HLOD is already complete coverage. Query expensive individual geometry only
-	# while it can become visible soon; this keeps 500 km zooms photographic instead
-	# of spending the worker queue on detail that cannot improve the current frame.
 	var want_detail := distance <= prefetch_distance and not _ram_hard_pressure
-	if want_detail != _detail_streaming_enabled:
-		_detail_streaming_enabled = want_detail; geodot_world_layer.call("set_enabled", want_detail)
+	if geodot_world_layer.has_method("set_streaming_enabled"):
+		geodot_world_layer.call("set_streaming_enabled", want_detail)
+	elif want_detail != _detail_streaming_enabled:
+		geodot_world_layer.call("set_enabled", want_detail)
+	_detail_streaming_enabled = want_detail
 	if _ram_hard_pressure and geodot_world_layer.has_method("evict_warm_for_pressure"):
 		geodot_world_layer.call("evict_warm_for_pressure", 0)
 	if geodot_world_layer.has_method("set_presentation_visible"): geodot_world_layer.call("set_presentation_visible", true)
