@@ -127,13 +127,12 @@ func _refresh_desired(force: bool) -> void:
 		next_desired[key] = int(request["lod"])
 	var changed := force or next_desired.hash() != _desired.hash()
 	_desired = next_desired
-	if not changed:
-		return
-	_generation += 1
-	# Keep stale outer cells visible until a replacement cell is fully queried and
-	# built. A stale cell is evicted only at publish time, one-for-one, so the
-	# presentation never exceeds max_resident_cells and a slow worker cannot open
-	# deterministic holes merely because the camera crossed a cell boundary.
+	if changed:
+		_generation += 1
+	# Reconcile every refresh, not only when the desired set changes. A request can
+	# legitimately be dropped by the bounded queue or become stale while the camera
+	# moves. Without reconciliation that desired cell would never be retried and the
+	# renderer could settle permanently with only a partial visible world.
 	for key in _desired.keys():
 		var wanted_lod := int(_desired[key])
 		if _active.has(key) and int((_active[key] as Dictionary).get("lod", -1)) == wanted_lod:
