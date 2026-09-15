@@ -80,21 +80,24 @@ resolve_geodot_gpkg() {
     [[ -f "$BRUR_GEODOT_GPKG" ]] || { printf 'PR_CHECK=FAIL BRUR_GEODOT_GPKG does not exist\n' >&2; return 1; }
     printf '%s\n' "$BRUR_GEODOT_GPKG"; return 0
   fi
-  local checkout_root checkout_parent candidate search_root
+  local checkout_root checkout_parent mapped_root candidate search_root
   checkout_root="$(cd "$(dirname "$WORLD_DATA")" && pwd)"
   checkout_parent="$(cd "$checkout_root/.." && pwd)"
+  mapped_root="${BRUR_PR_CHECK_MAPPED_ROOT:-$checkout_root}"
   for candidate in \
+    "$mapped_root/sweden-brur.gpkg" \
     "$checkout_root/sweden-brur.gpkg" \
     "$checkout_parent/sweden-brur.gpkg" \
     "$checkout_parent/data/sweden-brur.gpkg" \
     "$checkout_parent/brur-world/sweden-brur.gpkg"; do
     if [[ -f "$candidate" ]]; then printf '%s\n' "$candidate"; return 0; fi
   done
-  for search_root in "$checkout_root" "$checkout_parent"; do
+  for search_root in "$mapped_root" "$checkout_root" "$checkout_parent"; do
+    [[ -d "$search_root" ]] || continue
     candidate="$(find "$search_root" -maxdepth 3 -type f -name 'sweden-brur.gpkg' -print 2>/dev/null | head -n1)"
     if [[ -n "$candidate" && -f "$candidate" ]]; then printf '%s\n' "$candidate"; return 0; fi
   done
-  printf 'PR_CHECK=FAIL GeoDot POC requires sweden-brur.gpkg in the BRUR checkout/data tree or BRUR_GEODOT_GPKG\n' >&2
+  printf 'PR_CHECK=FAIL GeoDot POC requires sweden-brur.gpkg in the mapped BRUR checkout/data tree or BRUR_GEODOT_GPKG\n' >&2
   return 1
 }
 
