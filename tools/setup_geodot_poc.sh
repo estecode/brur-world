@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Makes a preinstalled GeoDot addon available to the isolated POC without building third-party code.
+# Makes a preinstalled GeoDot addon available and prepares the disposable far-view cache.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="$ROOT/addons/geodot"
 EXTERNAL="${BRUR_GEODOT_ADDON:-$HOME/.local/share/brur/geodot}"
+GPKG="${BRUR_GEODOT_GPKG:-$ROOT/sweden-brur.gpkg}"
+FAR_CACHE="${BRUR_GEODOT_FAR_CACHE:-$ROOT/.cache/geodot-far-cache.json}"
 
 verify_external_addon() {
   local addon="$1"
@@ -25,13 +27,24 @@ verify_external_addon() {
   fi
 }
 
-if [[ -f "$TARGET/geodot.gdextension" && ! -L "$TARGET" ]]; then
+if [[ ! -f "$TARGET/geodot.gdextension" || -L "$TARGET" ]]; then
+  verify_external_addon "$EXTERNAL"
+  mkdir -p "$ROOT/addons"
+  rm -f "$TARGET"
+  ln -s "$EXTERNAL" "$TARGET"
+  printf 'GEODOT_SETUP=EXTERNAL source=%s target=%s\n' "$EXTERNAL" "$TARGET"
+else
   printf 'GEODOT_SETUP=READY target=%s\n' "$TARGET"
-  exit 0
 fi
 
-verify_external_addon "$EXTERNAL"
-mkdir -p "$ROOT/addons"
-rm -f "$TARGET"
-ln -s "$EXTERNAL" "$TARGET"
-printf 'GEODOT_SETUP=EXTERNAL source=%s target=%s\n' "$EXTERNAL" "$TARGET"
+if [[ -f "$GPKG" ]]; then
+  mkdir -p "$(dirname "$FAR_CACHE")"
+  # Rebuild only when source is newer. The builder also embeds a source fingerprint.
+  if [[ ! -f "$FAR_CACHE" || "$GPKG" -nt "$FAR_CACHE" || "$ROOT/tools/build_geodot_far_cache.py" -nt "$FAR_CACHE" ]]; then
+    python3 "$ROOT/tools/build_geodot_far_cache.py" "$GPKG" --output "$FAR_CACHE"
+  else
+    printf 'GEODOT_FAR_CACHE=READY output=%s\n' "$FAR_CACHE"
+  fi
+else
+  printf 'GEODOT_FAR_CACHE=SKIP missing=%s\n' "$GPKG"
+fi
