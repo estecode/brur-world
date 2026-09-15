@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  geodot-contracts:
+  deterministic-core:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -29,21 +29,16 @@ jobs:
           BIN="$DIR/Godot_v${VERSION}_linux.x86_64"
           chmod +x "$BIN"
           echo "GODOT_BIN=$BIN" >> "$GITHUB_ENV"
-      - name: Import project scripts
-        run: timeout 30s "$GODOT_BIN" --headless --path . --editor --quit
-      - name: Check GeoDot renderer parse directly
+      - name: Run platform-independent HLOD contracts
         run: |
-          "$GODOT_BIN" --headless --path . --check-only --script scripts/geodot_world_renderer.gd
-      - name: Run GeoDot renderer contracts
-        run: |
-          set -euo pipefail
-          for test in test_geodot_hlod_residency.gd test_geodot_runtime_hlod_integration.gd test_geodot_renderer_contracts.gd test_geodot_runtime_bounds.gd test_geodot_lod_policy.gd test_geodot_tuning_contract.gd test_geodot_view_coverage.gd test_geodot_streaming_policy.gd test_geodot_streaming_transition.gd test_geodot_atomic_ownership.gd test_geodot_photo_zoom_contract.gd test_geodot_cell_geometry.gd test_geodot_lod_continuity.gd test_geodot_composition_contract.gd test_geodot_failure_contract.gd; do
-            timeout 20s "$GODOT_BIN" --headless --path . --script "tests/godot/$test"
-          done
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_hlod_residency.gd
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_runtime_hlod_integration.gd
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_lod_policy.gd
+          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_streaming_policy.gd
 
   macos-render-lifecycle:
     runs-on: macos-14
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -63,12 +58,12 @@ jobs:
           test -n "$BIN"
           chmod +x "$BIN"
           echo "GODOT_BIN=$BIN" >> "$GITHUB_ENV"
-      - name: Prove HLOD lifecycle
+      - name: Run complete GeoDot renderer contract suite
         run: |
-          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_hlod_residency.gd
-          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_runtime_hlod_integration.gd
-          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_photo_zoom_contract.gd
-          "$GODOT_BIN" --headless --path . --script tests/godot/test_geodot_renderer_contracts.gd
+          set -euo pipefail
+          for test in test_geodot_hlod_residency.gd test_geodot_runtime_hlod_integration.gd test_geodot_renderer_contracts.gd test_geodot_runtime_bounds.gd test_geodot_lod_policy.gd test_geodot_tuning_contract.gd test_geodot_view_coverage.gd test_geodot_streaming_policy.gd test_geodot_streaming_transition.gd test_geodot_atomic_ownership.gd test_geodot_photo_zoom_contract.gd test_geodot_cell_geometry.gd test_geodot_lod_continuity.gd test_geodot_composition_contract.gd test_geodot_failure_contract.gd; do
+            "$GODOT_BIN" --headless --path . --script "tests/godot/$test"
+          done
 
   macos-native-geodot-lifecycle:
     runs-on: macos-14
