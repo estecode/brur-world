@@ -1,17 +1,33 @@
 extends SceneTree
 
+const Controller = preload("res://scripts/geodot_hlod_controller.gd")
+var failed := false
+
 func _init() -> void:
-	var source := FileAccess.get_file_as_string("res://scripts/geodot_poc_tuned_main.gd")
-	_assert(not source.is_empty(), "runtime composition source missing")
-	_assert(source.contains("HlodResidency"), "runtime must consume HLOD residency core")
-	_assert(source.contains("_hlod.visible_lod"), "runtime visibility must be driven by HLOD owner")
-	_assert(not source.contains("TransitionPolicy.detail_owns_presentation"), "legacy global transition policy must not own runtime presentation")
-	_assert(source.contains("return _base_ready and _hlod.has_coverage"), "activation must be gated by base coverage, not full detail")
-	print("GEODOT_RUNTIME_HLOD_INTEGRATION=PASS runtime_owner=hlod base_gate=coverage")
+	call_deferred("_run")
+
+func _run() -> void:
+	var c = Controller.new()
+	c.configure_regions(["a", "b", "c", "d"])
+	check(c.base_ready(), "mandatory base coverage is ready before presentation")
+	for region in ["a", "b", "c", "d"]:
+		c.request_detail(region, 4, 512)
+	check(c.coverage_holes().is_empty(), "requests never remove visible base coverage")
+	c.mark_detail_ready("b", 4, 512)
+	check(c.detail_owns("b"), "ready replacement atomically owns its region")
+	check(c.base_owns("a") and c.base_owns("c") and c.base_owns("d"), "unfinished neighbors retain base owners")
+	check(c.duplicate_owners().is_empty(), "runtime owner has no duplicate visible owners")
+	c.prefer_base("b")
+	check(c.base_owns("b"), "reverse zoom immediately restores warm base")
+	c.prefer_detail("b", 4)
+	check(c.detail_owns("b"), "reverse zoom immediately reuses warm detail")
+	if failed:
+		quit(1)
+		return
+	print("GEODOT_RUNTIME_HLOD=PASS base_gate=true holes=0 duplicate_owners=0 reverse_zoom=warm")
 	quit(0)
 
-func _assert(value: bool, message: String) -> void:
-	if value: return
-	push_error(message)
-	print("GEODOT_RUNTIME_HLOD_INTEGRATION=FAIL ",message)
-	quit(1)
+func check(condition: bool, message: String) -> void:
+	if condition: return
+	failed = true
+	push_error("ASSERT FAILED: " + message)
