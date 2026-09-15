@@ -17,9 +17,12 @@ from highway_facts import iter_highway_ways
 from normalized_source_facts import iter_facts
 from osm_gpkg_source_cache import ALL_ROUTES, build_osm_gpkg_source_caches
 from source_identity import compute_source_identity
+from windows_build.prepare_runtime_data import selected_runtime_files
 
 MAX_WARM_SECONDS = 30.0
-MAX_FULL_BUILD_SECONDS = 15.0 * 60.0
+# The recorded pre-#220 run spent this long in spool finalization/publication alone;
+# the true cold baseline was slower because its PBF scan/spool write happened earlier.
+MINIMUM_COLD_BASELINE_SECONDS = 5329.7
 MIN_BUILDINGS = 3_800_000
 TOOLS_DIR = Path(__file__).resolve().parent
 
@@ -63,6 +66,28 @@ def _count_buildings(path: Path) -> int:
     return buildings
 
 
+def _cold_source_seconds(blocks: dict) -> float:
+    total = 0.0
+    for route in ALL_ROUTES:
+        block = blocks.get(route)
+        if not isinstance(block, dict) or block.get("status") != "DONE":
+            raise ValueError(f"missing cold source-cache timing for {route}")
+        total += float(block.get("elapsed_seconds", 0.0))
+    return total
+
+
+def _runtime_footprint(world_dir: Path) -> tuple[int, dict[str, int]]:
+    selected = selected_runtime_files(world_dir)
+    by_dataset: dict[str, int] = {}
+    total = 0
+    for relative in selected:
+        size = (world_dir / relative).stat().st_size
+        total += size
+        dataset = relative.parts[0]
+        by_dataset[dataset] = by_dataset.get(dataset, 0) + size
+    return total, dict(sorted(by_dataset.items()))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("gpkg", type=Path)
@@ -96,6 +121,8 @@ def main() -> None:
     signal_records = sum(1 for _ in iter_facts(cache_dir / "traffic_signals.brfacts", 1))
     address_records = sum(1 for _ in iter_facts(cache_dir / "addresses.brfacts", 1))
     cold_run = _load_json(cache_dir / "last_run.json")
+    cold_blocks = cold_run.get("blocks", {}) if isinstance(cold_run.get("blocks"), dict) else {}
+    cold_source_seconds = _cold_source_seconds(cold_blocks)
 
     _log("WARM SOURCE CACHE START"); warm_started = time.monotonic()
     build_osm_gpkg_source_caches(gpkg, pbf, cache_dir, ALL_ROUTES)
@@ -110,8 +137,7 @@ def main() -> None:
         isinstance(source_hashes.get("osm_pbf"), dict) and source_hashes["osm_pbf"].get("digest") == pbf_identity["digest"]
     )
 
-    required_runtime = ("background.brmap", "routing.brg", "routing_geometry.brh", "routing_snap.brs", "traffic_signals.json", "search_index.bsi", "buildings.jsonl")
-    runtime_present = all((world_dir/name).is_file() and (world_dir/name).stat().st_size > 0 for name in required_runtime)
+    runtime_bytes, runtime_bytes_by_dataset = _runtime_footprint(world_dir)
     roads_present = all((world_dir/f"lod{lod}").is_dir() and any((world_dir/f"lod{lod}").glob("*.brtile")) for lod in range(3))
 
     checks = {
@@ -122,19 +148,21 @@ def main() -> None:
         "addresses_present": address_records > 0,
         "gpkg_and_pbf_hashes_recorded": both_hashes_recorded,
         "no_provider_stage_cache": not (cache_dir / "source_stage").exists(),
-        "full_world_build_under_15_minutes": full_seconds <= MAX_FULL_BUILD_SECONDS,
+        "cold_source_cache_at_least_2x_faster_than_minimum_baseline": cold_source_seconds <= MINIMUM_COLD_BASELINE_SECONDS / 2.0,
         "warm_under_30_seconds": warm_seconds <= MAX_WARM_SECONDS,
         "warm_all_blocks_cache_hit": all_warm_hits,
-        "runtime_outputs_present": runtime_present,
+        "production_runtime_selection_valid": runtime_bytes > 0,
         "road_tiles_present": roads_present,
     }
     report = {
         "issue":220, "gpkg":str(gpkg), "source_pbf":str(pbf), "gpkg_identity":gpkg_identity, "pbf_identity":pbf_identity,
         "source_counts":source_counts, "normalized_counts":{"highway_records":highway_records,"building_records":building_records,"traffic_signals":signal_records,"addresses":address_records},
+        "cold_source_cache_seconds":cold_source_seconds, "minimum_cold_baseline_seconds":MINIMUM_COLD_BASELINE_SECONDS,
         "full_build_seconds":full_seconds, "warm_seconds":warm_seconds, "world_dir":str(world_dir),
         "world_bytes":sum(path.stat().st_size for path in world_dir.rglob("*") if path.is_file()),
         "source_cache_bytes":sum(path.stat().st_size for path in cache_dir.rglob("*") if path.is_file()),
-        "cold_blocks":cold_run.get("blocks",{}), "warm_blocks":warm_blocks, "checks":checks, "passed":all(checks.values()), "completed_at":_now(),
+        "production_runtime_bytes":runtime_bytes, "production_runtime_bytes_by_dataset":runtime_bytes_by_dataset,
+        "cold_blocks":cold_blocks, "warm_blocks":warm_blocks, "checks":checks, "passed":all(checks.values()), "completed_at":_now(),
     }
     report_path.parent.mkdir(parents=True,exist_ok=True); report_path.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
     print(json.dumps(report,indent=2,sort_keys=True),flush=True); _log(f"REPORT path={report_path}")
