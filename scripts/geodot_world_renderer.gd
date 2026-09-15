@@ -49,8 +49,12 @@ func set_streaming_enabled(value:bool)->void:
 	if next==_streaming_enabled:return
 	_streaming_enabled=next
 	if not _streaming_enabled:
-		_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_trim_active_to_budget();coverage_changed.emit();return
+		_generation+=1;_queue.clear();_queued.clear();_ready_results.clear();_desired.clear();_park_all_active();coverage_changed.emit();return
 	_refresh_desired(true)
+func _park_all_active()->void:
+	var keys:=_active.keys()
+	for value in keys:_park_warm(String(value))
+	_trim_warm()
 func set_presentation_visible(value:bool)->void:
 	_presentation_visible=value
 	for entry in _active.values():
