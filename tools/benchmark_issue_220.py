@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ from normalized_source_facts import iter_facts
 from osm_gpkg_source_cache import ALL_ROUTES, build_osm_gpkg_source_caches
 from source_identity import compute_source_identity
 from windows_build.prepare_runtime_data import selected_runtime_files
+from windows_build.runtime_pack import prepare_cached_runtime_pack
 
 MAX_WARM_SECONDS = 30.0
 # The recorded pre-#220 run spent this long in spool finalization/publication alone;
@@ -88,6 +90,17 @@ def _runtime_footprint(world_dir: Path) -> tuple[int, dict[str, int]]:
     return total, dict(sorted(by_dataset.items()))
 
 
+def _shipped_runtime_footprint(world_dir: Path) -> tuple[int, dict]:
+    """Measure the actual derived Windows runtime pack, including BMC2->BMC3."""
+    with tempfile.TemporaryDirectory(prefix="brur-220-runtime-pack-") as temp:
+        cache_dir = Path(temp) / "cache"
+        report = prepare_cached_runtime_pack(world_dir, cache_dir)
+        pack_path = Path(str(report["pack_path"]))
+        if not pack_path.is_file() or pack_path.stat().st_size <= 0:
+            raise ValueError("production runtime pack was not published")
+        return pack_path.stat().st_size, report
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("gpkg", type=Path)
@@ -138,6 +151,7 @@ def main() -> None:
     )
 
     runtime_bytes, runtime_bytes_by_dataset = _runtime_footprint(world_dir)
+    shipped_runtime_bytes, shipped_runtime_report = _shipped_runtime_footprint(world_dir)
     roads_present = all((world_dir/f"lod{lod}").is_dir() and any((world_dir/f"lod{lod}").glob("*.brtile")) for lod in range(3))
 
     checks = {
@@ -152,6 +166,7 @@ def main() -> None:
         "warm_under_30_seconds": warm_seconds <= MAX_WARM_SECONDS,
         "warm_all_blocks_cache_hit": all_warm_hits,
         "production_runtime_selection_valid": runtime_bytes > 0,
+        "shipped_runtime_pack_valid": shipped_runtime_bytes > 0,
         "road_tiles_present": roads_present,
     }
     report = {
@@ -162,6 +177,7 @@ def main() -> None:
         "world_bytes":sum(path.stat().st_size for path in world_dir.rglob("*") if path.is_file()),
         "source_cache_bytes":sum(path.stat().st_size for path in cache_dir.rglob("*") if path.is_file()),
         "production_runtime_bytes":runtime_bytes, "production_runtime_bytes_by_dataset":runtime_bytes_by_dataset,
+        "shipped_runtime_pack_bytes":shipped_runtime_bytes, "shipped_runtime_pack":shipped_runtime_report,
         "cold_blocks":cold_blocks, "warm_blocks":warm_blocks, "checks":checks, "passed":all(checks.values()), "completed_at":_now(),
     }
     report_path.parent.mkdir(parents=True,exist_ok=True); report_path.write_text(json.dumps(report,indent=2,sort_keys=True),encoding="utf-8")
