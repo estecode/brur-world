@@ -19,26 +19,67 @@ if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(scripts/geodot_|scenes/geodot_po
 [[ "$DRIVING_VISUAL_SCOPE" == "skip" ]] && printf 'PR_CHECK=SKIP_DRIVING_VISUAL_REVIEW pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR" || true
 [[ "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]] && printf 'PR_CHECK=SKIP_DRIVE_HUD_VISUAL_REVIEW pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR" || true
 [[ "$GEODOT_POC_SCOPE" == "skip" ]] && printf 'PR_CHECK=SKIP_GEODOT_POC pr=%s reason=unrelated-changes\n' "$BRUR_PR_CHECK_PR" || true
-resolve_sweden_pbf(){ if [[ -n "${BRUR_WORLD_PBF:-}" ]]; then [[ -f "$BRUR_WORLD_PBF" ]] || return 1; printf '%s\n' "$BRUR_WORLD_PBF"; return; fi; local root candidate; root="$(cd "$(dirname "$WORLD_DATA")/.." && pwd)"; candidate="$(find "$root/syndicate/data" "$root/data" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n1)"; [[ -n "$candidate" ]] || { printf 'PR_CHECK=FAIL required real-data rebuild needs Sweden PBF; set BRUR_WORLD_PBF\n' >&2; return 1; }; printf '%s\n' "$candidate"; }
-resolve_geodot_gpkg(){ if [[ -n "${BRUR_GEODOT_GPKG:-}" ]]; then [[ -f "$BRUR_GEODOT_GPKG" ]] || return 1; printf '%s\n' "$BRUR_GEODOT_GPKG"; return; fi; local checkout_root checkout_parent mapped_root candidate root; checkout_root="$(cd "$(dirname "$WORLD_DATA")" && pwd)"; checkout_parent="$(cd "$checkout_root/.." && pwd)"; mapped_root="${BRUR_PR_CHECK_MAPPED_ROOT:-$checkout_root}"; for candidate in "$mapped_root/sweden-brur.gpkg" "$checkout_root/sweden-brur.gpkg" "$checkout_parent/sweden-brur.gpkg" "$checkout_parent/data/sweden-brur.gpkg" "$checkout_parent/brur-world/sweden-brur.gpkg"; do [[ -f "$candidate" ]] && { printf '%s\n' "$candidate"; return; }; done; for root in "$mapped_root" "$checkout_root" "$checkout_parent"; do [[ -d "$root" ]] || continue; candidate="$(find "$root" -maxdepth 3 -type f -name sweden-brur.gpkg -print 2>/dev/null | head -n1)"; [[ -n "$candidate" ]] && { printf '%s\n' "$candidate"; return; }; done; printf 'PR_CHECK=FAIL GeoDot POC requires sweden-brur.gpkg in the mapped BRUR checkout/data tree or BRUR_GEODOT_GPKG\n' >&2; return 1; }
+
+run_stage(){
+  local stage="$1"; shift
+  printf 'PR_CHECK=STAGE_BEGIN stage=%s pr=%s\n' "$stage" "$BRUR_PR_CHECK_PR"
+  if "$@"; then
+    printf 'PR_CHECK=STAGE_OK stage=%s pr=%s\n' "$stage" "$BRUR_PR_CHECK_PR"
+    return 0
+  fi
+  local status=$?
+  printf 'PR_CHECK=STAGE_FAIL stage=%s pr=%s status=%s\n' "$stage" "$BRUR_PR_CHECK_PR" "$status" >&2
+  return "$status"
+}
+
+resolve_sweden_pbf(){
+  if [[ -n "${BRUR_WORLD_PBF:-}" ]]; then [[ -f "$BRUR_WORLD_PBF" ]] || { printf 'PR_CHECK=FAIL BRUR_WORLD_PBF does not exist: %s\n' "$BRUR_WORLD_PBF" >&2; return 1; }; printf '%s\n' "$BRUR_WORLD_PBF"; return; fi
+  local root dir candidate="" found
+  root="$(cd "$(dirname "$WORLD_DATA")/.." && pwd)"
+  for dir in "$root/syndicate/data" "$root/data"; do
+    [[ -d "$dir" ]] || continue
+    found="$(find "$dir" -maxdepth 1 -type f -name 'sweden-*.osm.pbf' -print 2>/dev/null | LC_ALL=C sort | tail -n1 || true)"
+    [[ -n "$found" ]] && candidate="$found"
+  done
+  [[ -n "$candidate" ]] || { printf 'PR_CHECK=FAIL required real-data rebuild needs Sweden PBF; set BRUR_WORLD_PBF\n' >&2; return 1; }
+  printf '%s\n' "$candidate"
+}
+resolve_geodot_gpkg(){ if [[ -n "${BRUR_GEODOT_GPKG:-}" ]]; then [[ -f "$BRUR_GEODOT_GPKG" ]] || return 1; printf '%s\n' "$BRUR_GEODOT_GPKG"; return; fi; local checkout_root checkout_parent mapped_root candidate root; checkout_root="$(cd "$(dirname "$WORLD_DATA")" && pwd)"; checkout_parent="$(cd "$checkout_root/.." && pwd)"; mapped_root="${BRUR_PR_CHECK_MAPPED_ROOT:-$checkout_root}"; for candidate in "$mapped_root/sweden-brur.gpkg" "$checkout_root/sweden-brur.gpkg" "$checkout_parent/sweden-brur.gpkg" "$checkout_parent/data/sweden-brur.gpkg" "$checkout_parent/brur-world/sweden-brur.gpkg"; do [[ -f "$candidate" ]] && { printf '%s\n' "$candidate"; return; }; done; for root in "$mapped_root" "$checkout_root" "$checkout_parent"; do [[ -d "$root" ]] || continue; candidate="$(find "$root" -maxdepth 3 -type f -name sweden-brur.gpkg -print 2>/dev/null | head -n1 || true)"; [[ -n "$candidate" ]] && { printf '%s\n' "$candidate"; return; }; done; printf 'PR_CHECK=FAIL GeoDot POC requires sweden-brur.gpkg in the mapped BRUR checkout/data tree or BRUR_GEODOT_GPKG\n' >&2; return 1; }
 ensure_routing_dataset_identity(){ "$PYTHON" "$WORKTREE/tools/check_routing_dataset.py" "$WORLD_DATA" && return; local pbf; pbf="$(resolve_sweden_pbf)"; "$PYTHON" "$WORKTREE/tools/build_routing_dataset.py" "$pbf" --output "$WORLD_DATA"; "$PYTHON" "$WORKTREE/tools/check_routing_dataset.py" "$WORLD_DATA"; }
 prepare_traffic_intersection_data(){ [[ -f "$WORLD_DATA/traffic_signals.json" ]] && { printf '%s\n' "$WORLD_DATA"; return; }; local pbf; pbf="$(resolve_sweden_pbf)"; rm -rf "$TRAFFIC_INTERSECTION_DATA"; mkdir -p "$TRAFFIC_INTERSECTION_DATA"; ln -s "$WORLD_DATA/routing.brg" "$TRAFFIC_INTERSECTION_DATA/routing.brg"; "$PYTHON" "$WORKTREE/tools/build_traffic_signals.py" "$pbf" --output "$TRAFFIC_INTERSECTION_DATA" >&2; printf '%s\n' "$TRAFFIC_INTERSECTION_DATA"; }
-prepare_road_runtime_data(){ local pbf entry name; pbf="$(resolve_sweden_pbf)"; rm -rf "$RUNTIME_WORLD_DATA"; mkdir -p "$RUNTIME_WORLD_DATA"; for entry in "$WORLD_DATA"/*; do name="$(basename "$entry")"; case "$name" in lod0|lod1|lod2|manifest.json) continue;; esac; ln -s "$entry" "$RUNTIME_WORLD_DATA/$name"; done; cp "$WORLD_DATA/manifest.json" "$RUNTIME_WORLD_DATA/manifest.json"; "$PYTHON" "$WORKTREE/tools/build_roads.py" "$pbf" --output "$RUNTIME_WORLD_DATA"; }
+prepare_road_runtime_data(){ local pbf entry name; pbf="$(resolve_sweden_pbf)"; printf 'PR_CHECK=ROAD_RUNTIME_SOURCE pbf=%s\n' "$pbf"; rm -rf "$RUNTIME_WORLD_DATA"; mkdir -p "$RUNTIME_WORLD_DATA"; for entry in "$WORLD_DATA"/*; do name="$(basename "$entry")"; case "$name" in lod0|lod1|lod2|manifest.json) continue;; esac; ln -s "$entry" "$RUNTIME_WORLD_DATA/$name"; done; cp "$WORLD_DATA/manifest.json" "$RUNTIME_WORLD_DATA/manifest.json"; "$PYTHON" "$WORKTREE/tools/build_roads.py" "$pbf" --output "$RUNTIME_WORLD_DATA"; }
 run_godot_test(){ local script="$1" marker="${2:-}" allow_completed_abort="${3:-false}" log status; log="$(mktemp "${TMPDIR:-/tmp}/brur-world-test.XXXXXX")"; set +e; "$GODOT" --headless --path "$WORKTREE" --script "$script" 2>&1 | tee "$log"; status=${PIPESTATUS[0]}; set -e; if [[ $status -eq 134 && "$allow_completed_abort" == "true" && -n "$marker" ]] && grep -Fq "$marker" "$log"; then printf 'PR_CHECK=KNOWN_GODOT_MACOS_TEARDOWN_ABORT script=%s status=%d marker=present\n' "$script" "$status"; status=0; fi; if [[ $status -ne 0 ]] || grep -Eq 'SCRIPT ERROR:|Failed to load script|test failed:|ASSERT FAILED:' "$log"; then printf 'PR_CHECK=FAIL Godot reported script/test errors for %s\n' "$script" >&2; rm -f "$log"; return 1; fi; if [[ -n "$marker" ]] && ! grep -Fq "$marker" "$log"; then printf 'PR_CHECK=FAIL Godot test exited without required completion marker for %s: %s\n' "$script" "$marker" >&2; rm -f "$log"; return 1; fi; rm -f "$log"; }
-if [[ "$ROUTE_GEOMETRY_SCOPE" == "required" ]]; then ensure_routing_dataset_identity; fi
-if [[ "$TRAFFIC_INTERSECTION_SCOPE" == "required" ]]; then data="$(prepare_traffic_intersection_data)"; "$PYTHON" "$WORKTREE/tools/check_traffic_intersections_real_data.py" "$data"; fi
+
+if [[ "$ROUTE_GEOMETRY_SCOPE" == "required" ]]; then run_stage route-geometry-identity ensure_routing_dataset_identity; fi
+if [[ "$TRAFFIC_INTERSECTION_SCOPE" == "required" ]]; then data="$(prepare_traffic_intersection_data)"; run_stage traffic-intersections "$PYTHON" "$WORKTREE/tools/check_traffic_intersections_real_data.py" "$data"; fi
 if [[ "$BUILDING_TILE_SCOPE" == "required" ]]; then
-  printf 'PR_CHECK=CHECK_BUILDING_ATOMIC_STREAM_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"; run_godot_test res://tests/godot/test_world_streaming_foundation.gd
-  printf 'PR_CHECK=CHECK_BUILDING_REAL_DATA_PERFORMANCE pr=%s\n' "$BRUR_PR_CHECK_PR"; run_godot_test res://tests/godot/test_building_mesh_real_data.gd
-  printf 'PR_CHECK=CHECK_MAP_CONTROLS_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"; run_godot_test res://tests/godot/test_map_controls.gd
-  printf 'PR_CHECK=CHECK_PRODUCTION_DRIVE_FPS_REAL_DATA pr=%s targets=avg33.4ms-p95_50ms-worst250ms\n' "$BRUR_PR_CHECK_PR"; run_godot_test res://tests/godot/test_production_fps_real_data.gd 'production Drive FPS real-data test: OK'
+  printf 'PR_CHECK=CHECK_BUILDING_ATOMIC_STREAM_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"; run_stage building-atomic-stream run_godot_test res://tests/godot/test_world_streaming_foundation.gd
+  printf 'PR_CHECK=CHECK_BUILDING_REAL_DATA_PERFORMANCE pr=%s\n' "$BRUR_PR_CHECK_PR"; run_stage building-real-data-performance run_godot_test res://tests/godot/test_building_mesh_real_data.gd
+  printf 'PR_CHECK=CHECK_MAP_CONTROLS_HEADLESS pr=%s\n' "$BRUR_PR_CHECK_PR"; run_stage map-controls run_godot_test res://tests/godot/test_map_controls.gd
+  printf 'PR_CHECK=CHECK_PRODUCTION_DRIVE_FPS_REAL_DATA pr=%s targets=avg33.4ms-p95_50ms-worst250ms\n' "$BRUR_PR_CHECK_PR"; run_stage production-drive-fps run_godot_test res://tests/godot/test_production_fps_real_data.gd 'production Drive FPS real-data test: OK'
 fi
-if [[ "$ROAD_LOD_SCOPE" == "required" ]]; then prepare_road_runtime_data; run_godot_test res://tests/godot/test_world_streaming_foundation.gd; run_godot_test res://tests/godot/test_road_surface_query_real_data.gd; fi
-if [[ "$CITY_LIGHT_SCOPE" == "required" ]]; then "$PYTHON" "$WORKTREE/tools/build_city_light_density.py" "$WORLD_DATA"; GODOT_BIN="$GODOT" bash "$WORKTREE/tools/test_city_lights_real_data.sh"; fi
-if [[ "$WORLD_SHOWCASE_SCOPE" == "required" ]]; then "$PYTHON" "$WORKTREE/tools/prepare_world_showcase.py" "$WORLD_DATA" --output "$CACHE"; run_godot_test res://tests/godot/test_world_showcase.gd; fi
+if [[ "$ROAD_LOD_SCOPE" == "required" ]]; then
+  run_stage road-runtime-prepare prepare_road_runtime_data
+  run_stage road-streaming-foundation run_godot_test res://tests/godot/test_world_streaming_foundation.gd
+  run_stage road-surface-real-data run_godot_test res://tests/godot/test_road_surface_query_real_data.gd
+fi
+if [[ "$CITY_LIGHT_SCOPE" == "required" ]]; then run_stage city-light-build "$PYTHON" "$WORKTREE/tools/build_city_light_density.py" "$WORLD_DATA"; run_stage city-light-real-data env GODOT_BIN="$GODOT" bash "$WORKTREE/tools/test_city_lights_real_data.sh"; fi
+if [[ "$WORLD_SHOWCASE_SCOPE" == "required" ]]; then run_stage world-showcase-prepare "$PYTHON" "$WORKTREE/tools/prepare_world_showcase.py" "$WORLD_DATA" --output "$CACHE"; run_stage world-showcase run_godot_test res://tests/godot/test_world_showcase.gd; fi
 GEODOT_GPKG=""
-if [[ "$GEODOT_POC_SCOPE" == "required" ]]; then GEODOT_GPKG="$(resolve_geodot_gpkg)"; printf 'PR_CHECK=GEODOT_GPKG path=%s\n' "$GEODOT_GPKG"; bash "$WORKTREE/tools/setup_geodot_poc.sh"; "$PYTHON" "$WORKTREE/tools/check_geodot_gpkg.py" "$GEODOT_GPKG"; BRUR_GEODOT_GPKG="$GEODOT_GPKG" run_godot_test res://tests/godot/test_geodot_renderer_contracts.gd 'geodot renderer contracts: OK'; BRUR_GEODOT_GPKG="$GEODOT_GPKG" run_godot_test res://tests/godot/test_geodot_real_data.gd 'geodot real-data test: OK' true; printf 'PR_CHECK=GEODOT_OBJECTIVE_OK pr=%s\n' "$BRUR_PR_CHECK_PR"; fi
+if [[ "$GEODOT_POC_SCOPE" == "required" ]]; then
+  printf 'PR_CHECK=STAGE_BEGIN stage=geodot-resolve-gpkg pr=%s\n' "$BRUR_PR_CHECK_PR"
+  if ! GEODOT_GPKG="$(resolve_geodot_gpkg)"; then printf 'PR_CHECK=STAGE_FAIL stage=geodot-resolve-gpkg pr=%s status=1\n' "$BRUR_PR_CHECK_PR" >&2; exit 1; fi
+  printf 'PR_CHECK=STAGE_OK stage=geodot-resolve-gpkg pr=%s\n' "$BRUR_PR_CHECK_PR"
+  printf 'PR_CHECK=GEODOT_GPKG path=%s\n' "$GEODOT_GPKG"
+  run_stage geodot-setup bash "$WORKTREE/tools/setup_geodot_poc.sh"
+  run_stage geodot-gpkg-contract "$PYTHON" "$WORKTREE/tools/check_geodot_gpkg.py" "$GEODOT_GPKG"
+  run_stage geodot-renderer-contracts env BRUR_GEODOT_GPKG="$GEODOT_GPKG" bash -c 'run_godot_test(){ :; }' >/dev/null 2>&1 || true
+  printf 'PR_CHECK=STAGE_BEGIN stage=geodot-renderer-contracts pr=%s\n' "$BRUR_PR_CHECK_PR"; if BRUR_GEODOT_GPKG="$GEODOT_GPKG" run_godot_test res://tests/godot/test_geodot_renderer_contracts.gd 'geodot renderer contracts: OK'; then printf 'PR_CHECK=STAGE_OK stage=geodot-renderer-contracts pr=%s\n' "$BRUR_PR_CHECK_PR"; else status=$?; printf 'PR_CHECK=STAGE_FAIL stage=geodot-renderer-contracts pr=%s status=%s\n' "$BRUR_PR_CHECK_PR" "$status" >&2; exit "$status"; fi
+  printf 'PR_CHECK=STAGE_BEGIN stage=geodot-real-data pr=%s\n' "$BRUR_PR_CHECK_PR"; if BRUR_GEODOT_GPKG="$GEODOT_GPKG" run_godot_test res://tests/godot/test_geodot_real_data.gd 'geodot real-data test: OK' true; then printf 'PR_CHECK=STAGE_OK stage=geodot-real-data pr=%s\n' "$BRUR_PR_CHECK_PR"; else status=$?; printf 'PR_CHECK=STAGE_FAIL stage=geodot-real-data pr=%s status=%s\n' "$BRUR_PR_CHECK_PR" "$status" >&2; exit "$status"; fi
+  printf 'PR_CHECK=GEODOT_OBJECTIVE_OK pr=%s\n' "$BRUR_PR_CHECK_PR"
+fi
 if [[ "$MANUAL_REVIEW" == "none" && "$DRIVING_VISUAL_SCOPE" == "skip" && "$DRIVE_HUD_VISUAL_SCOPE" == "skip" ]]; then printf 'PR_CHECK=SKIP_VISUAL_REVIEW pr=%s reason=no-subjective-check-remains\n' "$BRUR_PR_CHECK_PR"; exit 0; fi
+if [[ "$GEODOT_POC_SCOPE" == "required" ]]; then [[ -n "$GEODOT_GPKG" ]] || { printf 'PR_CHECK=FAIL refusing GeoDot visual handoff without completed GeoDot objective state\n' >&2; exit 70; }; printf 'PR_CHECK=HANDOFF_READY objective=geodot pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"; fi
 printf 'PR_CHECK=VISUAL_REVIEW pr=%s revision=%s\n' "$BRUR_PR_CHECK_PR" "$(git -C "$WORKTREE" rev-parse --short=12 HEAD)"
 if [[ "$GEODOT_POC_SCOPE" == "required" ]]; then printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/geodot_poc.tscn reason=geodot-poc\n'; printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main renderer=geodot area=Lund\n'; BRUR_GEODOT_GPKG="$GEODOT_GPKG" "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/geodot_poc.tscn"; exit; fi
 if [[ "$DRIVE_HUD_VISUAL_SCOPE" == "required" ]]; then printf 'PR_CHECK=VISUAL_REVIEW_TARGET scene=scenes/main.tscn reason=drive-hud\n'; printf 'PR_CHECK=VISUAL_REVIEW_EXPECT window=production-main not=driving-harness\n'; "$GODOT" --path "$WORKTREE" "$WORKTREE/scenes/main.tscn"; exit; fi
