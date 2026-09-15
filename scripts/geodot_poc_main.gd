@@ -1,8 +1,8 @@
 extends "res://scripts/main.gd"
 
-## POC composition of the normal BRUR game with GeoDot as the road/building presentation path.
-## Everything else comes from scenes/main.tscn unchanged. Legacy presentation remains active
-## until GeoDot setup succeeds, so missing/incompatible optional POC dependencies fail safely.
+## POC composition of normal BRUR with GeoDot as the road/building presentation path.
+## Legacy presentation stays visible until the initial GeoDot coverage is complete,
+## so the internal streaming grid is never exposed during startup.
 
 const LUND_FOCUS := Vector3(-489086.0, 0.0, 1582123.0)
 const LUND_ALTITUDE_M := 9000.0
@@ -12,6 +12,7 @@ const LUND_ALTITUDE_M := 9000.0
 
 var _geodot_ready := false
 var _geodot_active := false
+var _geodot_activation_pending := false
 var _legacy_buildings_enabled_before_geodot := false
 
 func _ready() -> void:
@@ -28,8 +29,8 @@ func _ready() -> void:
 		push_warning("GeoDot POC setup failed: %s; keeping legacy world presentation" % String(result.get("error", "unknown")))
 		return
 	_geodot_ready = true
+	_geodot_activation_pending = true
 	_sync_geodot_surface_height()
-	set_geodot_renderer_enabled(true)
 	print("GeoDot POC dataset: ", result)
 	if OS.get_environment("BRUR_GEODOT_KEEP_VIEW") != "1" and camera_rig.has_method("set_view_altitude"):
 		camera_rig.call_deferred("set_view_altitude", LUND_FOCUS, LUND_ALTITUDE_M)
@@ -37,35 +38,57 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if manifest.is_empty():
 		return
+	if _geodot_activation_pending and _geodot_initial_coverage_ready():
+		_geodot_activation_pending = false
+		_activate_prepared_geodot()
 	if not _geodot_active:
 		super._process(delta)
 		_sync_geodot_surface_height()
 		return
-	# Keep the ordinary BRUR background/depth layout alive, but intentionally do not
+	# Keep ordinary BRUR background/depth layout alive, but intentionally do not
 	# schedule or publish the legacy BRS/BRT road presentation while GeoDot is active.
 	_update_depth_layout(false)
 	_sync_geodot_surface_height()
 
+func _geodot_initial_coverage_ready() -> bool:
+	if geodot_world_layer == null or not geodot_world_layer.has_method("debug_snapshot"):
+		return false
+	var snapshot: Dictionary = geodot_world_layer.call("debug_snapshot")
+	var desired := int(snapshot.get("desired_cells", 0))
+	return desired > 0 and int(snapshot.get("active_cells", 0)) >= desired and int(snapshot.get("pending_cells", 1)) == 0
+
+func _activate_prepared_geodot() -> void:
+	if not _geodot_ready or _geodot_active:
+		return
+	_legacy_buildings_enabled_before_geodot = _legacy_buildings_streaming_enabled()
+	if legacy_building_layer is Node3D:
+		(legacy_building_layer as Node3D).visible = false
+	if legacy_building_layer != null and legacy_building_layer.has_method("set_streaming_enabled"):
+		legacy_building_layer.call("set_streaming_enabled", false)
+	_clear_legacy_roads()
+	_sync_geodot_surface_height()
+	_geodot_active = true
+	print("GEODOT_RENDERER_READY coverage_complete=true")
+
 func set_geodot_renderer_enabled(enabled: bool) -> bool:
 	if enabled and not _geodot_ready:
 		return false
-	if enabled == _geodot_active:
-		return true
 	if enabled:
-		_legacy_buildings_enabled_before_geodot = _legacy_buildings_streaming_enabled()
-		if legacy_building_layer is Node3D:
-			(legacy_building_layer as Node3D).visible = false
-		if legacy_building_layer != null and legacy_building_layer.has_method("set_streaming_enabled"):
-			legacy_building_layer.call("set_streaming_enabled", false)
-		_clear_legacy_roads()
-		_sync_geodot_surface_height()
+		if _geodot_active:
+			return true
 		if geodot_world_layer != null and geodot_world_layer.has_method("set_enabled"):
 			geodot_world_layer.call("set_enabled", true)
-		_geodot_active = true
+		if _geodot_initial_coverage_ready():
+			_geodot_activation_pending = false
+			_activate_prepared_geodot()
+		else:
+			_geodot_activation_pending = true
 		return true
-
+	_geodot_activation_pending = false
 	if geodot_world_layer != null and geodot_world_layer.has_method("set_enabled"):
 		geodot_world_layer.call("set_enabled", false)
+	if not _geodot_active:
+		return true
 	_geodot_active = false
 	if legacy_building_layer is Node3D:
 		(legacy_building_layer as Node3D).visible = true
@@ -77,8 +100,6 @@ func set_geodot_renderer_enabled(enabled: bool) -> bool:
 func _sync_geodot_surface_height() -> void:
 	if geodot_world_layer == null:
 		return
-	# GeoDot owns only presentation geometry. Match the same current presentation
-	# surface height used by production roads/buildings rather than inventing y=0.
 	geodot_world_layer.position.y = get_road_surface_height()
 
 func _legacy_buildings_streaming_enabled() -> bool:
